@@ -22,10 +22,37 @@ backup product until the data-integrity gates in `docs/ROADMAP.md` pass.
 - `deploy/compose/`: self-hosted PostgreSQL and S3-compatible deployment
 - `docs/research/`: evidence-backed research and experiments
 - `docs/adr/`: accepted architecture decisions
+- `docs/api/openapi-v1.yaml`: REST/OpenAPI v1 contract draft
 - `scripts/`: reproducible development, backup and verification tools
 
 ## Status
 
-Phase 0 research and contract freeze is the current gate. See
-`docs/ROADMAP.md` after the feature branch is opened.
+Phase 1 feature branch currently contains:
+
+- evidence-backed cloud-save, crypto/conflict, emulator-matrix, write-timeline and self-hosting research drafts;
+- Rust workspace for domain, crypto, engine, adapters, client, server and CLI;
+- encrypted fixed-chunk fixture snapshots, DAG conflict preservation, safe restore gating and SQLite WAL metadata tests;
+- macOS Swift shell smoke, Android SAF/WorkManager shell skeleton and Compose self-hosting skeleton.
+
+Still not stable: real macOS↔Android emulator round trips, production PostgreSQL/S3 persistence, export/import UX and remote disaster-recovery benchmark remain open gates in `docs/ROADMAP.md`.
+
+## Five-minute local demo
+
+```bash
+cargo test --workspace
+cargo run -p save-cli --bin mh-save -- adapters
+cargo run -p save-cli --bin mh-save -- crypto-vector
+cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
+swift run --package-path apps/macos MHSaveSyncMac
+```
+
+Self-hosted config syntax check:
+
+```bash
+cd deploy/compose
+printf %s local-postgres-password > secrets/postgres_password.txt
+printf %s minioadmin > secrets/minio_root_user.txt
+printf %s local-minio-password > secrets/minio_root_password.txt
+docker compose config --quiet
+```
 

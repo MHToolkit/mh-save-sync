@@ -11,3 +11,16 @@ artifacts/
 *.db-shm
 *.db-wal
 
+# Rust
+/target/
+# SwiftPM
+apps/macos/.build/
+.swiftpm/
+# Android/Gradle
+.gradle/
+apps/android/.gradle/
+apps/android/**/build/
+# Local compose secrets
+/deploy/compose/secrets/*.txt
+!/deploy/compose/secrets/.gitignore
+!/deploy/compose/secrets/.example

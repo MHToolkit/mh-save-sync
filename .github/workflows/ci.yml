@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/phase1-save-sync]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo run -p save-cli --bin mh-save -- crypto-vector
+      - run: cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
+      - run: ./scripts/secret-scan.sh
+
+  macos-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift build --package-path apps/macos
+      - run: swift run --package-path apps/macos MHSaveSyncMac
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          cd deploy/compose
+          printf 'local-postgres-password' > secrets/postgres_password.txt
+          printf 'minioadmin' > secrets/minio_root_user.txt
+          printf 'local-minio-password' > secrets/minio_root_password.txt
+          docker compose config --quiet
