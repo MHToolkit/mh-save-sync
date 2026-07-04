@@ -78,7 +78,8 @@ Run ID: local-podman-20260705
 Host: Apple Silicon macOS, Podman machine 5 CPUs / 4 GiB
 Server image id: 90b90ed78d9ae8766436cd3c5e55523c5d3125d23b065c262469618113955891
 PostgreSQL image id: 5db836939fe3760739047801b3e588e97c8774d02807db98d6e977ec6a5e54a6
-MinIO image id: 8f08aee614800a237906bd48114d733e5ac5bfac4ccdf731f141b0e880d7a253
+MinIO manifest digest: sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+MinIO local arm64 image id: 8f08aee614800a237906bd48114d733e5ac5bfac4ccdf731f141b0e880d7a253
 Readiness: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
 Synthetic API result: 3 snapshots, 1 stale-base conflict, chunk missing-set dedupe passed, corrupt checksum rejected, signed certificate validation fail-closed
 Restart injection: chunk-before-restart + manifest/commit-after-restart passed; resumed HEAD 4bbb750a14779f277ffd4d314f03b504ea2a4b03809a0e66d9fa9ec8c1f220da

@@ -96,7 +96,8 @@ dangling_snapshot_objects=0
 ```text
 Server image id:     90b90ed78d9ae8766436cd3c5e55523c5d3125d23b065c262469618113955891
 PostgreSQL image id: 5db836939fe3760739047801b3e588e97c8774d02807db98d6e977ec6a5e54a6
-MinIO image id:      8f08aee614800a237906bd48114d733e5ac5bfac4ccdf731f141b0e880d7a253
+MinIO manifest:      sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+MinIO arm64 image:   8f08aee614800a237906bd48114d733e5ac5bfac4ccdf731f141b0e880d7a253
 SQLx migration:      1
 Post-restore sample: server 0.13% CPU / 2.044 MiB RSS; PostgreSQL 1.70% / 52.18 MiB; MinIO 1.56% / 73.85 MiB
 ```
