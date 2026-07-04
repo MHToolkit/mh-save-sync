@@ -1,7 +1,7 @@
 # Self-Hosting Benchmark and Failure Injection Ledger
 
-- Status: baseline plan plus current host facts; benchmark values are filled only after Compose artifacts exist and are executed.
-- Last updated: 2026-07-04
+- Status: local Podman cold-start, persistence, conflict, restart-resume, backup and destructive restore verified; remote and long-idle runs remain open.
+- Last updated: 2026-07-05
 - Scope: Docker/Podman local self-hosting and optional isolated Aliyun deployment on `8.130.112.207` without touching existing `nemessix-room` services.
 
 ## 1. Deployment shape to benchmark
@@ -29,32 +29,32 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 
 | Environment | Fact | Evidence date | Decision |
 | --- | --- | --- | --- |
-| Local macOS | Docker CLI exists but daemon was not assumed running in earlier probe; Podman 5.8.2 machine was reported available by prior investigation. | 2026-07-04 | Compose tests should support Docker or Podman. Do not claim local cold-start passed until rerun. |
+| Local macOS | Docker daemon was unavailable. Podman 5.7.1 machine (AppleHV, 5 CPUs, 4 GiB RAM) successfully built and ran the stack. | 2026-07-05 | Scripts accept `CONTAINER_RUNTIME=podman`; Docker remains the documented production default. |
 | Aliyun test host | SSH reachable on port `22227` as `ecs-user`; Docker available; Compose `2.33.1`; existing ports 80/443/5432 already used. | 2026-07-04 | Deploy only on isolated project name, private network, and non-conflicting external port. Never touch `nemessix-room`. |
-| Repository | `deploy/compose` now exists with PostgreSQL, MinIO, server Dockerfile, migrations, secret-file placeholders and backup/restore/verify scripts. `rtk docker compose -f deploy/compose/compose.yaml config --quiet` passed on 2026-07-04. | 2026-07-04 | Syntax/config gate passed; cold-start/failure benchmark still pending daemon run. |
+| Repository | `deploy/compose` includes PostgreSQL, pinned MinIO, non-root server image, SQLx migrations, external secret files and backup/restore/verify scripts. Compose runtime, black-box E2E, restart-resume and destructive restore passed locally. | 2026-07-05 | Local self-hosting baseline is reproducible; PR CI now gates compose E2E, while remote isolation remains a separate gate. |
 
 ## 3. Benchmark matrix
 
 | Test | Procedure | Required evidence | Status |
 | --- | --- | --- | --- |
-| Cold start | `docker compose up -d --wait` from clean volume set. | wall-clock, image digests, health JSON, migration version. | Pending runtime; compose config syntax passed. |
+| Cold start | `podman compose ... up -d --build --wait` from clean volumes. | wall-clock, image digests, health JSON, migration version. | **Passed locally.** Source rebuild after Rust changes: 4m52s; service start/health after build: ~10 s; build context: 165.3 KiB. `/ready` returned `postgres-s3`; SQLx migration version `1`. |
 | Upgrade | Run v1, create synthetic account/snapshot, deploy v1+1 migration. | pre/post schema version, head/object verification. | Pending. |
 | Rollback | Restore previous server image with compatible schema or documented migration rollback. | runbook transcript and readiness result. | Pending. |
-| PostgreSQL backup/restore | Dump database after committed snapshots, destroy DB volume, restore. | `pg_dump` checksum, restored graph verification. | Pending. |
-| MinIO backup/restore | Mirror object bucket, destroy object volume, restore. | object count/size, manifest/chunk verification. | Pending. |
-| Chunk upload interruption | Kill client/server during multipart upload; resume missing-set. | orphan upload count, resumed commit ID, no bad HEAD. | Pending. |
-| Manifest loss | Delete an object referenced before snapshot commit; commit must fail. | HTTP error, audit row, no HEAD update. | Pending. |
+| PostgreSQL backup/restore | Stop API writers, dump database, destroy both volumes, restore. | `pg_dump` checksum, restored graph verification. | **Passed locally.** PostgreSQL SHA-256 `57fadad41befe8b47014ab631afaba023cfa46412d39b2ffac6f3ecf50a13f2a`; restored graph passed readiness and object verification. |
+| MinIO backup/restore | Stop API writers, archive object volume, destroy both volumes, restore. | archive checksum, referenced-object verification. | **Passed locally.** archive SHA-256 `5354669dd7b8e2730d87e3b9a84a5ca7ca3e4c4dab071aee7989cfa572964afa`; `dangling_snapshot_objects=0` after destructive restore. |
+| Chunk upload interruption | Upload a chunk, stop/restart server, upload manifest and commit same upload session. | resumed commit ID, no bad HEAD. | **Passed locally.** upload session survived restart and committed as first snapshot; HEAD `4bbb750a14779f277ffd4d314f03b504ea2a4b03809a0e66d9fa9ec8c1f220da`. |
+| Committed object loss | Delete a MinIO object referenced by committed history. | readiness failure, then successful disaster restore. | **Passed locally.** `/ready` returned HTTP 503 with `missing-object`; destructive two-store restore returned readiness to 200 with zero dangling references. |
 | DB commit crash | Crash after object upload before DB insert; GC later reclaims orphan after grace. | orphan list before/after GC. | Pending. |
-| HEAD CAS race | Two clients commit on same base. | one fast-forward, one conflict branch; both snapshots retained. | Pending. |
-| Resource idle | 10 minute idle service with no changes. | CPU, RSS, object/DB I/O. | Pending. |
+| HEAD CAS race | Two upload sessions commit on the same base. | one fast-forward, one conflict branch; both snapshots retained. | **Passed locally.** Black-box API run produced three retained snapshots, one conflict branch and unchanged HEAD after stale-base commit. |
+| Resource idle | 10 minute idle service with no changes. | CPU, RSS, object/DB I/O. | Partial. One post-restore sample: server 0.13% CPU / 2.044 MiB RSS; PostgreSQL 1.70% / 52.18 MiB; MinIO 1.56% / 73.85 MiB. Ten-minute series remains pending. |
 
 ## 4. Compose implementation requirements
 
-`deploy/compose` must contain:
+`deploy/compose` contains:
 
 - `compose.yaml` with healthchecks, resource limits, named volumes, project-local network, non-root server user and secret-file mounts: present.
 - SQL migrations: `migrations/001_init.sql` present.
-- Backup/restore/verify/orphan scripts: present; `scripts/migrate.sh` is still pending because PostgreSQL entrypoint applies v1 schema in phase 1.
+- Backup/restore/verify/orphan scripts: present. The server applies embedded SQLx migrations before accepting traffic.
 - `README.md` with 5-minute local demo, upgrade/rollback and disaster-recovery runbook.
 - `.env.example` with quoted non-secret placeholders. Real `.env` is ignored and stored outside the repo.
 
@@ -71,7 +71,27 @@ A failure injection passes only if:
 7. restoring objects without matching PostgreSQL does not invent history;
 8. logs contain no recovery phrase, token, plaintext path content or save bytes.
 
-## 6. Benchmark result template
+## 6. Local run record
+
+```text
+Run ID: local-podman-20260705
+Host: Apple Silicon macOS, Podman machine 5 CPUs / 4 GiB
+Server image id: 90b90ed78d9ae8766436cd3c5e55523c5d3125d23b065c262469618113955891
+PostgreSQL image id: 5db836939fe3760739047801b3e588e97c8774d02807db98d6e977ec6a5e54a6
+MinIO image id: 8f08aee614800a237906bd48114d733e5ac5bfac4ccdf731f141b0e880d7a253
+Readiness: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+Synthetic API result: 3 snapshots, 1 stale-base conflict, chunk missing-set dedupe passed, corrupt checksum rejected, signed certificate validation fail-closed
+Restart injection: chunk-before-restart + manifest/commit-after-restart passed; resumed HEAD 4bbb750a14779f277ffd4d314f03b504ea2a4b03809a0e66d9fa9ec8c1f220da
+Destructive recovery: both named volumes removed, PostgreSQL and MinIO restored, no dangling references
+Backup artifact hashes: postgres.sql sha256=57fadad41befe8b47014ab631afaba023cfa46412d39b2ffac6f3ecf50a13f2a; minio-data.tar sha256=5354669dd7b8e2730d87e3b9a84a5ca7ca3e4c4dab071aee7989cfa572964afa
+```
+
+Raw synthetic bytes are generated by `scripts/compose-e2e.py`; no user save,
+credential, recovery secret or plaintext path content is part of the fixture.
+The backup artifacts are outside the repository under
+`~/Games/Backups/MHSaveSync/`.
+
+## 7. Remaining benchmark template
 
 ```text
 Run ID:

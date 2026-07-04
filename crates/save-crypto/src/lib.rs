@@ -200,12 +200,30 @@ pub fn issue_device_certificate(
     expires_at_unix_seconds: u64,
     capabilities: u64,
 ) -> Result<DeviceCertificate, CryptoError> {
-    let mut cert_id = vec![0u8; 16];
+    let mut cert_id = [0u8; 16];
     OsRng.fill_bytes(&mut cert_id);
+    issue_device_certificate_with_id(
+        account_key,
+        device_public,
+        cert_id,
+        issued_at_unix_seconds,
+        expires_at_unix_seconds,
+        capabilities,
+    )
+}
+
+pub fn issue_device_certificate_with_id(
+    account_key: &SigningKey,
+    device_public: &VerifyingKey,
+    cert_id: [u8; 16],
+    issued_at_unix_seconds: u64,
+    expires_at_unix_seconds: u64,
+    capabilities: u64,
+) -> Result<DeviceCertificate, CryptoError> {
     let body = DeviceCertificateBody {
         cert_version: 1,
         account_root_public: account_key.verifying_key().to_bytes().to_vec(),
-        cert_id,
+        cert_id: cert_id.to_vec(),
         device_public: device_public.to_bytes().to_vec(),
         issued_at_unix_seconds,
         expires_at_unix_seconds,

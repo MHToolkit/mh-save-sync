@@ -1,0 +1,17 @@
+.git
+.github
+.codegraph
+.DS_Store
+.idea
+.vscode
+target
+artifacts
+local
+apps/macos/.build
+apps/android/.gradle
+apps/android/**/build
+deploy/compose/secrets/*.txt
+*.db
+*.db-shm
+*.db-wal
+*.env

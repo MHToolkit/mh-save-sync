@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1.7
 FROM rust:1.95-bookworm AS build
 WORKDIR /src
+ENV CARGO_BUILD_JOBS=1 \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=1 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 COPY Cargo.toml Cargo.lock* ./
 COPY crates ./crates
+COPY deploy/compose/migrations ./deploy/compose/migrations
 RUN cargo build --release -p save-server --bin mh-save-server
 
 FROM gcr.io/distroless/cc-debian12:nonroot

@@ -7,9 +7,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64.workspace = true
+aws-sdk-s3.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+ciborium.workspace = true
 hex.workspace = true
+save-crypto = { path = "../save-crypto" }
 save-domain = { path = "../save-domain" }
 serde.workspace = true
 serde_json.workspace = true
@@ -25,3 +29,6 @@ uuid.workspace = true
 [[bin]]
 name = "mh-save-server"
 path = "src/main.rs"
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

@@ -6,8 +6,20 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
 [dependencies]
 save-domain = { path = "../save-domain" }
 save-engine = { path = "../save-engine" }
 serde.workspace = true
 thiserror.workspace = true
+uniffi.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]

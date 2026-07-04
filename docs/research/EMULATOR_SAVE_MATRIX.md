@@ -1,7 +1,7 @@
 # Emulator Save Adapter Matrix
 
 - Status: Phase 1 evidence ledger, not final compatibility claim
-- Last updated: 2026-07-04
+- Last updated: 2026-07-05
 - Host: macOS arm64; Android device: PKG110, Android 16, ABI arm64-v8a
 - Evidence rule: `Runtime Verified` requires a real build plus snapshot, mutate/damage, restore, and emulator-readable round trip. Package install, source-path proof, or fixture tests are not enough.
 - Privacy rule: this file records title IDs, counts, sizes, hashes, package/bundle IDs, and source locations only. It does not record character names, save filenames, ROM paths, keys, or file contents.
@@ -73,3 +73,31 @@ A descriptor can be upgraded to `Runtime Verified` only when the evidence bundle
 8. emulator-readable confirmation after relaunch;
 9. conflict branch proof if another device committed on the same base;
 10. redacted logs proving no recovery phrase, token, plaintext path content or save bytes were emitted.
+
+## 6. MH Save Sync Android client evidence
+
+This section validates the save-sync Android shell, not emulator runtime
+compatibility.
+
+2026-07-05 local evidence:
+
+```text
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug lintDebug
+Result: BUILD SUCCESSFUL
+APK sha256: ccfa6f5b9d842cb2c363c4d2338a5a8777039ba8ad16f04d96c92c4ee860a307
+```
+
+The Android app contains:
+
+- Compose status surface for SAF grant, active session and manual reconcile
+  state;
+- persisted SAF URI handling;
+- `ForegroundService` scaffold for active emulator sessions;
+- `OneTimeWorkRequest` and periodic WorkManager scheduling helpers with
+  Wi-Fi/battery/charging constraints.
+
+Earlier ADB smoke evidence showed the debug APK installed and launched on the
+attached Android device, and app-private preferences recorded
+`last_reconcile_reason=manual`. This evidence proves client-shell plumbing
+only. A Nemessix/Azahar/Citra descriptor still requires the runtime checklist
+above before it can be marked `Runtime Verified`.

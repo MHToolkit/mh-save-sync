@@ -36,4 +36,32 @@ object backup. Restore tooling verifies every referenced object before exposing
 readiness.
 ## Phase1-alpha evidence
 
-`save-server` exposes health/readiness and in-memory begin/chunk/manifest/commit routes that enforce manifest-before-head and stale-base conflict preservation. `deploy/compose` supplies PostgreSQL/MinIO schema and healthcheck skeleton; production SQLx/S3 persistence remains a Phase 1B gate.
+`save-server` now has both an in-memory test backend and a persistent
+PostgreSQL/S3-compatible backend. Local Podman runs on 2026-07-05 proved:
+
+- encrypted fixture objects were checksum-verified and stored in MinIO before
+  the snapshot transaction;
+- the SQL transaction inserted snapshot, parent and object-reference rows
+  before conditionally advancing HEAD;
+- two sessions with the same base produced one fast-forward and one retained
+  conflict branch;
+- an upload resumed after the server container restarted;
+- destructive PostgreSQL plus MinIO volume restore recovered the prior HEAD,
+  and repository verification reported zero dangling object references.
+
+Latest black-box evidence:
+
+```text
+ready: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+compose-e2e: account_root_immutable=true, certificate_fail_closed=true,
+  checksum_fail_closed=true, history_count=3, conflict_count=1,
+  dedupe_missing_count=1
+restart-resume: resumed_after_restart=true,
+  head=4bbb750a14779f277ffd4d314f03b504ea2a4b03809a0e66d9fa9ec8c1f220da
+backup: PostgreSQL sha256=57fadad41befe8b47014ab631afaba023cfa46412d39b2ffac6f3ecf50a13f2a
+backup: MinIO tar sha256=5354669dd7b8e2730d87e3b9a84a5ca7ca3e4c4dab071aee7989cfa572964afa
+restore: readiness 200 and dangling_snapshot_objects=0
+```
+
+Multipart upload, signed request authentication, quota enforcement, lifecycle
+cleanup and remote-host validation remain Phase 1B gates.

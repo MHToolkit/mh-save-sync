@@ -10,7 +10,6 @@ services:
       - postgres_password
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mh_save_sync -d mh_save_sync"]
       interval: 5s
@@ -22,11 +21,13 @@ services:
           cpus: "1.0"
           memory: 512M
   minio:
-    image: minio/minio:RELEASE.2026-06-14T17-43-55Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
-      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:9966a92a734f9411e32f4f41d7d9d826fcdc0f68c4e20b70295bd4e7c11f8a2f
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        export MINIO_ROOT_USER="$$(cat /run/secrets/minio_root_user)";
+        export MINIO_ROOT_PASSWORD="$$(cat /run/secrets/minio_root_password)";
+        exec minio server /data --console-address :9001
     secrets:
       - minio_root_user
       - minio_root_password
@@ -51,9 +52,22 @@ services:
       dockerfile: deploy/compose/server.Dockerfile
     environment:
       MH_SAVE_SYNC_BIND: 0.0.0.0:8080
-      DATABASE_URL: postgres://mh_save_sync@postgres:5432/mh_save_sync
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_USER: mh_save_sync
+      DATABASE_NAME: mh_save_sync
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: mh-save-sync
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_FILE: /run/secrets/minio_root_user
+      S3_SECRET_KEY_FILE: /run/secrets/minio_root_password
+      AWS_EC2_METADATA_DISABLED: "true"
+      RUST_LOG: save_server=info,tower_http=info
+    secrets:
+      - postgres_password
+      - minio_root_user
+      - minio_root_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,9 +78,9 @@ services:
     healthcheck:
       test: ["CMD", "/app/mh-save-server", "--healthcheck"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -77,8 +91,8 @@ volumes:
   minio-data:
 secrets:
   postgres_password:
-    file: ./secrets/postgres_password.txt
+    file: ${MH_SAVE_SYNC_SECRETS_DIR:-./secrets}/postgres_password.txt
   minio_root_user:
-    file: ./secrets/minio_root_user.txt
+    file: ${MH_SAVE_SYNC_SECRETS_DIR:-./secrets}/minio_root_user.txt
   minio_root_password:
-    file: ./secrets/minio_root_password.txt
+    file: ${MH_SAVE_SYNC_SECRETS_DIR:-./secrets}/minio_root_password.txt

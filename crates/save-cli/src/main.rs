@@ -1,5 +1,10 @@
+use base64::Engine;
 use clap::{Parser, Subcommand};
-use save_crypto::{account_handle, derive_account_keys, recovery_phrase_from_secret};
+use ed25519_dalek::SigningKey;
+use save_crypto::{
+    account_handle, account_root_signing_key, derive_account_keys, deterministic_cbor,
+    issue_device_certificate_with_id, recovery_phrase_from_secret,
+};
 use save_domain::{GameKey, stable_logical_save_id};
 use save_engine::{SnapshotOptions, create_snapshot_from_stable_folder, decrypt_manifest};
 use sha2::Digest;
@@ -16,6 +21,7 @@ struct Cli {
 enum Commands {
     Adapters,
     CryptoVector,
+    CryptoDeviceFixture,
     SnapshotFixture { root: PathBuf },
 }
 
@@ -35,6 +41,33 @@ fn main() -> anyhow::Result<()> {
                 hex::encode(sha2::Sha256::digest(secret)),
                 account_handle(&keys),
                 phrase.split_whitespace().count()
+            );
+        }
+        Commands::CryptoDeviceFixture => {
+            let keys = derive_account_keys(&[0x42; 32])?;
+            let root = account_root_signing_key(&keys);
+            let device = SigningKey::from_bytes(&[0x24; 32]);
+            let cert_id = [0x33; 16];
+            let certificate = issue_device_certificate_with_id(
+                &root,
+                &device.verifying_key(),
+                cert_id,
+                1_700_000_000,
+                4_102_444_800,
+                1,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "account_handle": account_handle(&keys),
+                    "root_public_key_b64": base64::engine::general_purpose::STANDARD
+                        .encode(root.verifying_key().to_bytes()),
+                    "cert_id": hex::encode(cert_id),
+                    "device_public_key_b64": base64::engine::general_purpose::STANDARD
+                        .encode(device.verifying_key().to_bytes()),
+                    "certificate_b64": base64::engine::general_purpose::STANDARD
+                        .encode(deterministic_cbor(&certificate)?),
+                })
             );
         }
         Commands::SnapshotFixture { root } => {
