@@ -1,0 +1,9 @@
+* @MHToolkit/maintainers
+
+/crates/save-crypto/ @MHToolkit/maintainers
+/crates/save-domain/ @MHToolkit/maintainers
+/crates/save-engine/ @MHToolkit/maintainers
+/deploy/ @MHToolkit/maintainers
+/.github/workflows/ @MHToolkit/maintainers
+/docs/adr/ @MHToolkit/maintainers
+

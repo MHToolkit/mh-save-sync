@@ -1,0 +1,13 @@
+.DS_Store
+.idea/
+.vscode/
+target/
+.env
+*.env
+!*.env.example
+local/
+artifacts/
+*.db
+*.db-shm
+*.db-wal
+

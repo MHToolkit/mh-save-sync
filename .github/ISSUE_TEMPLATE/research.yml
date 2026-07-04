@@ -1,0 +1,25 @@
+name: Research task
+description: Evidence-backed research or compatibility validation
+title: "[research] "
+labels: ["research"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Decision question
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Authoritative sources and experiment
+      description: Official docs/source or standards, access date and reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: gate
+    attributes:
+      label: Exit criteria
+    validations:
+      required: true
+

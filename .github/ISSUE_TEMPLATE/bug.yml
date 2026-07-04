@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible defect without secrets or real save data
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      options:
+        - data-loss
+        - security
+        - compatibility
+        - performance
+        - usability
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Use synthetic fixtures and redact local paths.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, hashes or screenshots with secrets and save data removed.
+    validations:
+      required: true
+
