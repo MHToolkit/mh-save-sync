@@ -28,6 +28,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, ci-general]
     timeout-minutes: 60
     env:
+      CARGO_REGISTRIES_CRATES_IO_INDEX: sparse+https://rsproxy.cn/index/
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
       RUSTUP_DIST_SERVER: https://rsproxy.cn
       RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     steps:
