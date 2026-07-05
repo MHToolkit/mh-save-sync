@@ -34,8 +34,8 @@ services:
     volumes:
       - minio-data:/data
     ports:
-      - "19000:9000"
-      - "19001:9001"
+      - "${MH_SAVE_SYNC_MINIO_API_PORT:-19000}:9000"
+      - "${MH_SAVE_SYNC_MINIO_CONSOLE_PORT:-19001}:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -94,7 +94,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "18080:8080"
+      - "${MH_SAVE_SYNC_HTTP_PORT:-18080}:8080"
     healthcheck:
       test: ["CMD", "/app/mh-save-server", "--healthcheck"]
       interval: 10s

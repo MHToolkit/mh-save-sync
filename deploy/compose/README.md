@@ -24,6 +24,15 @@ bucket and enables MinIO versioning before the API can become healthy. The API
 uses S3 SHA-256 upload checksums and readiness verifies that every committed
 snapshot object still exists.
 
+For isolated hosts that already use the default ports, set these quoted values
+in the env file before starting Compose:
+
+```bash
+MH_SAVE_SYNC_HTTP_PORT="18082"
+MH_SAVE_SYNC_MINIO_API_PORT="19082"
+MH_SAVE_SYNC_MINIO_CONSOLE_PORT="19083"
+```
+
 This stack is for isolated development and disaster-recovery testing. It must not be deployed over `nemessix-room`; use a distinct Compose project name and non-conflicting ports.
 
 Backups require both PostgreSQL and MinIO object data. Restoring only one side must be treated as not ready until `scripts/verify-repository.sh` proves every committed snapshot references durable encrypted objects.
