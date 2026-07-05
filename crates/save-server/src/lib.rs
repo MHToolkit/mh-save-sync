@@ -1,10 +1,11 @@
-use aws_sdk_s3::config::{Credentials, Region};
-use aws_sdk_s3::primitives::ByteStream;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
+use object_store::aws::{AmazonS3Builder, Checksum};
+use object_store::path::Path as ObjectPath;
+use object_store::{ObjectStore, ObjectStoreExt};
 use save_crypto::{CRYPTO_SUITE_V1, DeviceCertificate, verify_device_certificate};
 use save_domain::SnapshotId;
 use serde::{Deserialize, Serialize};
@@ -48,8 +49,7 @@ struct InMemoryState {
 
 struct PersistentState {
     pool: PgPool,
-    s3: aws_sdk_s3::Client,
-    bucket: String,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,20 +201,29 @@ impl AppState {
         let region = std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".into());
         let access_key = env_or_file("S3_ACCESS_KEY", "S3_ACCESS_KEY_FILE")?;
         let secret_key = env_or_file("S3_SECRET_KEY", "S3_SECRET_KEY_FILE")?;
-        let credentials = Credentials::new(access_key, secret_key, None, None, "mh-save-sync");
-        let config = aws_sdk_s3::Config::builder()
-            .behavior_version_latest()
-            .region(Region::new(region))
-            .credentials_provider(credentials)
-            .endpoint_url(endpoint)
-            .force_path_style(true)
-            .build();
-        let s3 = aws_sdk_s3::Client::from_conf(config);
-        if s3.head_bucket().bucket(&bucket).send().await.is_err() {
-            s3.create_bucket().bucket(&bucket).send().await?;
-        }
+        let allow_http = std::env::var("S3_ALLOW_HTTP").map_or_else(
+            |_| endpoint.starts_with("http://"),
+            |v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"),
+        );
+        let object_store = AmazonS3Builder::new()
+            .with_endpoint(endpoint)
+            .with_region(region)
+            .with_bucket_name(bucket.clone())
+            .with_access_key_id(access_key)
+            .with_secret_access_key(secret_key)
+            .with_allow_http(allow_http)
+            .with_virtual_hosted_style_request(false)
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()?;
+        let object_store: Arc<dyn ObjectStore> = Arc::new(object_store);
+        object_store
+            .put(
+                &ObjectPath::from("__mh_save_sync_readiness__"),
+                Vec::new().into(),
+            )
+            .await?;
         Ok(Self {
-            backend: Backend::Persistent(Arc::new(PersistentState { pool, s3, bucket })),
+            backend: Backend::Persistent(Arc::new(PersistentState { pool, object_store })),
         })
     }
 
@@ -241,19 +250,16 @@ impl AppState {
                     .execute(&p.pool)
                     .await
                     .map_err(db_unavailable)?;
-                p.s3.head_bucket()
-                    .bucket(&p.bucket)
-                    .send()
+                p.object_store
+                    .head(&ObjectPath::from("__mh_save_sync_readiness__"))
                     .await
-                    .map_err(s3_unavailable)?;
+                    .map_err(object_store_unavailable)?;
                 let rows = sqlx::query("SELECT DISTINCT o.storage_key FROM snapshots s JOIN snapshot_objects so ON so.snapshot_id=s.id JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id LIMIT 2000")
                     .fetch_all(&p.pool).await.map_err(db_unavailable)?;
                 for row in rows {
                     let key: String = row.get("storage_key");
-                    p.s3.head_object()
-                        .bucket(&p.bucket)
-                        .key(&key)
-                        .send()
+                    p.object_store
+                        .head(&ObjectPath::from(key.as_str()))
                         .await
                         .map_err(|_| BackendError::Unavailable(format!("missing-object:{key}")))?;
                 }
@@ -876,13 +882,11 @@ async fn persistent_object_exists(
         return Ok(false);
     };
     let key: String = row.get("storage_key");
-    Ok(p.s3
-        .head_object()
-        .bucket(&p.bucket)
-        .key(key)
-        .send()
-        .await
-        .is_ok())
+    match p.object_store.head(&ObjectPath::from(key)).await {
+        Ok(_) => Ok(true),
+        Err(object_store::Error::NotFound { .. }) => Ok(false),
+        Err(error) => Err(object_store_unavailable(error)),
+    }
 }
 
 async fn persistent_put_object(
@@ -894,15 +898,10 @@ async fn persistent_put_object(
     bytes: Vec<u8>,
 ) -> Result<(), ApiError> {
     let key = format!("accounts/{account_hex}/{kind}s/{object_id}");
-    let checksum_b64 = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes));
-    p.s3.put_object()
-        .bucket(&p.bucket)
-        .key(&key)
-        .checksum_sha256(checksum_b64)
-        .body(ByteStream::from(bytes.clone()))
-        .send()
+    p.object_store
+        .put(&ObjectPath::from(key.clone()), bytes.clone().into())
         .await
-        .map_err(s3_unavailable)
+        .map_err(object_store_unavailable)
         .map_err(BackendError::api)?;
     let account = hex::decode(account_hex).map_err(invalid_hex)?;
     sqlx::query("INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (account_handle,object_id) DO NOTHING")
@@ -1019,7 +1018,7 @@ fn invalid_hex(_: hex::FromHexError) -> ApiError {
 fn db_unavailable(error: sqlx::Error) -> BackendError {
     BackendError::Unavailable(format!("database:{error}"))
 }
-fn s3_unavailable<E: std::fmt::Display>(error: E) -> BackendError {
+fn object_store_unavailable<E: std::fmt::Display>(error: E) -> BackendError {
     BackendError::Unavailable(format!("object-store:{error}"))
 }
 fn json_string_array(value: &serde_json::Value) -> Vec<String> {

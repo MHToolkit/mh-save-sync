@@ -19,6 +19,11 @@ docker compose \
 curl -fsS http://127.0.0.1:18080/ready
 ```
 
+Compose starts a one-shot `minio-init` container that creates the configured
+bucket and enables MinIO versioning before the API can become healthy. The API
+uses S3 SHA-256 upload checksums and readiness verifies that every committed
+snapshot object still exists.
+
 This stack is for isolated development and disaster-recovery testing. It must not be deployed over `nemessix-room`; use a distinct Compose project name and non-conflicting ports.
 
 Backups require both PostgreSQL and MinIO object data. Restoring only one side must be treated as not ready until `scripts/verify-repository.sh` proves every committed snapshot references durable encrypted objects.

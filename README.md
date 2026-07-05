@@ -34,9 +34,14 @@ Phase 1 feature branch currently contains:
 - encrypted fixed-chunk fixture snapshots, DAG conflict preservation, safe restore gating and SQLite WAL metadata tests;
 - PostgreSQL + S3/MinIO persistent service with signed device certificates,
   missing-set resumable uploads, checksum fail-closed writes, transactional
-  CAS HEAD commits and readiness checks for committed object references;
+  CAS HEAD commits, S3 SHA-256 upload checksums, bucket versioning init and
+  readiness checks for committed object references;
 - macOS Swift shell smoke, Android SAF/WorkManager/foreground-service shell,
   and generated UniFFI Kotlin/Swift bridge evidence.
+- CI supply-chain gates for `cargo deny`, `cargo audit`, dependency review,
+  CycloneDX SBOM generation, secret scanning and artifact checksums. Current
+  GitHub-hosted runner execution is blocked by the account billing/spending
+  limit, so local evidence is recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
 export/import UX, upgrade/rollback benchmark, remote isolated deployment and
@@ -50,6 +55,7 @@ cargo run -p save-cli --bin mh-save -- adapters
 cargo run -p save-cli --bin mh-save -- crypto-vector
 cargo run -p save-cli --bin mh-save -- crypto-device-fixture
 cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
+./scripts/supply-chain-gate.sh
 swift run --package-path apps/macos MHSaveSyncMac
 ```
 

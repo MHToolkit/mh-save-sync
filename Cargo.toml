@@ -18,7 +18,6 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1.0"
-aws-sdk-s3 = { version = "1.137.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls", "behavior-version-latest"] }
 axum = "0.8"
 base64 = "0.22"
 bip39 = { version = "2.2", default-features = false, features = ["std"] }
@@ -29,13 +28,14 @@ ed25519-dalek = { version = "2.2", features = ["rand_core", "serde", "zeroize"] 
 hex = "0.4"
 hkdf = "0.12"
 hmac = "0.12"
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1.0"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros", "json"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros", "json"] }
 tempfile = "3.20"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "signal"] }

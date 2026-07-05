@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: critical
+
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -18,8 +30,13 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - name: Audit dependencies, enforce deny policy and generate SBOM
+        env:
+          MH_SAVE_SYNC_INSTALL_SUPPLY_CHAIN_TOOLS: "1"
+        run: ./scripts/supply-chain-gate.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: cargo build --workspace --bins
       - run: cargo run -p save-cli --bin mh-save -- crypto-vector
       - name: Verify deterministic device certificate fixture
         run: |
@@ -46,7 +63,22 @@ jobs:
             --language swift --out-dir /tmp/uniffi/swift
           test -s /tmp/uniffi/kotlin/uniffi/save_client/save_client.kt
           test -s /tmp/uniffi/swift/save_client.swift
+      - name: Generate Rust artifact checksums
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            target/debug/mh-save \
+            target/debug/mh-save-server \
+            target/release/libsave_client.so \
+            > artifacts/checksums/rust.sha256
+          test -s artifacts/checksums/rust.sha256
       - run: ./scripts/secret-scan.sh
+      - uses: actions/upload-artifact@v5
+        with:
+          name: rust-sbom-and-checksums
+          path: |
+            artifacts/sbom/mh-save-sync.cdx.json
+            artifacts/checksums/rust.sha256
 
   android:
     runs-on: ubuntu-latest
@@ -61,6 +93,19 @@ jobs:
       - name: Build and lint Android client
         working-directory: apps/android
         run: ./gradlew assembleDebug lintDebug
+      - name: Generate Android artifact checksums
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            apps/android/app/build/outputs/apk/debug/app-debug.apk \
+            > artifacts/checksums/android.sha256
+          test -s artifacts/checksums/android.sha256
+      - uses: actions/upload-artifact@v5
+        with:
+          name: android-debug-apk
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            artifacts/checksums/android.sha256
 
   macos-smoke:
     runs-on: macos-latest
@@ -68,6 +113,17 @@ jobs:
       - uses: actions/checkout@v5
       - run: swift build --package-path apps/macos
       - run: swift run --package-path apps/macos MHSaveSyncMac
+      - name: Generate macOS smoke artifact checksum
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            apps/macos/.build/debug/MHSaveSyncMac \
+            > artifacts/checksums/macos.sha256
+          test -s artifacts/checksums/macos.sha256
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos-smoke-checksums
+          path: artifacts/checksums/macos.sha256
 
   compose-e2e:
     runs-on: ubuntu-latest

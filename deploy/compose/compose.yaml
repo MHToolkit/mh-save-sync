@@ -46,6 +46,24 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        export MINIO_ROOT_USER="$$(cat /run/secrets/minio_root_user)";
+        export MINIO_ROOT_PASSWORD="$$(cat /run/secrets/minio_root_password)";
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD";
+        mc mb -p "local/$${S3_BUCKET:-mh-save-sync}";
+        mc version enable "local/$${S3_BUCKET:-mh-save-sync}" || true
+    environment:
+      S3_BUCKET: mh-save-sync
+    secrets:
+      - minio_root_user
+      - minio_root_password
+    depends_on:
+      minio:
+        condition: service_healthy
   server:
     build:
       context: ../..
@@ -73,6 +91,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     ports:
       - "18080:8080"
     healthcheck:

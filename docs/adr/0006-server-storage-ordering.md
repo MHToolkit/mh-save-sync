@@ -25,9 +25,11 @@ snapshot as a conflict branch. Missing-set queries make uploads resumable.
 Uncommitted objects are orphan candidates and are reclaimed only after a grace
 period and a graph mark pass.
 
-S3 multipart uploads use checksums and lifecycle cleanup for incomplete parts.
-A filesystem + SQLite development backend may implement the same protocol and
-ordering, but cannot be presented as production-equivalent durability.
+The phase1-alpha implementation uses the Rust `object_store` S3 backend with
+S3 SHA256 upload checksums enabled. Compose initializes and versions the MinIO
+bucket before the API starts. Multipart upload, incomplete-upload lifecycle
+cleanup and production bucket policy are still required before a hosted stable
+service.
 
 ## Backup and rollback
 
@@ -39,8 +41,9 @@ readiness.
 `save-server` now has both an in-memory test backend and a persistent
 PostgreSQL/S3-compatible backend. Local Podman runs on 2026-07-05 proved:
 
-- encrypted fixture objects were checksum-verified and stored in MinIO before
-  the snapshot transaction;
+- encrypted fixture objects were checksum-verified by the request body hash and
+  stored through `object_store` with S3 SHA256 upload checksums before the
+  snapshot transaction;
 - the SQL transaction inserted snapshot, parent and object-reference rows
   before conditionally advancing HEAD;
 - two sessions with the same base produced one fast-forward and one retained
@@ -57,11 +60,11 @@ compose-e2e: account_root_immutable=true, certificate_fail_closed=true,
   checksum_fail_closed=true, history_count=3, conflict_count=1,
   dedupe_missing_count=1
 restart-resume: resumed_after_restart=true,
-  head=4bbb750a14779f277ffd4d314f03b504ea2a4b03809a0e66d9fa9ec8c1f220da
-backup: PostgreSQL sha256=57fadad41befe8b47014ab631afaba023cfa46412d39b2ffac6f3ecf50a13f2a
-backup: MinIO tar sha256=5354669dd7b8e2730d87e3b9a84a5ca7ca3e4c4dab071aee7989cfa572964afa
+  head=119beee8ef738ddf81cceba508a7ef8801b6e5cc572e9ecf44302bfc43e20fc1
+backup: PostgreSQL sha256=7d4b439072fd79fd9ad012dee9b1eba589140b5857381116d66b4c47c6f0f7f3
+backup: MinIO tar sha256=b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f
 restore: readiness 200 and dangling_snapshot_objects=0
 ```
 
-Multipart upload, signed request authentication, quota enforcement, lifecycle
-cleanup and remote-host validation remain Phase 1B gates.
+Multipart upload, quota enforcement, lifecycle cleanup and remote-host
+validation remain Phase 1B/1D gates.

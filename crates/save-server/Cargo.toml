@@ -8,11 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 base64.workspace = true
-aws-sdk-s3.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 ciborium.workspace = true
 hex.workspace = true
+object_store.workspace = true
 save-crypto = { path = "../save-crypto" }
 save-domain = { path = "../save-domain" }
 serde.workspace = true
