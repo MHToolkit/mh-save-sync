@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # Private repositories require GitHub Advanced Security for dependency review.
+    # Opt in only after GHAS is enabled to avoid a permanently failing PR check.
+    if: github.event_name == 'pull_request' && vars.DEPENDENCY_REVIEW_ENABLED == 'true'
     runs-on: [self-hosted, Linux, X64, ci-general]
     timeout-minutes: 10
     permissions:
