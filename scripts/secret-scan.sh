@@ -18,8 +18,18 @@ if git grep --cached -n -I -E "$pattern" "${exclude[@]}"; then
   exit 1
 fi
 
-if git ls-files --others --exclude-standard -z | xargs -0 -r grep -nI -E "$pattern"; then
-  echo "potential secret pattern found in untracked files" >&2
+# CI steps intentionally create untracked build outputs, generated bindings, SBOMs and
+# checksums before this script runs. Scan untracked source-like files only; generated
+# artifacts are covered by the tracked-source checks above and would otherwise cause
+# false positives on schema/example field names such as access_token or password.
+if git ls-files --others --exclude-standard -z \
+  ':!:artifacts/**' \
+  ':!:target/**' \
+  ':!:apps/android/.gradle/**' \
+  ':!:apps/android/app/build/**' \
+  ':!:apps/macos/.build/**' \
+  | xargs -0 -r grep -nI -E "$pattern"; then
+  echo "potential secret pattern found in untracked source-like files" >&2
   exit 1
 fi
 
