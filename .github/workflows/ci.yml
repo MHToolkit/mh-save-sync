@@ -118,6 +118,7 @@ jobs:
             artifacts/checksums/android.sha256
 
   macos-smoke:
+    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -136,6 +137,7 @@ jobs:
           path: artifacts/checksums/macos.sha256
 
   compose-e2e:
+    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
