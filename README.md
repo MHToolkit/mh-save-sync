@@ -149,6 +149,19 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug
 ```
 
+Android Generic Folder shared-storage smoke with a connected ADB device:
+
+```bash
+MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 \
+  ./scripts/android-generic-folder-e2e.sh
+```
+
+This verifies the generic user-selected-folder path across macOS, the public
+Alpha API and Android `/sdcard` shared storage, including conflict retention and
+running-restore fail-closed behavior. It is not a Nemessix/Azahar/Citra runtime
+claim; emulator-specific adapters still require emulator-readable restore
+evidence.
+
 
 Offline no-server recovery demo:
 

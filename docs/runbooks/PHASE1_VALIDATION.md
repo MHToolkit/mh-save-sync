@@ -408,6 +408,45 @@ Boundary:
   protected by application-layer E2EE; production deployment should use a TLS
   reverse proxy and can later tighten cleartext policy.
 
+## Android Generic Folder shared-storage E2E executed on 2026-07-07
+
+Command:
+
+```bash
+MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 \
+  ./scripts/android-generic-folder-e2e.sh
+```
+
+Output:
+
+```json
+{"adb_device":"emulator-5554","android_conflict_snapshot":"52d20b762989d01e10ea2a61a07fe77d518c80f12789da1fd3d4e502e2afd5ff","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"f304d1a50711a7306d4a28ab41307ee221b967b1c40442ba8b2af0cf6b6bf77d","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783427004776726000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"f304d1a50711a7306d4a28ab41307ee221b967b1c40442ba8b2af0cf6b6bf77d","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
+```
+
+What this proves:
+
+- A real Android ADB device shared-storage tree under `/sdcard/MHSaveSyncE2E`
+  can participate in the same PostgreSQL/S3 server protocol as the macOS
+  Generic Folder flow.
+- A macOS Generic Folder snapshot became cloud HEAD, an Android shared-storage
+  divergent branch uploaded without a base head became a conflict branch, and
+  cloud HEAD remained unchanged (`history_count=2`, `conflict_count=1`).
+- Restoring the cloud HEAD while stopped produced bytes that were pushed back to
+  Android shared storage and pulled back for byte comparison; the restored file
+  sha256 was `d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268`.
+- Running-emulator restore still failed closed and did not create the blocked
+  target directory.
+
+Boundary:
+
+- This is a Generic Folder Android shared-storage E2E, not an emulator-specific
+  proof. It does not prove Nemessix/Azahar/Citra can read the restored bytes
+  after relaunch and therefore does not upgrade those adapters to
+  `RuntimeVerified`.
+- The script uses ADB for evidence capture and cleanup. The production Android
+  app must still use SAF persistable URI grants and fail closed when a user does
+  not authorize the target tree.
+
 ## Self-hosted runner throttling check executed on 2026-07-07
 
 Command:
@@ -529,8 +568,10 @@ Open Phase 1D gates:
 - real macOS Nemessix save-complete IPC and automatic stable snapshot proof;
 - Android Nemessix restore proof against a real authorized save root;
 - Android Azahar or Citra MMJ modification producing a macOS conflict branch;
-- exported `.mhsavebundle` restore in a no-server environment;
-- isolated remote deployment and recovery, without touching `nemessix-room`;
+- exported `.mhsavebundle` restore in a real emulator-readable no-server
+  environment; fixture byte-for-byte recovery is already covered;
+- production TLS ingress/reverse proxy for the public Alpha API; the current
+  `39082` TCP proxy is an alpha convenience;
 - PR CI green on GitHub after each new feature commit. As of 2026-07-07 the
   MHToolkit self-hosted runner is online but limited to one 2c4g host, so the
   workflow intentionally serializes heavy Rust and Android gates and status
