@@ -12,16 +12,22 @@ base64.workspace = true
 clap.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
+reqwest.workspace = true
 save-adapters = { path = "../save-adapters" }
 save-crypto = { path = "../save-crypto" }
 save-domain = { path = "../save-domain" }
 save-engine = { path = "../save-engine" }
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tokio.workspace = true
 
 [[bin]]
 name = "mh-save"
 path = "src/main.rs"
 
 [dev-dependencies]
+axum.workspace = true
+save-server = { path = "../save-server" }
 tempfile.workspace = true
+tokio.workspace = true

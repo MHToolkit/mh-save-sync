@@ -2006,6 +2006,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -2197,17 +2199,22 @@ name = "save-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64",
  "clap",
  "ed25519-dalek",
  "hex",
+ "reqwest",
  "save-adapters",
  "save-crypto",
  "save-domain",
  "save-engine",
+ "save-server",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

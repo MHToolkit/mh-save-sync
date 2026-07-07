@@ -84,6 +84,30 @@ cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-s
 swift run --package-path apps/macos MHSaveSyncMac
 ```
 
+Visible server sync demo (shows where the snapshot went, the logical save ID,
+the cloud HEAD and conflict branch count):
+
+```bash
+MH_SAVE_SYNC_BIND=127.0.0.1:18080 cargo run -p save-server --bin mh-save-server
+
+cargo run -p save-cli --bin mh-save -- server-upload \\
+  --server-url http://127.0.0.1:18080 \\
+  --root tests/fixtures/generic-save \\
+  --secret-hex 5555555555555555555555555555555555555555555555555555555555555555 \\
+  --device-id office-mac
+
+cargo run -p save-cli --bin mh-save -- server-status \\
+  --server-url http://127.0.0.1:18080 \\
+  --secret-hex 5555555555555555555555555555555555555555555555555555555555555555
+```
+
+`server-upload` prints Chinese `message_zh`, `server_url`, `sync_target`,
+`logical_save_id`, `cloud_head_before`, `cloud_head`, `outcome` and
+`conflict_snapshot`, so a manual sync is never a black box. The reproducible
+gate is `./scripts/server-sync-e2e.sh`: it uploads an office snapshot, uploads
+a home/Android-style divergent branch without a base head, and verifies the
+cloud HEAD is preserved while the conflict branch is retained.
+
 Android local build/lint, using Android Studio's bundled JBR when macOS has no
 system Java:
 

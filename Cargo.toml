@@ -30,6 +30,7 @@ hkdf = "0.12"
 hmac = "0.12"
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"

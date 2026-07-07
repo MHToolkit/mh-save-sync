@@ -17,7 +17,9 @@ cargo build --workspace --bins                                  PASS
 scripts/supply-chain-gate.sh                                    PASS: cargo-deny + cargo-audit + CycloneDX SBOM
 cargo run -p save-cli --bin mh-save -- crypto-device-fixture    PASS: matches tests/fixtures/device-identity-public.json
 cargo test -p save-cli --test bundle_cli                       PASS: 2 tests / 1 suite
+cargo test -p save-cli --test server_sync_cli                  PASS: 2 tests / 1 suite
 scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
+scripts/server-sync-e2e.sh                                      PASS: server upload/status, conflict branch retained
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
@@ -60,6 +62,33 @@ that restore output byte-compares equal to `tests/fixtures/generic-save` and
 running-emulator restore writes no target directory. It does not upgrade emulator
 adapters to `RuntimeVerified`; real emulator-readable restore evidence is still
 tracked as an open phase gate below.
+
+## Visible server sync CLI gate executed on 2026-07-07
+
+Command:
+
+```bash
+./scripts/server-sync-e2e.sh
+```
+
+Sample local output:
+
+```json
+{"server_url": "http://127.0.0.1:63025", "cloud_head": "064ee4451d385cbc15ab237aec9c4eedbb2ee76cb92a60bcf422c125e2617cda", "history_count": 2, "conflict_count": 1, "evidence": "server sync e2e preserved conflict branch without overwriting cloud head"}
+```
+
+This is synthetic server/API evidence for the manual sync UX path. It starts
+the memory backend server, uploads an office/macOS-style snapshot, uploads a
+home/Android-style divergent snapshot without a base head, and verifies that
+the original cloud HEAD remains unchanged while the divergent snapshot is
+retained as a conflict branch. CLI JSON includes `server_url`, `sync_target`,
+`logical_save_id`, `cloud_head_before`, `cloud_head`, `outcome`,
+`conflict_snapshot` and Chinese `message_zh`, so manual sync is not a black box.
+It does not yet prove real emulator readability or persistent PostgreSQL/S3
+object download/restore. In this Codex managed sandbox, loopback bind is denied,
+so `./scripts/server-sync-e2e.sh` exits 0 with an explicit skip message unless
+run outside the sandbox or in CI. CI sets `MH_SAVE_SYNC_REQUIRE_NETWORK_E2E=1`,
+so the same script is a hard failure if the loopback server cannot start.
 
 ## UX correction gates executed on 2026-07-07
 
