@@ -75,9 +75,11 @@ Phase 1 feature branch currently contains:
   `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
-export/import UX, upgrade/rollback benchmark, remote isolated deployment and
+export/import UX, upgrade/rollback benchmark, public Aliyun ingress and
 real-emulator bundle recovery remain open gates in `docs/ROADMAP.md`. Fixture
-no-server bundle recovery is covered by `scripts/offline-bundle-e2e.sh`.
+no-server bundle recovery is covered by `scripts/offline-bundle-e2e.sh`; the
+isolated `mh-save-sync-aliyun` deployment and tunnel-based disaster-recovery
+gate are recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
 
 ## Five-minute local demo
 

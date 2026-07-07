@@ -154,6 +154,71 @@ volume names from `COMPOSE_PROJECT_NAME` (or `MH_SAVE_SYNC_COMPOSE_PROJECT`) so
 isolated remote backup/restore targets only the intended project. The lightweight
 test uses a fake runtime and fails if default project volumes leak back in.
 
+## Aliyun isolated deployment gate executed on 2026-07-07
+
+Scope:
+
+- Host: `8.130.112.207`
+- Compose project: `mh-save-sync-aliyun`
+- Remote app dir: `/home/ecs-user/mh-save-sync-bc6b2de`
+- Secret material: read from the remote env file only; no secret value is
+  recorded here.
+- Boundary: no `nemessix-room` or other Compose project was stopped, removed or
+  reused.
+
+Deployment notes:
+
+- The server container is intentionally isolated under project
+  `mh-save-sync-aliyun`.
+- Remote Docker build initially reused an older server image that returned 404
+  for `/v1/snapshots/{snapshot_id}/encrypted-bundle`. RCA found the remote
+  Compose `server` service had `image:` but no `build:` stanza, so
+  `docker compose build server` was a no-op.
+- The remote executor rebuilt the current server image explicitly from
+  `deploy/compose/server.Dockerfile` using a vendored/offline cargo build path.
+
+Evidence:
+
+```text
+server image: sha256:37c3efd737ddd737238efcb348cb71cd4da6bc992f53a5dad4d3b5d3bbc5ebaa
+containers: mh-save-sync-aliyun-server-1/postgres-1/minio-1 all healthy
+server bind: 127.0.0.1:18082->8080/tcp
+minio bind: 0.0.0.0:19082->9000/tcp, 0.0.0.0:19083->9001/tcp
+ready: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+route validation: /v1/snapshots/nothex/encrypted-bundle returns HTTP 400, proving the current route is present
+```
+
+Remote persistent sync was verified through an SSH tunnel to the isolated
+loopback port:
+
+```json
+{"backend":"postgres-s3","cloud_head":"389bf1e3d21f8884fa19bd87276c3fa0f39d008a8674cf5af6f8d4e81f1e63a4","conflict_count":1,"evidence":"persistent postgres-s3 server-upload/status/server-restore preserved conflict branch and restored byte-identical cloud HEAD","history_count":2,"logical_save_id":"compose-cli-1783423011431965000","restored_snapshot_id":"389bf1e3d21f8884fa19bd87276c3fa0f39d008a8674cf5af6f8d4e81f1e63a4","running_restore_fail_closed":true}
+```
+
+Remote disaster recovery:
+
+```text
+backup: /home/ecs-user/Games/Backups/MHSaveSync/mh-save-sync-aliyun-20260707-191611
+postgres.sql: SHA256SUMS present and verified during restore
+minio-data.tar: SHA256SUMS present and verified during restore
+restore scope: recreated only mh-save-sync-aliyun_postgres-data and mh-save-sync-aliyun_minio-data
+post-restore ready: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+post-restore repository check: dangling_snapshot_objects=0
+post-restore logical save: compose-cli-1783422931281127000 history_count=2 conflict_count=1
+```
+
+Known deployment boundary:
+
+- Direct public `http://8.130.112.207:18082/ready` currently times out from the
+  local network.
+- Remote process-level listeners exist on `127.0.0.1:18082` and
+  `172.16.0.220:18082`, and tunnel-based client verification passes, so the
+  remaining issue is the Aliyun security-group/NAT public ingress for TCP
+  `18082`.
+- No Aliyun API CLI/profile was available locally in this run; opening the
+  public ingress remains an operations follow-up, not a server/data-integrity
+  blocker.
+
 
 ## macOS shell server sync gate executed on 2026-07-07
 
