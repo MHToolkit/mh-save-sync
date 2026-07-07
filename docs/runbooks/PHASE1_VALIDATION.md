@@ -66,6 +66,9 @@ UX correction scope:
 - Shared Rust client exposes Chinese launch-gate/conflict decision records for
   future UniFFI UI wiring and tests cloud-unavailable, remote-newer and conflict
   behavior without last-write-wins.
+- Final pass also fixes the local `scripts/secret-scan.sh` empty-untracked
+  false positive introduced by the runner-migration update, so secret scanning
+  remains fail-closed for real matches without failing on an empty local list.
 
 Artifact hashes from this correction:
 

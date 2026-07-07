@@ -22,7 +22,10 @@ fi
 # checksums before this script runs. GitHub PR safety is enforced by the HEAD, worktree
 # and index scans above; keep untracked-file scanning for local developer use only.
 if [[ "${GITHUB_ACTIONS:-false}" != "true" ]]; then
-  if git ls-files --others --exclude-standard -z | xargs -0 -r grep -nI -E "$pattern"; then
+  untracked_file_list="$(mktemp)"
+  trap 'rm -f "$untracked_file_list"' EXIT
+  git ls-files --others --exclude-standard -z > "$untracked_file_list"
+  if [[ -s "$untracked_file_list" ]] && xargs -0 grep -nI -E "$pattern" < "$untracked_file_list"; then
     echo "potential secret pattern found in untracked files" >&2
     exit 1
   fi
