@@ -14,14 +14,14 @@ class ActiveSessionService : Service() {
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL,
-                "Active emulator session",
+                "Nemessix 存档同步会话",
                 NotificationManager.IMPORTANCE_LOW,
-            )
+            ),
         )
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("MH Save Sync session active")
-            .setContentText("Stable snapshots only; remote restore is locked")
+            .setContentTitle("MH 云存档：Nemessix 会话中")
+            .setContentText("运行中禁止云端覆盖本地；退出后再对账上传稳定快照")
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, notification)

@@ -1,7 +1,7 @@
 # Phase 1 validation evidence ledger
 
 - Status: live evidence ledger, not a stability claim
-- Last updated: 2026-07-05
+- Last updated: 2026-07-07
 - Git commit when captured: this branch state; exact commit reported in PR/final status
 - Secret policy: commands below use external secret files under
   `~/Documents/Secrets`; no recovery phrase, access token, device secret,
@@ -35,6 +35,48 @@ now pass with two reviewed temporary ignores for `quick-xml` advisories
 user-provided XML; the ignore must be removed when object_store releases a
 quick-xml `>=0.41` update.
 
+
+## UX correction gates executed on 2026-07-07
+
+```text
+cargo fmt --all -- --check                                      PASS
+git diff --check                                                PASS
+cargo test --workspace                                          PASS: 22 tests / 14 suites
+cargo clippy --workspace --all-targets -- -D warnings           PASS
+Android assembleDebug lintDebug                                 PASS
+swift build --package-path apps/macos                           PASS
+swift run --package-path apps/macos MHSaveSyncMac --status      PASS
+swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check PASS
+swift run --package-path apps/macos MHSaveSyncMac --conflict-demo PASS
+scripts/secret-scan.sh                                          PASS
+scripts/artifact-checksums.sh Android APK + macOS executable    PASS
+```
+
+UX correction scope:
+
+- Android app label and workbench are Chinese-first for phase1 alpha.
+- Android now shows the server destination, `MH3G / Android Nemessix` target,
+  per-game enable switch, SAF authorization, pre-launch gate, explicit conflict
+  choices, manual upload, download-to-cache-only, active Nemessix session state,
+  and visible background reconcile summaries.
+- Android foreground notification now states that running sessions forbid cloud
+  overwrite and reconcile only after exit.
+- macOS SwiftPM smoke keeps CI-friendly CLI mode and adds `--app` menu-bar shell
+  with status, pre-launch check, conflict and cloud-unavailable actions.
+- Shared Rust client exposes Chinese launch-gate/conflict decision records for
+  future UniFFI UI wiring and tests cloud-unavailable, remote-newer and conflict
+  behavior without last-write-wins.
+
+Artifact hashes from this correction:
+
+```text
+Android debug APK:
+8b3f6783284b95ea2708d041c03b206f66b79387169c69b4a3dd919e7905f906  apps/android/app/build/outputs/apk/debug/app-debug.apk
+
+macOS smoke executable:
+940b2a61329b78b97b8d15cec1b83d6a47fa1a20a2f55ac195156f82a3faac1a  apps/macos/.build/debug/MHSaveSyncMac
+```
+
 ## Artifact hashes
 
 ```text
@@ -46,7 +88,7 @@ CycloneDX SBOM:
 9a0630cd92f510b4c39e232ceb1bf5ccdfc19e595e7495268323c612b3aa2818  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-ccfa6f5b9d842cb2c363c4d2338a5a8777039ba8ad16f04d96c92c4ee860a307  apps/android/app/build/outputs/apk/debug/app-debug.apk
+8b3f6783284b95ea2708d041c03b206f66b79387169c69b4a3dd919e7905f906  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib

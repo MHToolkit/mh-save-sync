@@ -14,7 +14,33 @@ object SyncScheduler {
     const val PREFERENCES = "mh_save_sync"
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"
+    const val SERVER_ENDPOINT = "server_endpoint"
+    const val LAST_SYNC_SUMMARY = "last_sync_summary"
+    const val LAST_SYNC_TARGET = "last_sync_target"
+    const val LAST_SYNC_REASON = "last_sync_reason"
+    const val LAST_SYNC_UNIX_MS = "last_sync_unix_ms"
+    const val LAUNCH_GATE_SUMMARY = "launch_gate_summary"
+    const val GAME_MH3G_ENABLED = "game_mh3g_enabled"
+    const val NEMESSIX_PACKAGE = "io.github.vincentadamnemessisx.nemessix"
     private const val PERIODIC_NAME = "save-reconcile-periodic"
+
+    fun ensureDefaults(context: Context) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (!preferences.contains(LAST_SYNC_TARGET)) {
+            preferences.edit()
+                .putBoolean(GAME_MH3G_ENABLED, true)
+                .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
+                .putString(
+                    LAST_SYNC_SUMMARY,
+                    "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。",
+                )
+                .putString(
+                    LAUNCH_GATE_SUMMARY,
+                    "未检查。启动 MH3G 前点「启动前检查」。",
+                )
+                .apply()
+        }
+    }
 
     fun ensurePeriodic(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)

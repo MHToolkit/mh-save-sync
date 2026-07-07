@@ -15,6 +15,29 @@ backup product until the data-integrity gates in `docs/ROADMAP.md` pass.
 - A restore snapshots the current state before replacing anything.
 - The service never receives recovery secrets or plaintext save contents.
 
+
+## Office Mac ↔ home Android user flow
+
+Phase 1 alpha now uses a Chinese-first sync workbench so the user can see the
+actual target instead of pressing an opaque “sync” button:
+
+1. Run or self-host the server and use the same URL on both devices.
+   - macOS: set `MH_SAVE_SYNC_SERVER_URL`.
+   - Android: enter the server address in the app.
+2. macOS Nemessix before launch: run
+   `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
+   start the menu-bar shell with `--app`. The gate explains remote-newer,
+   conflict and cloud-unavailable choices before the game starts.
+3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
+   keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`.
+4. Conflicts list local vs cloud device/time/parent/size/hash and require an
+   explicit choice: `云端覆盖本地` or `本地替换云端`. Both histories are retained;
+   there is no mtime-based last-write-wins.
+5. If the server is unavailable, continue local play is explicit. Local queues
+   remain intact and upload resumes after the server recovers.
+
+Detailed Chinese UX flows are maintained in `docs/ux/SYNC_USER_FLOWS.md`.
+
 ## Repository map
 
 - `crates/`: shared Rust domain, engine, crypto, adapters, client, server and CLI
