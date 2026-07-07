@@ -174,7 +174,20 @@ python3 scripts/compose-resume-e2e.py prepare artifacts/compose-resume-state.jso
 podman compose --env-file "$HOME/Documents/Secrets/mh-save-sync.env" \
   -f deploy/compose/compose.yaml restart server
 python3 scripts/compose-resume-e2e.py finish artifacts/compose-resume-state.json
+
+# Full persistent backend CLI restore gate. This starts an isolated Compose
+# project on free localhost ports, uploads office/home divergent snapshots,
+# keeps the cloud HEAD unchanged, restores the cloud HEAD byte-for-byte and
+# verifies running-emulator restore fails closed.
+CONTAINER_RUNTIME=podman ./scripts/compose-server-sync-e2e.sh
 ```
+
+`scripts/compose-server-sync-e2e.sh` can also target an already running
+persistent server with `MH_SAVE_SYNC_SERVER_URL=...`. When it starts Compose
+it checks that the selected runtime daemon is actually usable; if Docker CLI is
+installed but the daemon is down, it falls back to Podman instead of failing
+mid-test. The lightweight runtime-selection guard is
+`./scripts/compose-server-sync-e2e-runtime-test.sh`.
 
 Backup and destructive restore:
 

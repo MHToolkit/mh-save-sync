@@ -18,4 +18,5 @@ mkdir -p artifacts/checksums
 ./scripts/offline-bundle-e2e.sh
 ./scripts/server-sync-e2e.sh
 ./scripts/macos-shell-e2e.sh
+./scripts/compose-server-sync-e2e-runtime-test.sh
 ./scripts/secret-scan.sh

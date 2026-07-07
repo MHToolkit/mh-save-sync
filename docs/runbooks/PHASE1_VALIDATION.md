@@ -21,6 +21,8 @@ cargo test -p save-cli --test server_sync_cli                  PASS: 2 tests / 1
 scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
+scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
+scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
@@ -87,11 +89,46 @@ verifies running-emulator restore fails closed. CLI JSON includes `server_url`,
 `sync_target`, `logical_save_id`, `cloud_head_before`, `cloud_head`, `outcome`,
 `conflict_snapshot`, restored `snapshot_id` and Chinese `message_zh`, so manual
 sync is not a black box. It proves memory-backend encrypted object
-download/restore; it does not yet prove real emulator readability or persistent
-PostgreSQL/S3 download/restore. In this Codex managed sandbox, loopback bind is denied,
+download/restore; persistent PostgreSQL/S3 download/restore is covered by the
+next gate. It does not yet prove real emulator readability. In this Codex managed sandbox, loopback bind is denied,
 so `./scripts/server-sync-e2e.sh` exits 0 with an explicit skip message unless
 run outside the sandbox or in CI. CI sets `MH_SAVE_SYNC_REQUIRE_NETWORK_E2E=1`,
 so the same script is a hard failure if the loopback server cannot start.
+
+## Persistent PostgreSQL/S3 CLI restore gate executed on 2026-07-07
+
+Commands:
+
+```bash
+./scripts/compose-server-sync-e2e-runtime-test.sh
+./scripts/compose-server-sync-e2e.sh
+```
+
+Runtime probe output:
+
+```json
+{"runtime_probe_test":true,"docker_daemon_failure_falls_back_to_podman":true,"explicit_unusable_runtime_exits_77":true}
+```
+
+Persistent backend output:
+
+```json
+{"backend":"postgres-s3","cloud_head":"d533c91617fe233babbc9b386a3b24909a2eff168e342c0c59e20b6571db5256","conflict_count":1,"evidence":"persistent postgres-s3 server-upload/status/server-restore preserved conflict branch and restored byte-identical cloud HEAD","history_count":2,"logical_save_id":"compose-cli-1783414673034858000","restored_snapshot_id":"d533c91617fe233babbc9b386a3b24909a2eff168e342c0c59e20b6571db5256","running_restore_fail_closed":true,"server_url":"http://127.0.0.1:62088"}
+```
+
+This starts an isolated Compose project on free localhost ports, creates
+ephemeral secret files under `~/Documents/Secrets`, verifies `/ready` reports
+`backend=postgres-s3`, bootstraps the deterministic public device fixture,
+uploads an office/macOS-style encrypted snapshot, uploads a divergent
+home/Android-style encrypted snapshot, confirms the cloud HEAD is unchanged
+while the divergent snapshot is retained as a conflict branch, downloads and
+restores the cloud HEAD byte-for-byte, and verifies running-emulator restore
+fails closed without creating the target directory.
+
+The heavy persistent gate is manual/local evidence because MHToolkit currently
+has one 2c4g self-hosted runner. CI runs the lightweight runtime-selection test
+so Docker CLI without a daemon falls back to Podman instead of failing in the
+middle of Compose startup.
 
 
 ## macOS shell server sync gate executed on 2026-07-07

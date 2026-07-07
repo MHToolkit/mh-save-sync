@@ -58,6 +58,8 @@ jobs:
         env:
           MH_SAVE_SYNC_REQUIRE_NETWORK_E2E: "1"
         run: ./scripts/server-sync-e2e.sh
+      - name: Verify compose persistent-sync runtime selection
+        run: ./scripts/compose-server-sync-e2e-runtime-test.sh
       - run: cargo run -p save-cli --bin mh-save -- crypto-vector
       - name: Verify deterministic device certificate fixture
         run: |
