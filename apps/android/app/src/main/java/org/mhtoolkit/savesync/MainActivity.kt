@@ -276,6 +276,28 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             if (sessionActive) {
+                                lastSummary = SyncMessages.restoreBlockedRunning()
+                                preferences.edit()
+                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                    .putString(SyncScheduler.LAST_SYNC_REASON, "restore-blocked-running")
+                                    .apply()
+                            } else {
+                                SyncScheduler.enqueueImmediate(this@MainActivity, "restore-cloud-head")
+                                lastSummary = SyncMessages.restoreCloudHeadQueued(serverEndpoint)
+                                preferences.edit()
+                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                    .putString(SyncScheduler.LAST_SYNC_REASON, "restore-cloud-head")
+                                    .apply()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("恢复云端到本地（需停止 Nemessix）")
+                    }
+                    OutlinedButton(
+                        enabled = authorized && gameEnabled,
+                        onClick = {
+                            if (sessionActive) {
                                 stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
                                 lastSummary = "已标记 Nemessix 会话结束：退出后对账已排队。若本地有稳定新快照，会加密上传到服务器。"
                             } else {

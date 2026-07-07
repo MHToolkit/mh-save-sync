@@ -13,6 +13,10 @@ permissions:
   contents: read
 
 jobs:
+  # MHToolkit currently exposes a single 2c4g self-hosted runner for ci-general.
+  # Keep heavy jobs serialized so Rust+Android do not contend for CPU/RAM on the
+  # same limited host; the workflow-level concurrency above still cancels stale
+  # pushes before they consume runner time.
   dependency-review:
     # Private repositories require GitHub Advanced Security for dependency review.
     # Opt in only after GHAS is enabled to avoid a permanently failing PR check.
@@ -98,6 +102,7 @@ jobs:
             artifacts/checksums/rust.sha256
 
   android:
+    needs: rust
     runs-on: [self-hosted, Linux, X64, ci-general]
     timeout-minutes: 60
     steps:
@@ -109,9 +114,9 @@ jobs:
           java -version
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v5
-      - name: Build and lint Android client
+      - name: Build, unit test and lint Android client
         working-directory: apps/android
-        run: ./gradlew assembleDebug lintDebug
+        run: ./gradlew assembleDebug testDebugUnitTest lintDebug
       - name: Generate Android artifact checksums
         run: |
           mkdir -p artifacts/checksums

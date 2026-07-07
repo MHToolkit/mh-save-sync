@@ -29,7 +29,9 @@ actual target instead of pressing an opaque “sync” button:
    start the menu-bar shell with `--app`. The gate explains remote-newer,
    conflict and cloud-unavailable choices before the game starts.
 3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
-   keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`.
+   keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android also
+   shows `恢复云端到本地（需停止 Nemessix）`; if the session is active it fails closed
+   with a visible “没有覆盖本地存档” message.
 4. Conflicts list local vs cloud device/time/parent/size/hash and require an
    explicit choice: `云端覆盖本地` or `本地替换云端`. Both histories are retained;
    there is no mtime-based last-write-wins.
@@ -63,8 +65,11 @@ Phase 1 feature branch currently contains:
   and generated UniFFI Kotlin/Swift bridge evidence.
 - CI supply-chain gates for `cargo deny`, `cargo audit`, dependency review,
   CycloneDX SBOM generation, secret scanning and artifact checksums. The
-  self-hosted-compatible PR path currently runs Rust and Android automatically;
-  macOS and Compose evidence remains recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
+  self-hosted-compatible PR path currently runs Rust and Android automatically.
+  MHToolkit presently exposes one 2c4g `ci-general` runner, so CI cancels stale
+  pushes and serializes heavy Rust → Android jobs instead of contending for the
+  same host; macOS and Compose evidence remains recorded in
+  `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
 export/import UX, upgrade/rollback benchmark, remote isolated deployment and
@@ -133,7 +138,7 @@ system Java:
 
 ```bash
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-  apps/android/gradlew -p apps/android assembleDebug lintDebug
+  apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug
 ```
 
 

@@ -45,15 +45,8 @@ class ReconcileWorker(
         val target = preferences.getString(
             SyncScheduler.LAST_SYNC_TARGET,
             "MH3G / Android Nemessix",
-        )
-        val summary = when (reason) {
-            "manual-upload" -> "已处理手动上传：$target 会经过稳定窗口、staging 复制、manifest/hash 校验后，上传到 ${endpoint.orEmpty().ifBlank { "未配置服务器" }}。"
-            "session-exit" -> "已处理退出后对账：Nemessix 停止后才允许恢复；若有稳定本地快照，会加密排队上传。"
-            "user-use-local" -> "已处理冲突选择：本地版本作为新的当前快照上传；云端旧版本保留为历史/冲突分支。"
-            "download-cache-only" -> "已处理只下载：云端快照只进入本地缓存，不会覆盖正在运行的 Nemessix 存档目录。"
-            "periodic" -> "已执行 15 分钟级兜底对账：无变化不会全量读取；发现 dirty 也必须等稳定快照后再上传。"
-            else -> "已执行对账：原因=$reason；同步目标=$target；不会静默覆盖本地或云端。"
-        }
+        ) ?: "MH3G / Android Nemessix"
+        val summary = SyncMessages.reconcileSummary(reason, target, endpoint)
         // The platform shell records user-visible state. Shared Rust performs the
         // stable-copy/hash/validate/encrypt/upload pipeline once JNI is loaded.
         preferences.edit()

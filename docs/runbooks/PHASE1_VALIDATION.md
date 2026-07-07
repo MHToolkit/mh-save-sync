@@ -11,7 +11,7 @@
 
 ```text
 cargo fmt --all -- --check                                      PASS
-cargo test --workspace                                          PASS: 24 tests / 15 suites
+cargo test --workspace                                          PASS: 26 tests / 16 suites
 cargo clippy --workspace --all-targets -- -D warnings           PASS
 cargo build --workspace --bins                                  PASS
 scripts/supply-chain-gate.sh                                    PASS: cargo-deny + cargo-audit + CycloneDX SBOM
@@ -24,7 +24,7 @@ scripts/macos-shell-e2e.sh                                      PASS: macOS shel
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
-Android assembleDebug lintDebug                                 PASS
+Android assembleDebug testDebugUnitTest lintDebug               PASS
 podman compose up -d --build --wait                             PASS
 scripts/compose-e2e.py                                          PASS
 scripts/compose-resume-e2e.py prepare/restart/finish            PASS
@@ -120,7 +120,7 @@ cargo fmt --all -- --check                                      PASS
 git diff --check                                                PASS
 cargo test --workspace                                          PASS: 22 tests / 14 suites
 cargo clippy --workspace --all-targets -- -D warnings           PASS
-Android assembleDebug lintDebug                                 PASS
+Android assembleDebug testDebugUnitTest lintDebug               PASS
 swift build --package-path apps/macos                           PASS
 swift run --package-path apps/macos MHSaveSyncMac --status      PASS
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check PASS
@@ -134,8 +134,9 @@ UX correction scope:
 - Android app label and workbench are Chinese-first for phase1 alpha.
 - Android now shows the server destination, `MH3G / Android Nemessix` target,
   per-game enable switch, SAF authorization, pre-launch gate, explicit conflict
-  choices, manual upload, download-to-cache-only, active Nemessix session state,
-  and visible background reconcile summaries.
+  choices, manual upload, download-to-cache-only, restore-cloud-to-local with
+  stopped-emulator precondition, active Nemessix session state, and visible
+  background reconcile summaries.
 - Android foreground notification now states that running sessions forbid cloud
   overwrite and reconcile only after exit.
 - macOS SwiftPM smoke keeps CI-friendly CLI mode and adds `--app` menu-bar shell
@@ -151,24 +152,71 @@ Artifact hashes from this correction:
 
 ```text
 Android debug APK:
-8b3f6783284b95ea2708d041c03b206f66b79387169c69b4a3dd919e7905f906  apps/android/app/build/outputs/apk/debug/app-debug.apk
+17e30987f5e91c1f3ced09c83c0c65b6ed6e25802cf36de567c10fb73ef1c0a3  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
-940b2a61329b78b97b8d15cec1b83d6a47fa1a20a2f55ac195156f82a3faac1a  apps/macos/.build/debug/MHSaveSyncMac
+6826a98a19a53198f40537e6079e40fa1be460fb5d33aaf804138d4b0abd74c8  apps/macos/.build/debug/MHSaveSyncMac
 ```
+
+
+## Android restore UX message gate executed on 2026-07-07
+
+Command:
+
+```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+  ./apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug --no-daemon
+```
+
+Evidence:
+
+```text
+SyncMessagesTest.restoreCloudHeadMessageExplainsStoppedPreconditionAndBackup PASS
+SyncMessagesTest.runningRestoreMessageFailsClosedWithoutOverwrite PASS
+```
+
+This proves the Android Chinese workbench exposes a restore-cloud-head action
+with the stopped-Nemessix precondition and backup language, and that running
+restore is visibly refused without overwriting local saves. It is still UI/state
+evidence; real Android SAF byte-for-byte restore against a live Nemessix save
+root remains an open Runtime Verified gate.
+
+## Self-hosted runner throttling check executed on 2026-07-07
+
+Command:
+
+```bash
+gh api orgs/MHToolkit/actions/runners --paginate \
+  --jq '.runners[] | {name,os,status,busy,labels:[.labels[].name]}'
+```
+
+Evidence:
+
+```json
+{"busy":false,"labels":["self-hosted","Linux","X64","ecs","ci-general","linux-x64","cn-hangzhou","2c4g","mhtoolkit"],"name":"ecs-cn-hangzhou-mhtoolkit-01","os":"Linux","status":"online"}
+```
+
+Adopted CI policy:
+
+- keep workflow-level `cancel-in-progress: true` so stale pushes do not consume
+  the self-hosted host;
+- serialize heavyweight jobs by making Android depend on Rust, because the
+  organization currently has one 2c4g `ci-general` runner;
+- avoid high-frequency status watching during development; use single
+  `gh pr checks` / `gh run list` snapshots after pushes and wait between checks.
 
 ## Artifact hashes
 
 ```text
 Rust debug binaries:
-aaef1fb5aa8e9159a8ed85cbdfa34763cab8d79545e39e5644616ccf1d57b259  target/debug/mh-save
-21f8577f8e8c04738ee86cb99116d2f89d2c3b3d5a22e7c9a7b824a67bc418e0  target/debug/mh-save-server
+7345d7b2f1fa0b234816bd89772e8df7688e4724a4f661fc2a6faaeb0d4b2bcf  target/debug/mh-save
+3065dd98b545347d3b3446742642299b3703eb3a45789e8116ae9daedd60d3a8  target/debug/mh-save-server
 
 CycloneDX SBOM:
 9a0630cd92f510b4c39e232ceb1bf5ccdfc19e595e7495268323c612b3aa2818  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-8b3f6783284b95ea2708d041c03b206f66b79387169c69b4a3dd919e7905f906  apps/android/app/build/outputs/apk/debug/app-debug.apk
+17e30987f5e91c1f3ced09c83c0c65b6ed6e25802cf36de567c10fb73ef1c0a3  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib
@@ -256,6 +304,7 @@ Open Phase 1D gates:
 - Android Azahar or Citra MMJ modification producing a macOS conflict branch;
 - exported `.mhsavebundle` restore in a no-server environment;
 - isolated remote deployment and recovery, without touching `nemessix-room`;
-- PR CI green on GitHub after the expanded supply-chain, Android and Compose
-  jobs can start; the current GitHub account billing/spending-limit failure
-  prevents runner execution.
+- PR CI green on GitHub after each new feature commit. As of 2026-07-07 the
+  MHToolkit self-hosted runner is online but limited to one 2c4g host, so the
+  workflow intentionally serializes heavy Rust and Android gates and status
+  checks must remain low-frequency.
