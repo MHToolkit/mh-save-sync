@@ -20,7 +20,7 @@ class ActiveSessionService : Service() {
         )
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("MH 云存档：Nemessix 会话中")
+            .setContentTitle("MH 云存档：游戏运行保护中")
             .setContentText("运行中禁止云端覆盖本地；退出后再对账上传稳定快照")
             .setOngoing(true)
             .build()

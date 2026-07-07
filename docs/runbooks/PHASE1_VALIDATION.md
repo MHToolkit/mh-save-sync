@@ -179,10 +179,11 @@ not a signed `.app` installer or LaunchAgent deployment.
 ```text
 cargo fmt --all -- --check                                      PASS
 git diff --check                                                PASS
-cargo test --workspace                                          PASS: 22 tests / 14 suites
+cargo test --workspace                                          PASS: 26 tests / 16 suites
 cargo clippy --workspace --all-targets -- -D warnings           PASS
 Android assembleDebug testDebugUnitTest lintDebug               PASS
 swift build --package-path apps/macos                           PASS
+scripts/build-macos-app-bundle.sh                               PASS: generated local double-clickable .app bundle
 swift run --package-path apps/macos MHSaveSyncMac --status      PASS
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check PASS
 swift run --package-path apps/macos MHSaveSyncMac --conflict-demo PASS
@@ -193,15 +194,27 @@ scripts/artifact-checksums.sh Android APK + macOS executable    PASS
 UX correction scope:
 
 - Android app label and workbench are Chinese-first for phase1 alpha.
-- Android now shows the server destination, `MH3G / Android Nemessix` target,
-  per-game enable switch, SAF authorization, pre-launch gate, explicit conflict
-  choices, manual upload, download-to-cache-only, restore-cloud-to-local with
-  stopped-emulator precondition, active Nemessix session state, and visible
-  background reconcile summaries.
-- Android foreground notification now states that running sessions forbid cloud
-  overwrite and reconcile only after exit.
-- macOS SwiftPM smoke keeps CI-friendly CLI mode and adds `--app` menu-bar shell
-  with status, pre-launch check, conflict and cloud-unavailable actions.
+- Android now shows the server destination and full route
+  `MH3G / Android Nemessix -> local staging/CAS -> server`, per-game enable
+  switch, SAF authorization, explicit conflict choices, manual upload,
+  download-to-cache-only, restore-cloud-to-local with stopped-emulator
+  precondition, active game-protection state and visible background reconcile
+  summaries.
+- Android pre-launch check now probes the configured server `/ready` and the
+  MH3G Nemessix logical-save HEAD
+  `243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2`.
+  Cloud-unavailable, no-server, no-remote-head and remote-head states are
+  visible before launch; package visibility for Nemessix is declared so
+  `检查后打开 Nemessix` can fail with an explicit message instead of looking
+  broken.
+- Android foreground notification now states that running sessions are game
+  protection sessions: they forbid cloud overwrite and reconcile only after
+  exit.
+- macOS SwiftPM smoke keeps CI-friendly CLI mode, adds `--app` menu-bar shell
+  with status, pre-launch check, conflict and cloud-unavailable actions, and
+  `scripts/build-macos-app-bundle.sh` builds a local
+  `artifacts/macos/MH Save Sync.app` with `LSUIElement` menu-bar behavior for
+  double-click testing.
 - Shared Rust client exposes Chinese launch-gate/conflict decision records for
   future UniFFI UI wiring and tests cloud-unavailable, remote-newer and conflict
   behavior without last-write-wins.
@@ -213,10 +226,13 @@ Artifact hashes from this correction:
 
 ```text
 Android debug APK:
-17e30987f5e91c1f3ced09c83c0c65b6ed6e25802cf36de567c10fb73ef1c0a3  apps/android/app/build/outputs/apk/debug/app-debug.apk
+40228506f23b831127efcbeeb520b880a6a3dfd6ff45c9de7faaef88c0114b87  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
-6826a98a19a53198f40537e6079e40fa1be460fb5d33aaf804138d4b0abd74c8  apps/macos/.build/debug/MHSaveSyncMac
+e1a68fa699680ce637b4bcb8ea1677ed96604337fd941be0bfb53e5a7eb98228  apps/macos/.build/debug/MHSaveSyncMac
+
+macOS local app executable:
+e1a68fa699680ce637b4bcb8ea1677ed96604337fd941be0bfb53e5a7eb98228  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
 ```
 
 
@@ -234,6 +250,10 @@ Evidence:
 ```text
 SyncMessagesTest.restoreCloudHeadMessageExplainsStoppedPreconditionAndBackup PASS
 SyncMessagesTest.runningRestoreMessageFailsClosedWithoutOverwrite PASS
+SyncMessagesTest.syncRouteExplainsServerAndLocalCas PASS
+SyncMessagesTest.cloudActionWithoutServerExplainsWhyNothingUploaded PASS
+SyncMessagesTest.cloudUnavailableLaunchPauseRequiresExplicitLocalChoice PASS
+SyncMessagesTest.prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer PASS
 ```
 
 This proves the Android Chinese workbench exposes a restore-cloud-head action
@@ -274,10 +294,10 @@ Rust debug binaries:
 3065dd98b545347d3b3446742642299b3703eb3a45789e8116ae9daedd60d3a8  target/debug/mh-save-server
 
 CycloneDX SBOM:
-9a0630cd92f510b4c39e232ceb1bf5ccdfc19e595e7495268323c612b3aa2818  artifacts/sbom/mh-save-sync.cdx.json
+01b91bef41441df28da53f9245442c9d656aca377a394928ae511a1efbc89698  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-17e30987f5e91c1f3ced09c83c0c65b6ed6e25802cf36de567c10fb73ef1c0a3  apps/android/app/build/outputs/apk/debug/app-debug.apk
+40228506f23b831127efcbeeb520b880a6a3dfd6ff45c9de7faaef88c0114b87  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib

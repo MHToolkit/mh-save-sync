@@ -18,6 +18,15 @@ mkdir -p artifacts/checksums
 ./scripts/offline-bundle-e2e.sh
 ./scripts/server-sync-e2e.sh
 ./scripts/macos-shell-e2e.sh
+./scripts/build-macos-app-bundle.sh
+if [[ -z "${JAVA_HOME:-}" && -x "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java" ]]; then
+  export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+fi
+if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+  ./apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug --no-daemon
+else
+  echo "JAVA_HOME not set and Android Studio JBR not found; Android local gate skipped" >&2
+fi
 ./scripts/compose-server-sync-e2e-runtime-test.sh
 ./scripts/compose-project-volume-test.sh
 ./scripts/secret-scan.sh

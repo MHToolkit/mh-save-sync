@@ -26,12 +26,15 @@ actual target instead of pressing an opaque “sync” button:
    - Android: enter the server address in the app.
 2. macOS Nemessix before launch: run
    `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
-   start the menu-bar shell with `--app`. The gate explains remote-newer,
-   conflict and cloud-unavailable choices before the game starts.
+   start the menu-bar shell with `--app`. For a double-clickable local app,
+   run `./scripts/build-macos-app-bundle.sh` and open
+   `artifacts/macos/MH Save Sync.app`. The gate explains remote-newer, conflict
+   and cloud-unavailable choices before the game starts.
 3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
    keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android also
-   shows `恢复云端到本地（需停止 Nemessix）`; if the session is active it fails closed
-   with a visible “没有覆盖本地存档” message.
+   probes the configured server `/ready` plus the MH3G cloud HEAD, shows
+   `恢复云端到本地（需停止 Nemessix）`, and refuses running restores with a visible
+   “没有覆盖本地存档” message.
 4. Conflicts list local vs cloud device/time/parent/size/hash and require an
    explicit choice: `云端覆盖本地` or `本地替换云端`. Both histories are retained;
    there is no mtime-based last-write-wins.
@@ -87,6 +90,7 @@ cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-s
 ./scripts/offline-bundle-e2e.sh
 ./scripts/supply-chain-gate.sh
 swift run --package-path apps/macos MHSaveSyncMac
+./scripts/build-macos-app-bundle.sh
 ./scripts/macos-shell-e2e.sh
 ```
 

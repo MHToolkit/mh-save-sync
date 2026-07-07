@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <queries>
+        <package android:name="io.github.vincentadamnemessisx.nemessix" />
+    </queries>
+
     <application android:theme="@style/AppTheme" android:label="MH 云存档">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

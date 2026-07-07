@@ -32,7 +32,7 @@
 4. Android 打开 App：
    - 填同一个服务器地址。
    - 授权 Android Nemessix SAF 存档目录。
-   - 点击“启动前检查”。云端较新时下载到缓存；点“恢复云端到本地（需停止 Nemessix）”后，确认 Nemessix 已停止、先备份当前本地存档再恢复。运行中会 fail closed 并提示没有覆盖本地存档。
+   - 点击“启动前检查”。Android 会先请求服务器 `/ready`，再查询 MH3G 逻辑存档云端 HEAD；云端不可用时明确可继续本地，云端有 HEAD 时先下载到缓存；点“恢复云端到本地（需停止 Nemessix）”后，确认 Nemessix 已停止、先备份当前本地存档再恢复。运行中会 fail closed 并提示没有覆盖本地存档。
 
 ## 回家 Android → 办公室 Mac
 
@@ -61,7 +61,7 @@
 
 ## 当前 Alpha 边界
 
-- Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、启动前检查、冲突选择、会话开始/结束、恢复云端到本地（需停止 Nemessix）与后台策略。
-- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名 `.app`、LaunchAgent 和 Finder 安装包仍是后续交付项。
+- Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、真实 `/ready` + MH3G HEAD 启动前探测、冲突选择、游戏运行保护、恢复云端到本地（需停止 Nemessix）与后台策略。
+- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳与 `./scripts/build-macos-app-bundle.sh` 生成的本地双击 `.app`；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名、LaunchAgent 和 Finder 安装包仍是后续交付项。
 - CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。

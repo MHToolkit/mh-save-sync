@@ -262,7 +262,9 @@ func runMenuBarApp() {
 
 let args = Array(CommandLine.arguments.dropFirst())
 do {
-    if args.contains("--app") {
+    let launchedFromAppBundle =
+        args.isEmpty && Bundle.main.bundlePath.hasSuffix(".app")
+    if args.contains("--app") || launchedFromAppBundle {
         runMenuBarApp()
     } else if args.contains("--server-upload") {
         try printServerUpload(args, context: context)
@@ -277,7 +279,7 @@ do {
     } else if args.contains("--cloud-unavailable") {
         printCloudUnavailable()
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]")
+        print("用法：MHSaveSyncMac [--status] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n双击 artifacts/macos/MH Save Sync.app 会自动进入菜单栏模式。")
     } else {
         printStatus(context)
     }
