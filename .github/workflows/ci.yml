@@ -5,6 +5,10 @@ on:
   push:
     branches: [main, feat/phase1-save-sync]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
