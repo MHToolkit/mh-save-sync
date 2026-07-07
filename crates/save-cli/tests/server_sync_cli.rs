@@ -22,6 +22,9 @@ async fn spawn_memory_server() -> Option<(String, JoinHandle<()>)> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            if std::env::var("MH_SAVE_SYNC_REQUIRE_NETWORK_E2E").as_deref() == Ok("1") {
+                panic!("loopback bind is required for this test: {error}");
+            }
             eprintln!(
                 "skipping live server CLI test because this sandbox denies loopback bind: {error}"
             );
@@ -136,6 +139,43 @@ async fn cli_uploads_snapshot_to_server_and_prints_visible_sync_target() {
         "status must be understandable in Chinese: {status_json}",
     );
 
+    let restored = tmp.path().join("restored-fast-forward");
+    let restore = run_mh_save(&[
+        "server-restore".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--secret-hex".into(),
+        "3333333333333333333333333333333333333333333333333333333333333333".into(),
+        "--target".into(),
+        restored.to_string_lossy().into_owned(),
+        "--emulator-state".into(),
+        "stopped".into(),
+    ])
+    .await;
+    assert!(
+        restore.status.success(),
+        "server restore failed: status={:?}
+stdout={}
+stderr={}",
+        restore.status.code(),
+        String::from_utf8_lossy(&restore.stdout),
+        String::from_utf8_lossy(&restore.stderr),
+    );
+    let restore_json: Value = serde_json::from_slice(&restore.stdout).unwrap();
+    assert_eq!(restore_json["server_url"], server_url);
+    assert_eq!(restore_json["snapshot_id"], second_json["snapshot_id"]);
+    assert!(
+        restore_json["message_zh"]
+            .as_str()
+            .unwrap()
+            .contains("已从服务器下载并恢复"),
+        "restore UX must be Chinese and explicit: {restore_json}",
+    );
+    assert_eq!(
+        fs::read(restored.join("slot1/main.bin")).unwrap(),
+        b"server-visible-save-v2",
+    );
+
     handle.abort();
 }
 
@@ -212,6 +252,58 @@ async fn cli_preserves_cloud_head_and_reports_conflict_branch() {
     assert_eq!(status_json["cloud_head"], office_json["snapshot_id"]);
     assert_eq!(status_json["history_count"], 2);
     assert_eq!(status_json["conflict_count"], 1);
+
+    let restored = tmp.path().join("restored-conflict-head");
+    let restore = run_mh_save(&[
+        "server-restore".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--secret-hex".into(),
+        "4444444444444444444444444444444444444444444444444444444444444444".into(),
+        "--target".into(),
+        restored.to_string_lossy().into_owned(),
+        "--emulator-state".into(),
+        "stopped".into(),
+    ])
+    .await;
+    assert!(
+        restore.status.success(),
+        "restore must download cloud HEAD, not conflict branch: status={:?}
+stdout={}
+stderr={}",
+        restore.status.code(),
+        String::from_utf8_lossy(&restore.stdout),
+        String::from_utf8_lossy(&restore.stderr),
+    );
+    let restore_json: Value = serde_json::from_slice(&restore.stdout).unwrap();
+    assert_eq!(restore_json["snapshot_id"], office_json["snapshot_id"]);
+    assert_eq!(fs::read(restored.join("save.bin")).unwrap(), b"office");
+
+    let blocked = run_mh_save(&[
+        "server-restore".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--secret-hex".into(),
+        "4444444444444444444444444444444444444444444444444444444444444444".into(),
+        "--target".into(),
+        tmp.path()
+            .join("blocked-running")
+            .to_string_lossy()
+            .into_owned(),
+        "--emulator-state".into(),
+        "running".into(),
+    ])
+    .await;
+    assert!(
+        !blocked.status.success(),
+        "running restore must fail closed"
+    );
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr)
+            .contains("restore refused while emulator is running"),
+        "stderr should explain restore precondition: {}",
+        String::from_utf8_lossy(&blocked.stderr),
+    );
 
     handle.abort();
 }

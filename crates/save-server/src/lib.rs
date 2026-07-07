@@ -38,11 +38,12 @@ impl Default for AppState {
 
 #[derive(Default)]
 struct InMemoryState {
-    chunks: BTreeMap<String, String>,
-    manifests: BTreeSet<String>,
+    chunks: BTreeMap<String, Vec<u8>>,
+    manifests: BTreeMap<String, Vec<u8>>,
     uploads: BTreeMap<Uuid, UploadSession>,
     heads: BTreeMap<String, SnapshotId>,
     snapshots: BTreeMap<String, SnapshotRow>,
+    snapshot_chunks: BTreeMap<String, Vec<String>>,
     accounts: BTreeMap<String, Vec<u8>>,
     devices: BTreeMap<String, bool>,
 }
@@ -71,6 +72,20 @@ pub struct SnapshotRow {
     pub parents: Vec<SnapshotId>,
     pub manifest_id: String,
     pub conflict: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotObjectResponse {
+    pub object_id: String,
+    pub sha256: String,
+    pub bytes_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotDownloadResponse {
+    pub snapshot_id: SnapshotId,
+    pub encrypted_manifest: SnapshotObjectResponse,
+    pub chunks: Vec<SnapshotObjectResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,7 +254,7 @@ impl AppState {
             Backend::Memory(inner) => {
                 let guard = inner.lock().unwrap();
                 for row in guard.snapshots.values() {
-                    if !guard.manifests.contains(&row.manifest_id) {
+                    if !guard.manifests.contains_key(&row.manifest_id) {
                         return Err(BackendError::Unavailable("missing-manifest".into()));
                     }
                 }
@@ -282,6 +297,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/snapshots/{upload_id}/chunks", post(put_chunk))
         .route("/v1/snapshots/{upload_id}/manifest", post(put_manifest))
         .route("/v1/snapshots/{upload_id}/commit", post(commit_snapshot))
+        .route(
+            "/v1/snapshots/{snapshot_id}/encrypted-bundle",
+            get(get_encrypted_bundle),
+        )
         .route("/v1/heads/{logical_save_id}", get(get_head))
         .route("/v1/history/{logical_save_id}", get(get_history))
         .route("/v1/conflicts/{logical_save_id}", get(get_conflicts))
@@ -559,12 +578,25 @@ async fn put_chunk(
     match &state.backend {
         Backend::Memory(inner) => {
             let mut guard = inner.lock().unwrap();
-            let session = guard
+            let upload_exists = guard.uploads.contains_key(&upload_id);
+            if !upload_exists {
+                return Err(BackendError::NotFound("upload".into()).api());
+            }
+            if let Some(existing) = guard.chunks.get(&req.chunk_id)
+                && sha256_hex(existing) != req.sha256.to_lowercase()
+            {
+                return Err(BackendError::Conflict(
+                    "object id reused with different checksum".into(),
+                )
+                .api());
+            }
+            guard.chunks.entry(req.chunk_id.clone()).or_insert(bytes);
+            guard
                 .uploads
                 .get_mut(&upload_id)
-                .ok_or_else(|| BackendError::NotFound("upload".into()).api())?;
-            session.uploaded_chunks.insert(req.chunk_id.clone());
-            guard.chunks.insert(req.chunk_id, req.sha256);
+                .unwrap()
+                .uploaded_chunks
+                .insert(req.chunk_id);
         }
         Backend::Persistent(p) => {
             let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, required_chunks FROM upload_sessions WHERE id=$1 AND expires_at>now()")
@@ -601,7 +633,15 @@ async fn put_manifest(
             if session.manifest_id.as_deref() != Some(&req.manifest_id) {
                 return Err(BackendError::Invalid("manifest id mismatch".into()).api());
             }
-            guard.manifests.insert(req.manifest_id);
+            if let Some(existing) = guard.manifests.get(&req.manifest_id)
+                && sha256_hex(existing) != req.sha256.to_lowercase()
+            {
+                return Err(BackendError::Conflict(
+                    "manifest id reused with different checksum".into(),
+                )
+                .api());
+            }
+            guard.manifests.entry(req.manifest_id).or_insert(bytes);
         }
         Backend::Persistent(p) => {
             let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, manifest_id FROM upload_sessions WHERE id=$1 AND expires_at>now()")
@@ -662,7 +702,7 @@ fn commit_memory(
     let manifest_id = session
         .manifest_id
         .ok_or_else(|| BackendError::Conflict("missing manifest".into()))?;
-    if !guard.manifests.contains(&manifest_id) {
+    if !guard.manifests.contains_key(&manifest_id) {
         return Err(BackendError::Conflict("manifest not durable".into()));
     }
     let current = guard.heads.get(&session.logical_save_id).cloned();
@@ -676,6 +716,10 @@ fn commit_memory(
             manifest_id,
             conflict,
         },
+    );
+    guard.snapshot_chunks.insert(
+        req.snapshot_id.0.clone(),
+        session.required_chunks.iter().cloned().collect(),
     );
     if !conflict {
         guard
@@ -762,6 +806,78 @@ async fn commit_persistent(
         head,
         conflict_snapshot: conflict.then_some(req.snapshot_id),
     })
+}
+
+async fn get_encrypted_bundle(
+    State(state): State<AppState>,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<SnapshotDownloadResponse>, ApiError> {
+    validate_object_id(&snapshot_id)?;
+    match &state.backend {
+        Backend::Memory(inner) => {
+            let guard = inner.lock().unwrap();
+            let row = guard
+                .snapshots
+                .get(&snapshot_id)
+                .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
+            let manifest_bytes = guard
+                .manifests
+                .get(&row.manifest_id)
+                .ok_or_else(|| BackendError::Unavailable("missing manifest object".into()).api())?;
+            let mut chunks = Vec::new();
+            for chunk_id in guard
+                .snapshot_chunks
+                .get(&snapshot_id)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let bytes = guard.chunks.get(&chunk_id).ok_or_else(|| {
+                    BackendError::Unavailable(format!("missing chunk {chunk_id}")).api()
+                })?;
+                chunks.push(object_response(&chunk_id, bytes));
+            }
+            Ok(Json(SnapshotDownloadResponse {
+                snapshot_id: row.snapshot_id.clone(),
+                encrypted_manifest: object_response(&row.manifest_id, manifest_bytes),
+                chunks,
+            }))
+        }
+        Backend::Persistent(p) => {
+            let manifest_id: String =
+                sqlx::query_scalar("SELECT encrypted_manifest_object FROM snapshots WHERE id=$1")
+                    .bind(&snapshot_id)
+                    .fetch_optional(&p.pool)
+                    .await
+                    .map_err(db_unavailable)
+                    .map_err(BackendError::api)?
+                    .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
+            let manifest =
+                persistent_get_snapshot_object(p, &snapshot_id, &manifest_id, "manifest")
+                    .await
+                    .map_err(BackendError::api)?;
+            let chunk_ids: Vec<String> = sqlx::query_scalar(
+                "SELECT so.object_id FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.snapshot_id=$1 AND o.object_kind='chunk' ORDER BY so.object_id",
+            )
+            .bind(&snapshot_id)
+            .fetch_all(&p.pool)
+            .await
+            .map_err(db_unavailable)
+            .map_err(BackendError::api)?;
+            let mut chunks = Vec::new();
+            for chunk_id in chunk_ids {
+                chunks.push(
+                    persistent_get_snapshot_object(p, &snapshot_id, &chunk_id, "chunk")
+                        .await
+                        .map_err(BackendError::api)?,
+                );
+            }
+            Ok(Json(SnapshotDownloadResponse {
+                snapshot_id: SnapshotId(snapshot_id),
+                encrypted_manifest: manifest,
+                chunks,
+            }))
+        }
+    }
 }
 
 async fn get_head(
@@ -922,6 +1038,54 @@ async fn persistent_put_object(
         );
     }
     Ok(())
+}
+
+async fn persistent_get_snapshot_object(
+    p: &PersistentState,
+    snapshot_id: &str,
+    object_id: &str,
+    kind: &str,
+) -> Result<SnapshotObjectResponse, BackendError> {
+    let row = sqlx::query(
+        "SELECT o.storage_key,o.checksum_sha256 FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.snapshot_id=$1 AND so.object_id=$2 AND o.object_kind=$3",
+    )
+    .bind(snapshot_id)
+    .bind(object_id)
+    .bind(kind)
+    .fetch_optional(&p.pool)
+    .await
+    .map_err(db_unavailable)?
+    .ok_or_else(|| BackendError::NotFound(format!("{kind} object")))?;
+    let key: String = row.get("storage_key");
+    let expected_sha: String = row.get("checksum_sha256");
+    let bytes = p
+        .object_store
+        .get(&ObjectPath::from(key.as_str()))
+        .await
+        .map_err(object_store_unavailable)?
+        .bytes()
+        .await
+        .map_err(object_store_unavailable)?
+        .to_vec();
+    let actual = sha256_hex(&bytes);
+    if actual != expected_sha {
+        return Err(BackendError::Unavailable(format!(
+            "object checksum mismatch:{object_id}"
+        )));
+    }
+    Ok(object_response(object_id, &bytes))
+}
+
+fn object_response(object_id: &str, bytes: &[u8]) -> SnapshotObjectResponse {
+    SnapshotObjectResponse {
+        object_id: object_id.into(),
+        sha256: sha256_hex(bytes),
+        bytes_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn database_url_from_env() -> anyhow::Result<String> {

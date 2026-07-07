@@ -39,13 +39,16 @@ trap 'status=$?; if [[ -n "${server_pid:-}" ]]; then kill "$server_pid" >/dev/nu
 MH_SAVE_SYNC_BIND="127.0.0.1:${port}" cargo run -q -p save-server --bin mh-save-server >"$log" 2>&1 &
 server_pid="$!"
 
-for _ in $(seq 1 40); do
+for _ in $(seq 1 120); do
   if curl -fsS "${server_url}/ready" >/dev/null 2>&1; then
+    ready=1
     break
   fi
-  sleep 0.25
+  sleep 0.5
 done
-curl -fsS "${server_url}/ready" >/dev/null
+if [[ "${ready:-0}" != "1" ]]; then
+  curl -fsS "${server_url}/ready" >/dev/null
+fi
 
 source_dir="${tmp}/source"
 mkdir -p "${source_dir}/slot1"
@@ -83,12 +86,34 @@ cargo run -q -p save-cli --bin mh-save -- server-status \
   --secret-hex "$secret_hex" \
   > "${tmp}/status.json"
 
-python3 - "${tmp}/office.json" "${tmp}/conflict.json" "${tmp}/status.json" <<'PY'
+restore_dir="${tmp}/restored-head"
+cargo run -q -p save-cli --bin mh-save -- server-restore \
+  --server-url "$server_url" \
+  --secret-hex "$secret_hex" \
+  --target "$restore_dir" \
+  --emulator-state stopped \
+  > "${tmp}/restore.json"
+
+if cargo run -q -p save-cli --bin mh-save -- server-restore \
+  --server-url "$server_url" \
+  --secret-hex "$secret_hex" \
+  --target "${tmp}/blocked-running" \
+  --emulator-state running \
+  > "${tmp}/blocked.json" 2> "${tmp}/blocked.err"; then
+  echo "running server restore unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "restore refused while emulator is running" "${tmp}/blocked.err"
+
+python3 - "${tmp}/office.json" "${tmp}/conflict.json" "${tmp}/status.json" "${tmp}/restore.json" "$restore_dir" <<'PY'
 import json
+import pathlib
 import sys
 office = json.load(open(sys.argv[1], encoding="utf-8"))
 conflict = json.load(open(sys.argv[2], encoding="utf-8"))
 status = json.load(open(sys.argv[3], encoding="utf-8"))
+restore = json.load(open(sys.argv[4], encoding="utf-8"))
+restore_dir = pathlib.Path(sys.argv[5])
 assert conflict["outcome"] == "conflict", conflict
 assert conflict["cloud_head"] == office["snapshot_id"], conflict
 assert conflict["conflict_snapshot"] == conflict["snapshot_id"], conflict
@@ -97,11 +122,16 @@ assert status["cloud_head"] == office["snapshot_id"], status
 assert status["history_count"] == 2, status
 assert status["conflict_count"] == 1, status
 assert "云端当前 HEAD" in status["message_zh"], status
+assert restore["snapshot_id"] == office["snapshot_id"], restore
+assert "已从服务器下载并恢复" in restore["message_zh"], restore
+assert (restore_dir / "slot1" / "main.bin").read_bytes() == b"office-mac-save-v1"
 print(json.dumps({
     "server_url": status["server_url"],
     "cloud_head": status["cloud_head"],
     "history_count": status["history_count"],
     "conflict_count": status["conflict_count"],
-    "evidence": "server sync e2e preserved conflict branch without overwriting cloud head"
+    "restored_snapshot_id": restore["snapshot_id"],
+    "running_restore_fail_closed": True,
+    "evidence": "server sync e2e preserved conflict branch and restored cloud head"
 }, ensure_ascii=False))
 PY

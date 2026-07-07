@@ -11,7 +11,7 @@
 3. **watcher 不是上传器**：FSEvents/FileObserver/SAF reconciliation 只标记 dirty；候选必须经过 debounce、稳定指纹、只读 staging copy、manifest/hash 和 adapter consistency validation。
 4. **运行中不恢复**：模拟器运行时禁止把远端内容覆盖到原存档目录。下载只进入 local CAS；恢复必须等模拟器停止，并先快照当前本地状态。
 5. **冲突是分支，不是 latest-wins**：本地/云端两边都从同一 parent 分叉时，列出 device、时间、parent、size/hash，让用户选择“本地替换云端”“云端覆盖本地”或暂不处理；未选择前不推进 HEAD。
-6. **手动同步必须可解释**：CLI/桌面/Android 同步动作都要显示 `server_url`、`sync_target`、`logical_save_id`、上传设备、云端旧 HEAD、新 HEAD、`outcome` 与 `conflict_snapshot`；只显示“同步成功”不算合格。
+6. **手动同步必须可解释**：CLI/桌面/Android 同步动作都要显示 `server_url`、`sync_target`、`logical_save_id`、上传设备、云端旧 HEAD、新 HEAD、`outcome` 与 `conflict_snapshot`；恢复动作还要显示下载的 `snapshot_id`、备份位置和恢复前置条件。只显示“同步成功”不算合格。
 
 ## 办公室 Mac → 回家 Android
 
@@ -63,5 +63,5 @@
 
 - Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、启动前检查、冲突选择、会话开始/结束与后台策略。
 - macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳；正式签名 `.app`、LaunchAgent 和 Finder 安装包仍是后续交付项。
-- CLI 已增加 `server-upload` / `server-status`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD 的可复现证据。
+- CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。

@@ -2,16 +2,19 @@ use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
 use save_crypto::{
-    account_handle, account_root_signing_key, derive_account_keys, deterministic_cbor,
-    issue_device_certificate_with_id, recovery_phrase_from_secret,
+    EncryptedBlob, account_handle, account_root_signing_key, derive_account_keys,
+    deterministic_cbor, issue_device_certificate_with_id, recovery_phrase_from_secret,
 };
-use save_domain::{DeviceId, GameKey, LogicalSaveId, SnapshotId, stable_logical_save_id};
+use save_domain::{
+    DeviceId, FileKind, GameKey, LogicalSaveId, SnapshotId, TreeFingerprint, stable_logical_save_id,
+};
 use save_engine::{
     EmulatorState, EncryptedSnapshot, SnapshotOptions, create_snapshot_from_stable_folder,
     decrypt_manifest, export_encrypted_bundle, import_encrypted_bundle, restore_snapshot_to_folder,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -72,6 +75,20 @@ enum Commands {
         secret_hex: String,
         #[arg(long)]
         logical_save_id: Option<String>,
+    },
+    ServerRestore {
+        #[arg(long, env = "MH_SAVE_SYNC_SERVER_URL")]
+        server_url: String,
+        #[arg(long)]
+        secret_hex: String,
+        #[arg(long)]
+        logical_save_id: Option<String>,
+        #[arg(long)]
+        snapshot_id: Option<String>,
+        #[arg(long)]
+        target: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliEmulatorState::Stopped)]
+        emulator_state: CliEmulatorState,
     },
 }
 
@@ -245,6 +262,25 @@ async fn main() -> anyhow::Result<()> {
             let report = server_status(server_url, secret_hex, logical_save_id).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Commands::ServerRestore {
+            server_url,
+            secret_hex,
+            logical_save_id,
+            snapshot_id,
+            target,
+            emulator_state,
+        } => {
+            let report = server_restore(
+                server_url,
+                secret_hex,
+                logical_save_id,
+                snapshot_id,
+                target,
+                emulator_state,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
     Ok(())
 }
@@ -290,6 +326,20 @@ struct ServerStatusReport {
     cloud_head: Option<SnapshotId>,
     history_count: usize,
     conflict_count: usize,
+    message_zh: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerRestoreReport {
+    server_url: String,
+    sync_target: String,
+    account_handle: String,
+    logical_save_id: String,
+    snapshot_id: SnapshotId,
+    restored: PathBuf,
+    backup: PathBuf,
+    file_count: u64,
+    total_bytes: u64,
     message_zh: String,
 }
 
@@ -340,6 +390,20 @@ struct CommitSnapshotResponse {
 struct SnapshotRowResponse {
     #[allow(dead_code)]
     snapshot_id: SnapshotId,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotObjectDownload {
+    object_id: String,
+    sha256: String,
+    bytes_b64: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotDownloadResponse {
+    snapshot_id: SnapshotId,
+    encrypted_manifest: SnapshotObjectDownload,
+    chunks: Vec<SnapshotObjectDownload>,
 }
 
 async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadReport> {
@@ -489,6 +553,96 @@ async fn server_status(
     })
 }
 
+async fn server_restore(
+    server_url: String,
+    secret_hex: String,
+    logical_save_id: Option<String>,
+    snapshot_id: Option<String>,
+    target: PathBuf,
+    emulator_state: CliEmulatorState,
+) -> anyhow::Result<ServerRestoreReport> {
+    let server_url = normalize_server_url(&server_url);
+    let secret = secret_from_hex(&secret_hex)?;
+    let keys = derive_account_keys(&secret)?;
+    let computed_account_handle = account_handle(&keys);
+    let descriptor = save_adapters::generic_folder_macos();
+    let game_key = GameKey::new("generic", "fixture", "none", "slot1");
+    let logical_save_id = logical_save_id
+        .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
+    let client = reqwest::Client::new();
+    let snapshot_id = match snapshot_id {
+        Some(id) => SnapshotId(id),
+        None => get_head(&client, &server_url, &logical_save_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("cloud head not found for {logical_save_id}"))?,
+    };
+    let bundle = get_json::<SnapshotDownloadResponse>(
+        &client,
+        &format!(
+            "{server_url}/v1/snapshots/{}/encrypted-bundle",
+            snapshot_id.0
+        ),
+    )
+    .await?;
+    anyhow::ensure!(
+        bundle.snapshot_id == snapshot_id,
+        "server returned different snapshot id"
+    );
+    let encrypted_manifest = decode_downloaded_blob(&bundle.encrypted_manifest)?;
+    let mut chunks = BTreeMap::new();
+    for chunk in &bundle.chunks {
+        chunks.insert(chunk.object_id.clone(), decode_downloaded_blob(chunk)?);
+    }
+    let mut snapshot = EncryptedSnapshot {
+        snapshot_id: bundle.snapshot_id,
+        encrypted_manifest,
+        chunks,
+        fingerprint: TreeFingerprint {
+            file_count: 0,
+            total_bytes: 0,
+            sha256: "downloaded-before-decrypt".into(),
+        },
+    };
+    let manifest = decrypt_manifest(&secret, &snapshot)?;
+    let file_count = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind != FileKind::Tombstone)
+        .count() as u64;
+    let total_bytes = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind != FileKind::Tombstone)
+        .map(|entry| entry.size)
+        .sum::<u64>();
+    snapshot.fingerprint = TreeFingerprint {
+        file_count,
+        total_bytes,
+        sha256: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&manifest)?)),
+    };
+    let backup = restore_snapshot_to_folder(
+        &secret,
+        &snapshot,
+        &target,
+        EmulatorState::from(emulator_state),
+    )?;
+    Ok(ServerRestoreReport {
+        server_url: server_url.clone(),
+        sync_target: format!("{server_url}/v1/heads/{logical_save_id}"),
+        account_handle: computed_account_handle,
+        logical_save_id,
+        snapshot_id: snapshot.snapshot_id,
+        restored: target.clone(),
+        backup: backup.clone(),
+        file_count,
+        total_bytes,
+        message_zh: format!(
+            "已从服务器下载并恢复快照到本地目录；恢复前备份已保留。服务器：{}，快照：{}。",
+            server_url, snapshot_id
+        ),
+    })
+}
+
 fn upload_message_zh(
     server_url: &str,
     logical_save_id: &str,
@@ -535,6 +689,15 @@ async fn get_vec<T: for<'de> Deserialize<'de>>(
     Ok(resp.json().await?)
 }
 
+async fn get_json<R: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    url: &str,
+) -> anyhow::Result<R> {
+    let resp = client.get(url).send().await?;
+    let resp = ensure_success(resp).await?;
+    Ok(resp.json().await?)
+}
+
 async fn post_json<T: Serialize, R: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
@@ -562,6 +725,16 @@ async fn ensure_success(resp: reqwest::Response) -> anyhow::Result<reqwest::Resp
     }
     let body = resp.text().await.unwrap_or_default();
     anyhow::bail!("server returned {status}: {body}");
+}
+
+fn decode_downloaded_blob(object: &SnapshotObjectDownload) -> anyhow::Result<EncryptedBlob> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&object.bytes_b64)?;
+    anyhow::ensure!(
+        sha256_hex(&bytes) == object.sha256.to_lowercase(),
+        "downloaded object checksum mismatch: {}",
+        object.object_id
+    );
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn normalize_server_url(input: &str) -> String {
