@@ -62,6 +62,6 @@
 ## 当前 Alpha 边界
 
 - Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、启动前检查、冲突选择、会话开始/结束与后台策略。
-- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳；正式签名 `.app`、LaunchAgent 和 Finder 安装包仍是后续交付项。
+- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名 `.app`、LaunchAgent 和 Finder 安装包仍是后续交付项。
 - CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。

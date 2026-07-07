@@ -30,7 +30,7 @@ func printStatus(_ context: MacSyncContext) {
     模拟器：\(context.emulator)
     存档目录提示：\(context.saveRootHint)
     自动化边界：FSEvents 只标记 dirty；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
-    常用命令：--prelaunch-check / --conflict-demo / --cloud-unavailable / --app
+    常用命令：--prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
 }
 
@@ -73,6 +73,119 @@ func printCloudUnavailable() {
     - 可以继续使用本地存档；后台保留待上传队列。
     - 恢复网络后执行退出对账/手动同步，按 DAG parent 判断 fast-forward 或 conflict。
     """)
+}
+
+
+struct CommandFailure: Error, CustomStringConvertible {
+    let command: [String]
+    let status: Int32
+    let stderr: String
+
+    var description: String {
+        "命令执行失败（exit=\(status)）：\(command.joined(separator: " "))\n\(stderr)"
+    }
+}
+
+func optionValue(_ name: String, in args: [String]) -> String? {
+    guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else {
+        return nil
+    }
+    return args[index + 1]
+}
+
+func requireOption(_ name: String, in args: [String]) throws -> String {
+    guard let value = optionValue(name, in: args), !value.isEmpty else {
+        throw CommandFailure(command: ["MHSaveSyncMac", name], status: 2, stderr: "缺少参数 \(name)\n")
+    }
+    return value
+}
+
+func mhSaveCLIPath() -> String {
+    if let configured = ProcessInfo.processInfo.environment["MH_SAVE_SYNC_CLI"], !configured.isEmpty {
+        return configured
+    }
+    return FileManager.default.currentDirectoryPath + "/target/debug/mh-save"
+}
+
+func serverURLOrThrow(_ context: MacSyncContext) throws -> String {
+    guard let serverURL = context.serverURL, !serverURL.isEmpty else {
+        throw CommandFailure(
+            command: ["MHSaveSyncMac"],
+            status: 2,
+            stderr: "未配置服务器地址：请设置 MH_SAVE_SYNC_SERVER_URL。\n"
+        )
+    }
+    return serverURL
+}
+
+@discardableResult
+func runMHSave(_ arguments: [String]) throws -> String {
+    let executable = mhSaveCLIPath()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    process.waitUntilExit()
+    let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    if process.terminationStatus != 0 {
+        throw CommandFailure(command: [executable] + arguments, status: process.terminationStatus, stderr: err)
+    }
+    return out
+}
+
+func printServerUpload(_ args: [String], context: MacSyncContext) throws {
+    let serverURL = try serverURLOrThrow(context)
+    let root = try requireOption("--root", in: args)
+    let secret = try requireOption("--secret-hex", in: args)
+    var cliArgs = [
+        "server-upload",
+        "--server-url", serverURL,
+        "--root", root,
+        "--secret-hex", secret,
+        "--device-id", optionValue("--device-id", in: args) ?? "macos-nemessix",
+    ]
+    if let baseHead = optionValue("--base-head", in: args) {
+        cliArgs += ["--base-head", baseHead]
+    }
+    if let logicalSave = optionValue("--logical-save-id", in: args) {
+        cliArgs += ["--logical-save-id", logicalSave]
+    }
+    print(try runMHSave(cliArgs), terminator: "")
+}
+
+func printServerStatus(_ args: [String], context: MacSyncContext) throws {
+    let serverURL = try serverURLOrThrow(context)
+    let secret = try requireOption("--secret-hex", in: args)
+    var cliArgs = ["server-status", "--server-url", serverURL, "--secret-hex", secret]
+    if let logicalSave = optionValue("--logical-save-id", in: args) {
+        cliArgs += ["--logical-save-id", logicalSave]
+    }
+    print(try runMHSave(cliArgs), terminator: "")
+}
+
+func printServerRestore(_ args: [String], context: MacSyncContext) throws {
+    let serverURL = try serverURLOrThrow(context)
+    let target = try requireOption("--target", in: args)
+    let secret = try requireOption("--secret-hex", in: args)
+    var cliArgs = [
+        "server-restore",
+        "--server-url", serverURL,
+        "--target", target,
+        "--secret-hex", secret,
+        "--emulator-state", optionValue("--emulator-state", in: args) ?? "stopped",
+    ]
+    if let snapshotID = optionValue("--snapshot-id", in: args) {
+        cliArgs += ["--snapshot-id", snapshotID]
+    }
+    if let logicalSave = optionValue("--logical-save-id", in: args) {
+        cliArgs += ["--logical-save-id", logicalSave]
+    }
+    print(try runMHSave(cliArgs), terminator: "")
 }
 
 @MainActor
@@ -148,16 +261,27 @@ func runMenuBarApp() {
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
-if args.contains("--app") {
-    runMenuBarApp()
-} else if args.contains("--prelaunch-check") {
-    printPrelaunchCheck(context)
-} else if args.contains("--conflict-demo") {
-    printConflictDemo()
-} else if args.contains("--cloud-unavailable") {
-    printCloudUnavailable()
-} else if args.contains("--help") {
-    print("用法：MHSaveSyncMac [--status] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--app]")
-} else {
-    printStatus(context)
+do {
+    if args.contains("--app") {
+        runMenuBarApp()
+    } else if args.contains("--server-upload") {
+        try printServerUpload(args, context: context)
+    } else if args.contains("--server-status") {
+        try printServerStatus(args, context: context)
+    } else if args.contains("--server-restore") {
+        try printServerRestore(args, context: context)
+    } else if args.contains("--prelaunch-check") {
+        printPrelaunchCheck(context)
+    } else if args.contains("--conflict-demo") {
+        printConflictDemo()
+    } else if args.contains("--cloud-unavailable") {
+        printCloudUnavailable()
+    } else if args.contains("--help") {
+        print("用法：MHSaveSyncMac [--status] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]")
+    } else {
+        printStatus(context)
+    }
+} catch {
+    FileHandle.standardError.write(Data("\(error)\n".utf8))
+    exit(1)
 }

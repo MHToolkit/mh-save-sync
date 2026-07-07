@@ -82,6 +82,26 @@ cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-s
 ./scripts/offline-bundle-e2e.sh
 ./scripts/supply-chain-gate.sh
 swift run --package-path apps/macos MHSaveSyncMac
+./scripts/macos-shell-e2e.sh
+```
+
+macOS shell can call the same Rust CLI pipeline used by Android/CLI demos:
+
+```bash
+export MH_SAVE_SYNC_SERVER_URL=http://127.0.0.1:18080
+export MH_SAVE_SYNC_CLI="$PWD/target/debug/mh-save"
+
+swift run --package-path apps/macos MHSaveSyncMac --server-upload \
+  --root tests/fixtures/generic-save \
+  --secret-hex 5555555555555555555555555555555555555555555555555555555555555555
+
+swift run --package-path apps/macos MHSaveSyncMac --server-status \
+  --secret-hex 5555555555555555555555555555555555555555555555555555555555555555
+
+swift run --package-path apps/macos MHSaveSyncMac --server-restore \
+  --target /tmp/mh-save-sync-restored \
+  --secret-hex 5555555555555555555555555555555555555555555555555555555555555555 \
+  --emulator-state stopped
 ```
 
 Visible server sync demo (shows where the snapshot went, the logical save ID,

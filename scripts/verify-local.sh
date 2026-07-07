@@ -17,4 +17,5 @@ mkdir -p artifacts/checksums
   > artifacts/checksums/rust-debug.sha256
 ./scripts/offline-bundle-e2e.sh
 ./scripts/server-sync-e2e.sh
+./scripts/macos-shell-e2e.sh
 ./scripts/secret-scan.sh

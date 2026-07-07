@@ -20,6 +20,7 @@ cargo test -p save-cli --test bundle_cli                       PASS: 2 tests / 1
 cargo test -p save-cli --test server_sync_cli                  PASS: 2 tests / 1 suite
 scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
+scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
@@ -91,6 +92,26 @@ PostgreSQL/S3 download/restore. In this Codex managed sandbox, loopback bind is 
 so `./scripts/server-sync-e2e.sh` exits 0 with an explicit skip message unless
 run outside the sandbox or in CI. CI sets `MH_SAVE_SYNC_REQUIRE_NETWORK_E2E=1`,
 so the same script is a hard failure if the loopback server cannot start.
+
+
+## macOS shell server sync gate executed on 2026-07-07
+
+Command:
+
+```bash
+./scripts/macos-shell-e2e.sh
+```
+
+Sample local output:
+
+```json
+{"server_url": "http://127.0.0.1:58737", "macos_shell_upload_visible": true, "macos_shell_status_visible": true, "macos_shell_restore_visible": true, "running_restore_fail_closed": true}
+```
+
+This proves the macOS SwiftPM shell can invoke the shared Rust `mh-save` CLI for
+server upload, server status and stopped-emulator restore while preserving the
+running-emulator fail-closed guard. It is still a SwiftPM/menu-bar alpha shell,
+not a signed `.app` installer or LaunchAgent deployment.
 
 ## UX correction gates executed on 2026-07-07
 
