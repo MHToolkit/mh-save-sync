@@ -41,6 +41,7 @@ Podman users can run the same scripts with:
 
 ```bash
 CONTAINER_RUNTIME=podman \
+COMPOSE_PROJECT_NAME=mh-save-sync-aliyun \
 COMPOSE_ENV_FILE="$HOME/Documents/Secrets/mh-save-sync.env" \
 deploy/compose/scripts/backup.sh
 ```
@@ -49,6 +50,7 @@ Destructive restore:
 
 ```bash
 CONTAINER_RUNTIME=podman \
+COMPOSE_PROJECT_NAME=mh-save-sync-aliyun \
 COMPOSE_ENV_FILE="$HOME/Documents/Secrets/mh-save-sync.env" \
 deploy/compose/scripts/restore.sh "$HOME/Games/Backups/MHSaveSync/<run>"
 ```

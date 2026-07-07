@@ -19,4 +19,5 @@ mkdir -p artifacts/checksums
 ./scripts/server-sync-e2e.sh
 ./scripts/macos-shell-e2e.sh
 ./scripts/compose-server-sync-e2e-runtime-test.sh
+./scripts/compose-project-volume-test.sh
 ./scripts/secret-scan.sh

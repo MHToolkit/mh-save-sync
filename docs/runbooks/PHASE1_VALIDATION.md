@@ -23,6 +23,7 @@ scripts/server-sync-e2e.sh                                      PASS: upload/sta
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
+scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
@@ -129,6 +130,29 @@ The heavy persistent gate is manual/local evidence because MHToolkit currently
 has one 2c4g self-hosted runner. CI runs the lightweight runtime-selection test
 so Docker CLI without a daemon falls back to Podman instead of failing in the
 middle of Compose startup.
+
+## Compose project-aware backup/restore gate executed on 2026-07-07
+
+Command:
+
+```bash
+./scripts/compose-project-volume-test.sh
+```
+
+Output:
+
+```json
+{"compose_project_volume_test":true,"project":"mh-save-sync-aliyun","isolated_volumes":true}
+```
+
+Remote preflight for `8.130.112.207` found no current conflict for Compose
+project `mh-save-sync-aliyun` or host ports `18082/19082/19083`, but it also
+found that backup/restore previously hard-coded default `mh-save-sync_*` volume
+names. `deploy/compose/scripts/backup.sh`, `restore.sh` and
+`verify-repository.sh` now pass `--project-name` and derive PostgreSQL/MinIO
+volume names from `COMPOSE_PROJECT_NAME` (or `MH_SAVE_SYNC_COMPOSE_PROJECT`) so
+isolated remote backup/restore targets only the intended project. The lightweight
+test uses a fake runtime and fails if default project volumes leak back in.
 
 
 ## macOS shell server sync gate executed on 2026-07-07
