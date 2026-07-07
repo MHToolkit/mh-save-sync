@@ -15,4 +15,5 @@ mkdir -p artifacts/checksums
   target/debug/mh-save \
   target/debug/mh-save-server \
   > artifacts/checksums/rust-debug.sha256
+./scripts/offline-bundle-e2e.sh
 ./scripts/secret-scan.sh

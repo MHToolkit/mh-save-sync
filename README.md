@@ -62,13 +62,14 @@ Phase 1 feature branch currently contains:
 - macOS Swift shell smoke, Android SAF/WorkManager/foreground-service shell,
   and generated UniFFI Kotlin/Swift bridge evidence.
 - CI supply-chain gates for `cargo deny`, `cargo audit`, dependency review,
-  CycloneDX SBOM generation, secret scanning and artifact checksums. Current
-  GitHub-hosted runner execution is blocked by the account billing/spending
-  limit, so local evidence is recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
+  CycloneDX SBOM generation, secret scanning and artifact checksums. The
+  self-hosted-compatible PR path currently runs Rust and Android automatically;
+  macOS and Compose evidence remains recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
 export/import UX, upgrade/rollback benchmark, remote isolated deployment and
-serverless bundle recovery remain open gates in `docs/ROADMAP.md`.
+real-emulator bundle recovery remain open gates in `docs/ROADMAP.md`. Fixture
+no-server bundle recovery is covered by `scripts/offline-bundle-e2e.sh`.
 
 ## Five-minute local demo
 
@@ -78,6 +79,7 @@ cargo run -p save-cli --bin mh-save -- adapters
 cargo run -p save-cli --bin mh-save -- crypto-vector
 cargo run -p save-cli --bin mh-save -- crypto-device-fixture
 cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
+./scripts/offline-bundle-e2e.sh
 ./scripts/supply-chain-gate.sh
 swift run --package-path apps/macos MHSaveSyncMac
 ```
@@ -89,6 +91,18 @@ system Java:
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   apps/android/gradlew -p apps/android assembleDebug lintDebug
 ```
+
+
+Offline no-server recovery demo:
+
+```bash
+./scripts/offline-bundle-e2e.sh
+```
+
+This exports `tests/fixtures/generic-save` to an encrypted `.mhsavebundle`,
+restores it to a fresh directory, byte-compares the result, and verifies that
+`--emulator-state running` fails closed without writing the target. See
+`docs/runbooks/OFFLINE_BUNDLE_RECOVERY.md`.
 
 Self-hosted local demo with external secret files:
 

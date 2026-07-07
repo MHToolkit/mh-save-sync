@@ -11,11 +11,13 @@
 
 ```text
 cargo fmt --all -- --check                                      PASS
-cargo test --workspace                                          PASS: 19 tests / 14 suites
+cargo test --workspace                                          PASS: 24 tests / 15 suites
 cargo clippy --workspace --all-targets -- -D warnings           PASS
 cargo build --workspace --bins                                  PASS
 scripts/supply-chain-gate.sh                                    PASS: cargo-deny + cargo-audit + CycloneDX SBOM
 cargo run -p save-cli --bin mh-save -- crypto-device-fixture    PASS: matches tests/fixtures/device-identity-public.json
+cargo test -p save-cli --test bundle_cli                       PASS: 2 tests / 1 suite
+scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
 cargo build --release -p save-client                            PASS
 UniFFI Kotlin binding generation                                PASS
 UniFFI Swift binding generation                                 PASS
@@ -35,6 +37,29 @@ now pass with two reviewed temporary ignores for `quick-xml` advisories
 user-provided XML; the ignore must be removed when object_store releases a
 quick-xml `>=0.41` update.
 
+
+## Offline bundle recovery gate executed on 2026-07-07
+
+Command:
+
+```bash
+./scripts/offline-bundle-e2e.sh
+```
+
+Sample local output shape from `verify-local.sh`:
+
+```json
+{"bundle":"artifacts/offline-bundle/generic-save.mhsavebundle","bundle_sha256":"170313800b2d91e50b5511afce4ec17e6b25cae0a37fc769bb269371e8bb3def","offline_bundle_restore":true,"restored_snapshot_id":"529bb8aab8fb6a61379134413ce11ddc1e6f6e9ac3d08ee2496dc1607cdacbb7","running_restore_fail_closed":true,"snapshot_id":"529bb8aab8fb6a61379134413ce11ddc1e6f6e9ac3d08ee2496dc1607cdacbb7"}
+```
+
+This is synthetic fixture evidence for no-server `.mhsavebundle` recovery.
+It proves encrypted bundle export/import, byte-identical restore, and
+running-emulator restore refusal. Snapshot and bundle hashes change on each run
+because encrypted manifests/chunks use fresh AEAD nonces; the stable invariant is
+that restore output byte-compares equal to `tests/fixtures/generic-save` and
+running-emulator restore writes no target directory. It does not upgrade emulator
+adapters to `RuntimeVerified`; real emulator-readable restore evidence is still
+tracked as an open phase gate below.
 
 ## UX correction gates executed on 2026-07-07
 

@@ -44,6 +44,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace --bins
+      - name: Verify offline encrypted bundle recovery
+        run: ./scripts/offline-bundle-e2e.sh
       - run: cargo run -p save-cli --bin mh-save -- crypto-vector
       - name: Verify deterministic device certificate fixture
         run: |
