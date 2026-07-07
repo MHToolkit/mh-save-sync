@@ -207,17 +207,42 @@ post-restore repository check: dangling_snapshot_objects=0
 post-restore logical save: compose-cli-1783422931281127000 history_count=2 conflict_count=1
 ```
 
+Public Alpha API entrypoint:
+
+```text
+public server_url: http://8.130.112.207:39082
+ready: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+```
+
+The public API is currently exposed through a minimal TCP proxy on the isolated
+test instance, forwarding `0.0.0.0:39082` to the local Compose server on
+`127.0.0.1:18082`. MinIO ports `19082/19083` are not part of the public client
+contract; clients only need the API URL above.
+
+Public persistent sync was verified against the same URL that Android/macOS
+clients can configure:
+
+Command:
+
+```bash
+MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 ./scripts/compose-server-sync-e2e.sh
+```
+
+Evidence:
+
+```json
+{"backend":"postgres-s3","cloud_head":"8054a06dc92c245703130b320539e34f13dfce04a9e0ca8dcc76311187426d30","conflict_count":1,"evidence":"persistent postgres-s3 server-upload/status/server-restore preserved conflict branch and restored byte-identical cloud HEAD","history_count":2,"logical_save_id":"compose-cli-1783424652296908000","restored_snapshot_id":"8054a06dc92c245703130b320539e34f13dfce04a9e0ca8dcc76311187426d30","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082"}
+```
+
 Known deployment boundary:
 
 - Direct public `http://8.130.112.207:18082/ready` currently times out from the
-  local network.
-- Remote process-level listeners exist on `127.0.0.1:18082` and
-  `172.16.0.220:18082`, and tunnel-based client verification passes, so the
-  remaining issue is the Aliyun security-group/NAT public ingress for TCP
-  `18082`.
-- No Aliyun API CLI/profile was available locally in this run; opening the
-  public ingress remains an operations follow-up, not a server/data-integrity
-  blocker.
+  local network; the public alpha API uses `39082` instead.
+- `39082` packet capture showed public TCP handshake, HTTP request and 200 OK
+  response on the ECS private interface, so the user-facing API path is open.
+- The `39082` proxy is an alpha-test convenience, not the final production
+  ingress design. Production should replace it with a managed reverse proxy or
+  load balancer/TLS endpoint and keep Compose internals private.
 
 
 ## macOS shell server sync gate executed on 2026-07-07
@@ -291,7 +316,7 @@ Artifact hashes from this correction:
 
 ```text
 Android debug APK:
-40228506f23b831127efcbeeb520b880a6a3dfd6ff45c9de7faaef88c0114b87  apps/android/app/build/outputs/apk/debug/app-debug.apk
+47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
 e1a68fa699680ce637b4bcb8ea1677ed96604337fd941be0bfb53e5a7eb98228  apps/macos/.build/debug/MHSaveSyncMac
@@ -326,6 +351,62 @@ with the stopped-Nemessix precondition and backup language, and that running
 restore is visibly refused without overwriting local saves. It is still UI/state
 evidence; real Android SAF byte-for-byte restore against a live Nemessix save
 root remains an open Runtime Verified gate.
+
+## Android AVD Chinese UI smoke executed on 2026-07-07
+
+Device:
+
+```text
+AVD: Pixel_9_API_36_Daily
+adb: emulator-5554 device sdk_gphone64_arm64
+APK: apps/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Evidence commands:
+
+```bash
+adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n org.mhtoolkit.savesync/.MainActivity
+adb exec-out screencap -p > artifacts/android-ui-initial.png
+```
+
+Screenshots captured:
+
+```text
+b81739e89ecfd1363038d3cc4f75a3a90e0ddf7611c4e549d8e5befd4966bb67  artifacts/android-ui-initial.png
+363fc2c3b56a101a383b398c80f25ec045df75c0cf5af5027de0fc9c5b2fd981  artifacts/android-ui-public-server.png
+b03dbe7ccd7f144e24b6f49acb96b34f7739ff279dba7d6b89fb6ea54ea089c3  artifacts/android-ui-prelaunch-remote-ok.png
+579f507f6c344cf7ae3821f6d2d12e578804bfbe3036526b81061ea24138a449  artifacts/android-ui-conflict-dialog.png
+```
+
+What the screenshots prove:
+
+- Initial launch is Chinese-first and explains that office Mac and home Android
+  sync to the same server instead of an opaque button.
+- Configured server view shows the route
+  `MH3G / Android Nemessix -> local staging/CAS -> server`, the per-game switch,
+  and SAF directory state.
+- Pre-launch check was executed from the Android app through `adb reverse` to an
+  SSH tunnel targeting the remote Alpha API. The UI showed cloud reachable and
+  no MH3G cloud HEAD, so starting local play is explicit and later upload is
+  queued.
+- Conflict dialog lists local/cloud device, time, parent and size, and offers
+  explicit `本地替换云端` / `云端覆盖本地` choices instead of latest-time overwrite.
+
+Boundary:
+
+- This is Android UI/network smoke evidence only. The SAF URI used for the smoke
+  is synthetic to unlock the UI path; it does not prove byte-for-byte restore
+  into a real Nemessix save root and does not upgrade Android Nemessix to
+  `RuntimeVerified`.
+- The AVD could not consistently reach the public IP directly from its guest
+  network, so the pre-launch smoke used `adb reverse tcp:39082` plus an SSH
+  tunnel. Public client reachability is separately proven by the `39082` server
+  gate above.
+- Android `usesCleartextTraffic=true` is enabled for this Alpha because
+  self-hosted users commonly start with `http://IP:port`. Save contents remain
+  protected by application-layer E2EE; production deployment should use a TLS
+  reverse proxy and can later tighten cleartext policy.
 
 ## Self-hosted runner throttling check executed on 2026-07-07
 
@@ -362,7 +443,7 @@ CycloneDX SBOM:
 01b91bef41441df28da53f9245442c9d656aca377a394928ae511a1efbc89698  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-40228506f23b831127efcbeeb520b880a6a3dfd6ff45c9de7faaef88c0114b87  apps/android/app/build/outputs/apk/debug/app-debug.apk
+47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib

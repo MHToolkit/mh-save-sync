@@ -24,6 +24,8 @@ actual target instead of pressing an opaque “sync” button:
 1. Run or self-host the server and use the same URL on both devices.
    - macOS: set `MH_SAVE_SYNC_SERVER_URL`.
    - Android: enter the server address in the app.
+   - Current isolated Alpha test API: `http://8.130.112.207:39082`
+     (server API only; MinIO/admin ports are not client endpoints).
 2. macOS Nemessix before launch: run
    `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
    start the menu-bar shell with `--app`. For a double-clickable local app,
@@ -75,11 +77,11 @@ Phase 1 feature branch currently contains:
   `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
-export/import UX, upgrade/rollback benchmark, public Aliyun ingress and
+export/import UX, upgrade/rollback benchmark, production TLS ingress and
 real-emulator bundle recovery remain open gates in `docs/ROADMAP.md`. Fixture
 no-server bundle recovery is covered by `scripts/offline-bundle-e2e.sh`; the
-isolated `mh-save-sync-aliyun` deployment and tunnel-based disaster-recovery
-gate are recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
+isolated `mh-save-sync-aliyun` deployment, public Alpha API gate and
+disaster-recovery gate are recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
 
 ## Five-minute local demo
 

@@ -6,7 +6,7 @@
 
 ## 核心心智
 
-1. **Mac 和 Android 都同步到同一个服务器**：客户端填写同一个 `MH_SAVE_SYNC_SERVER_URL` / Android 服务器地址。服务器只保存端到端加密后的 chunk、manifest 和最小图元数据。
+1. **Mac 和 Android 都同步到同一个服务器**：客户端填写同一个 `MH_SAVE_SYNC_SERVER_URL` / Android 服务器地址。当前隔离 Alpha 测试 API 是 `http://8.130.112.207:39082`；服务器只保存端到端加密后的 chunk、manifest 和最小图元数据。
 2. **启动前先检查，不静默覆盖**：启动 MH3G 前做 pre-launch check。远端较新、冲突、云端不可用都必须在 UI 中可见。
 3. **watcher 不是上传器**：FSEvents/FileObserver/SAF reconciliation 只标记 dirty；候选必须经过 debounce、稳定指纹、只读 staging copy、manifest/hash 和 adapter consistency validation。
 4. **运行中不恢复**：模拟器运行时禁止把远端内容覆盖到原存档目录。下载只进入 local CAS；恢复必须等模拟器停止，并先快照当前本地状态。
@@ -62,6 +62,7 @@
 ## 当前 Alpha 边界
 
 - Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、真实 `/ready` + MH3G HEAD 启动前探测、冲突选择、游戏运行保护、恢复云端到本地（需停止 Nemessix）与后台策略。
+- Android Alpha 允许 `http://IP:port` 自部署地址；端到端加密保护存档内容，生产入口仍应使用 TLS 反向代理后再收紧 cleartext policy。
 - macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳与 `./scripts/build-macos-app-bundle.sh` 生成的本地双击 `.app`；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名、LaunchAgent 和 Finder 安装包仍是后续交付项。
 - CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。
