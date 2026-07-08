@@ -588,6 +588,11 @@ Capacity note for the MHToolkit hub: raising concurrency above 1 is not useful
 while the org exposes a single 2c4g `ci-general` runner. Add a second runner or
 upgrade the host before removing the Rust→Android serialization.
 
+Self-hosted Compose load note: default healthchecks are intentionally modest for
+the same small-host profile. PostgreSQL and MinIO default to 15s intervals, the
+server defaults to 30s, and operators can tune `MH_SAVE_SYNC_*_HEALTH_*` values
+without editing the Compose file if the host is slower or shared.
+
 ## Artifact hashes
 
 ```text

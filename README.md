@@ -82,7 +82,9 @@ Phase 1 feature branch currently contains:
   MHToolkit presently exposes one 2c4g `ci-general` runner, so CI cancels stale
   pushes and serializes heavy Rust → Android jobs instead of contending for the
   same host. A separate weekly `ci-canary` runs only lightweight runner/script/
-  UX-copy health checks; macOS and Compose evidence remains recorded in
+  UX-copy health checks. Self-hosted Compose healthchecks default to 15s/15s/30s
+  PostgreSQL/MinIO/server intervals and can be tuned with `MH_SAVE_SYNC_*_HEALTH_*`
+  env vars for smaller hosts; macOS and Compose evidence remains recorded in
   `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
