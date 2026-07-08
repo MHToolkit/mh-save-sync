@@ -671,6 +671,19 @@ fixtures listed above. It does **not** upgrade any path-only emulator entry to
 `Runtime Verified`. Runtime Verified still requires reproducible real emulator
 save/read evidence in `docs/research/EMULATOR_SAVE_MATRIX.md`.
 
+Additional runtime boundary check on 2026-07-08:
+
+- AVD `emulator-5554` (`sdk_gphone64_arm64`, Android 16 / API 36) was booted
+  without clearing data and confirmed `/sdcard` access. It had no installed
+  `nemessix`, `azahar`, `citra`, `ppsspp`, `dolphin`, `nethersx2` or `pcsx2`
+  package and no corresponding shared-storage root, so it can only support the
+  Generic Folder evidence above.
+- macOS `/Applications/Nemessix.app` exists and real 3DS-family save roots were
+  observed, but Nemessix was running during this pass. No restore or upload was
+  attempted from that live directory because phase1 policy forbids live
+  overwrite and forbids treating a dirty/path observation as a stable snapshot
+  boundary.
+
 Open Phase 1D gates:
 
 - real macOS Nemessix save-complete IPC and automatic stable snapshot proof;
