@@ -50,7 +50,7 @@ if [[ -e "$running_target" ]]; then
   echo "running restore wrote target directory" >&2
   exit 1
 fi
-if ! grep -q "restore refused while emulator is running" "$work_dir/running.stderr"; then
+if ! grep -q "已拒绝恢复：模拟器仍在运行，没有覆盖本地存档" "$work_dir/running.stderr"; then
   echo "running restore did not explain precondition" >&2
   cat "$work_dir/running.stderr" >&2
   exit 1

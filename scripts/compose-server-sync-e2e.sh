@@ -307,7 +307,7 @@ if cargo run -q -p save-cli --bin mh-save -- server-restore \
   echo "running persistent server restore unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q "restore refused while emulator is running" "$tmp/blocked.err"
+grep -q "已拒绝恢复：模拟器仍在运行，没有覆盖本地存档" "$tmp/blocked.err"
 if [[ -e "$tmp/blocked-running" ]]; then
   echo "running persistent server restore created target directory" >&2
   exit 1

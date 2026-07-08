@@ -108,9 +108,15 @@ fn cli_refuses_bundle_restore_while_emulator_running() {
     );
     assert!(
         String::from_utf8_lossy(&restore.stderr)
-            .contains("restore refused while emulator is running"),
+            .contains("已拒绝恢复：模拟器仍在运行，没有覆盖本地存档"),
         "stderr should explain restore precondition: {}",
         String::from_utf8_lossy(&restore.stderr),
+    );
+    let stderr_json: serde_json::Value = serde_json::from_slice(&restore.stderr).unwrap();
+    assert_eq!(stderr_json["error_code"], "emulator_running");
+    assert_eq!(
+        stderr_json["message"],
+        "restore refused while emulator is running"
     );
     assert!(
         !target.exists(),

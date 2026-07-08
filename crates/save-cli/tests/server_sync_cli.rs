@@ -300,9 +300,15 @@ stderr={}",
     );
     assert!(
         String::from_utf8_lossy(&blocked.stderr)
-            .contains("restore refused while emulator is running"),
+            .contains("已拒绝恢复：模拟器仍在运行，没有覆盖本地存档"),
         "stderr should explain restore precondition: {}",
         String::from_utf8_lossy(&blocked.stderr),
+    );
+    let blocked_error: Value = serde_json::from_slice(&blocked.stderr).unwrap();
+    assert_eq!(blocked_error["error_code"], "emulator_running");
+    assert_eq!(
+        blocked_error["message"],
+        "restore refused while emulator is running"
     );
 
     handle.abort();

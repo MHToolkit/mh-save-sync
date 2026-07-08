@@ -9,8 +9,9 @@ use save_domain::{
     DeviceId, FileKind, GameKey, LogicalSaveId, SnapshotId, TreeFingerprint, stable_logical_save_id,
 };
 use save_engine::{
-    EmulatorState, EncryptedSnapshot, SnapshotOptions, create_snapshot_from_stable_folder,
-    decrypt_manifest, export_encrypted_bundle, import_encrypted_bundle, restore_snapshot_to_folder,
+    EmulatorState, EncryptedSnapshot, EngineError, SnapshotOptions,
+    create_snapshot_from_stable_folder, decrypt_manifest, export_encrypted_bundle,
+    import_encrypted_bundle, restore_snapshot_to_folder,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -116,7 +117,14 @@ fn secret_from_hex(input: &str) -> anyhow::Result<[u8; 32]> {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
+    if let Err(error) = run().await {
+        print_cli_error(&error);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Adapters => {
@@ -283,6 +291,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_cli_error(error: &anyhow::Error) {
+    if matches!(
+        error.downcast_ref::<EngineError>(),
+        Some(EngineError::EmulatorRunning)
+    ) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "error_code": "emulator_running",
+                "message": "restore refused while emulator is running",
+                "message_zh": "已拒绝恢复：模拟器仍在运行，没有覆盖本地存档。请先退出游戏/模拟器，再执行云端覆盖本地。"
+            })
+        );
+        return;
+    }
+    eprintln!("{error:?}");
 }
 
 #[derive(Debug)]

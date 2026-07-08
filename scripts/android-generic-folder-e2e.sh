@@ -43,7 +43,7 @@ expect_running_restore_blocked() {
       echo "running Android generic-folder restore unexpectedly succeeded" >&2
       exit 1
     fi
-    if grep -q "restore refused while emulator is running" "$tmp/blocked.err"; then
+    if grep -q "已拒绝恢复：模拟器仍在运行，没有覆盖本地存档" "$tmp/blocked.err"; then
       if [[ -e "$tmp/blocked-running" ]]; then
         echo "running restore created target directory" >&2
         exit 1

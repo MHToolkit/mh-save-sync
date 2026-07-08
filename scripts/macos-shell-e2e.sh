@@ -72,7 +72,7 @@ if swift run --package-path apps/macos MHSaveSyncMac --server-restore \
   echo "macOS shell running restore unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q "restore refused while emulator is running" "${tmp}/mac-blocked.txt"
+grep -q "已拒绝恢复：模拟器仍在运行，没有覆盖本地存档" "${tmp}/mac-blocked.txt"
 
 python3 - "$server_url" "${tmp}/mac-upload.txt" "${tmp}/mac-status.txt" "${tmp}/mac-restore.txt" <<'PY'
 import json
