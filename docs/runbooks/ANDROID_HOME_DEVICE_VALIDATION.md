@@ -10,13 +10,21 @@
 Current local installable alpha APK on this Mac:
 
 ```bash
-adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.apk
+adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk
 ```
 
 Evidence file:
 
 ```text
-/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.evidence.json
+/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.evidence.json
+```
+
+Generate or refresh the APK with:
+
+```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+MH_SAVE_SYNC_RUN_ADB_SMOKE=auto \
+./scripts/android-package-alpha.sh
 ```
 
 Use the APK evidence JSON, APK SHA256 and GitHub Actions run recorded next to
@@ -31,7 +39,7 @@ set `MH_SAVE_SYNC_APK` to that new file before real-device validation.
 From the repository root:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.apk" \
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk" \
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-home-device-preflight.sh

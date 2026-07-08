@@ -133,8 +133,8 @@ Command:
 
 ```bash
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-  ./apps/android/gradlew -p apps/android testDebugUnitTest lintDebug assembleDebug
-./scripts/android-apk-smoke.sh
+MH_SAVE_SYNC_RUN_ADB_SMOKE=auto \
+./scripts/android-package-alpha.sh
 ```
 
 Local ADB evidence from the current debug APK:
@@ -143,13 +143,24 @@ Local ADB evidence from the current debug APK:
 {"android_apk_smoke":true,"apk_sha256":"bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1","device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","resumed_activity":"topResumedActivity=ActivityRecord{110934309 u0 org.mhtoolkit.savesync/.MainActivity t12}"}
 ```
 
+Current package evidence artifact:
+
+```text
+APK: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk
+APK_SHA256: bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1
+EVIDENCE: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.evidence.json
+EVIDENCE_SHA256: 0d2fd254599717fc73f7dbb0028773eb0e51e3685ef59e31e2166c21b9e8aa86
+SIGNER_CERT_SHA256: ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb
+```
+
 Evidence scope:
 
 - The debug APK installs with `adb install -r`, launches via the Android
   launcher intent, becomes the resumed activity, and does not emit an app crash
   signature during launch.
-- The APK hash above matches the debug APK copied for manual installation under
-  `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/`.
+- The APK hash above matches both `apps/android/app/build/outputs/apk/debug/app-debug.apk` and the debug APK copied for manual installation under
+  `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk`.
+- `scripts/android-package-alpha.sh` is now the reproducible artifact authority: it runs Gradle unit/lint/assemble, verifies the APK v2 signature and badging, runs secret scan, optionally runs ADB install/UI smoke, then emits the APK, `.sha256` file and redacted `.evidence.json`.
 - This is an install/launch smoke only. It does not prove SAF authorization,
   Android Nemessix sandbox access, or emulator-readable restore.
 
@@ -252,7 +263,7 @@ Boundary:
 Command:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.apk" \
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk" \
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-home-device-preflight.sh
@@ -646,7 +657,7 @@ Artifact hashes from this correction:
 
 ```text
 Android debug APK:
-a87004d3edb1892a469bb8036dccd503c2d201a767f1caf68253a78db793c9ea  apps/android/app/build/outputs/apk/debug/app-debug.apk
+bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
 7eb3ae13c543b5171e22cddbf5acffd1891795f1ed7c078aa8ddb5c782f02e48  apps/macos/.build/debug/MHSaveSyncMac
@@ -958,7 +969,7 @@ CycloneDX SBOM:
 6a18f97b6c9a2e5040da02081e4d7403b2e20b13cb13b4fe43dfc2fbed75517b  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-a87004d3edb1892a469bb8036dccd503c2d201a767f1caf68253a78db793c9ea  apps/android/app/build/outputs/apk/debug/app-debug.apk
+bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib
