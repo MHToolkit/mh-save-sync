@@ -69,6 +69,12 @@ grep -q "同步到服务器：$server_url" "$tmp/status.txt"
 grep -q "Mac 存档目录：$tmp/save-root" "$tmp/status.txt"
 grep -q "恢复密钥文件：$HOME/Documents/Secrets/mh-save-sync-test-secret.hex" "$tmp/status.txt"
 grep -q "自动同步：已关闭：只手动同步" "$tmp/status.txt"
+swift run --package-path apps/macos MHSaveSyncMac --menu-preview > "$tmp/menu-preview.txt"
+grep -q "菜单栏预览：MH 云存档 · 就绪" "$tmp/menu-preview.txt"
+grep -q "同步路线：MH3G / macOS Nemessix → 本机安全缓存 → $server_url" "$tmp/menu-preview.txt"
+grep -q "打开同步向导（告诉我下一步）" "$tmp/menu-preview.txt"
+grep -q "立即上传 Mac 存档到服务器" "$tmp/menu-preview.txt"
+grep -q "自动同步：已关闭：只手动同步" "$tmp/menu-preview.txt"
 
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check \
   > "$tmp/prelaunch.txt"
@@ -103,6 +109,7 @@ print(json.dumps({
     "macos_config_e2e": True,
     "server_url": sys.argv[1],
     "continue_local_visible": True,
+    "menu_preview_visible": True,
     "config_path": "~/Library/Application Support/MH Save Sync/config.json",
     "save_root_configured": True,
     "recovery_secret_file_configured": True,
