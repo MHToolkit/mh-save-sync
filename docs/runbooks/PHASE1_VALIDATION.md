@@ -60,9 +60,9 @@ swift build --package-path apps/macos
 
 Evidence scope:
 
-- The menu-bar app now exposes player-facing Chinese actions for `设置服务器地址…`, `选择 Mac Nemessix 存档目录…`, `选择恢复密钥文件…`, `启动前检查`, `立即上传 Mac 存档到服务器`, `我已退出 MH3G：立即对账上传`, `查看云端状态`, `云端覆盖本地（先备份，需停止 Nemessix）`, and `自动同步：退出 Nemessix 后上传`.
-- The menu top line now exposes `下一步：...` after every launch/config change. This closes the observed UX gap where a user configured only the server URL but could not tell that save-folder selection, recovery-secret-file selection, pre-launch check, manual upload or exit-after-upload were the next actions.
-- The menu-bar title now reflects onboarding progress (`MH 云存档 · 设服务器/选目录/选密钥/就绪`), and `--menu-preview` verifies that `同步路线`, `下一步`, manual upload and auto-sync entries are visible without launching the GUI.
+- The menu-bar title now exposes setup progress as `MH 云存档 · 设服务器/选目录/选密钥/就绪`, and the menu top exposes `同步路线：MH3G / macOS Nemessix → 本机安全缓存 → <server>` plus `下一步：...` after every launch/config change.
+- The menu-bar app now exposes player-facing Chinese actions for `打开同步向导（告诉我下一步）`, `设置服务器地址…`, `选择 Mac Nemessix 存档目录…`, `选择恢复密钥文件…`, `启动前检查`, `立即上传 Mac 存档到服务器`, `我已退出 MH3G：立即对账上传`, `查看云端状态`, `云端覆盖本地（先备份，需停止 Nemessix）`, and `自动同步：退出 Nemessix 后上传`.
+- `--menu-preview` is now covered by macOS E2E scripts, so CI can verify that the visible menu explains sync destination, manual sync, auto sync and next action without launching the GUI. This closes the observed UX gap where a user configured only the server URL but could not tell that save-folder selection, recovery-secret-file selection, pre-launch check, manual upload or exit-after-upload were the next actions.
 - The app bundle includes `Contents/MacOS/mh-save`; installed menu actions therefore use the same Rust CLI pipeline without requiring an external `MH_SAVE_SYNC_CLI` environment variable.
 - Config E2E verifies persisted server URL, save-root path, recovery-secret file path under `~/Documents/Secrets`, and `auto_upload_on_exit=false`; the recovery secret contents are never written into config, logs, docs or GitHub output.
 - Automation remains session-boundary based: the menu bar checks Nemessix process exit every 15 seconds and only then triggers stable snapshot upload; file changes do not upload directly, and restore stays blocked while Nemessix is running.
