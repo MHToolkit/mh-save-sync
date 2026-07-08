@@ -448,11 +448,13 @@ async fn device_register(
                 .execute(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
             let existing = sqlx::query("SELECT account_handle,device_public_key,certificate,revoked_at IS NOT NULL AS revoked FROM devices WHERE cert_id=$1")
                 .bind(cert_id).fetch_one(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
-            if existing.get::<Vec<u8>, _>("account_handle") != account
-                || existing.get::<Vec<u8>, _>("device_public_key") != public_key
-                || existing.get::<Vec<u8>, _>("certificate") != certificate
-                || existing.get::<bool, _>("revoked")
-            {
+            if !device_registration_matches_existing_identity(
+                &existing.get::<Vec<u8>, _>("account_handle"),
+                &existing.get::<Vec<u8>, _>("device_public_key"),
+                existing.get::<bool, _>("revoked"),
+                &account,
+                &public_key,
+            ) {
                 return Err(BackendError::Conflict(
                     "device certificate mismatch or revoked".into(),
                 )
@@ -1114,6 +1116,16 @@ fn env_or_file(value_name: &str, file_name: &str) -> anyhow::Result<String> {
     Ok(std::fs::read_to_string(path)?.trim_end().to_string())
 }
 
+fn device_registration_matches_existing_identity(
+    existing_account: &[u8],
+    existing_device_public: &[u8],
+    revoked: bool,
+    account: &[u8],
+    device_public: &[u8],
+) -> bool {
+    !revoked && existing_account == account && existing_device_public == device_public
+}
+
 fn validate_device_certificate(
     cert: &DeviceCertificate,
     account_root: &[u8],
@@ -1216,6 +1228,31 @@ mod tests {
             hex::encode(Sha256::digest(bytes)),
             base64::engine::general_purpose::STANDARD.encode(bytes),
         )
+    }
+
+    #[test]
+    fn reissued_device_certificate_is_idempotent_when_identity_matches() {
+        assert!(device_registration_matches_existing_identity(
+            &[1, 2],
+            &[3, 4],
+            false,
+            &[1, 2],
+            &[3, 4],
+        ));
+        assert!(!device_registration_matches_existing_identity(
+            &[1, 2],
+            &[3, 4],
+            false,
+            &[9],
+            &[3, 4],
+        ));
+        assert!(!device_registration_matches_existing_identity(
+            &[1, 2],
+            &[3, 4],
+            true,
+            &[1, 2],
+            &[3, 4],
+        ));
     }
 
     #[test]

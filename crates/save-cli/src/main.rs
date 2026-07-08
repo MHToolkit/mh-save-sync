@@ -569,15 +569,7 @@ async fn ensure_account_device_registered(
     let device = deterministic_cli_device_key(keys);
     let cert_id = deterministic_cli_device_cert_id(&device);
     let cert_id_hex = hex::encode(cert_id);
-    let issued_at = unix_seconds().saturating_sub(60);
-    let certificate = issue_device_certificate_with_id(
-        &root,
-        &device.verifying_key(),
-        cert_id,
-        issued_at,
-        4_102_444_800,
-        1,
-    )?;
+    let certificate = deterministic_cli_device_certificate(&root, &device, cert_id)?;
 
     post_no_content(
         client,
@@ -607,6 +599,22 @@ async fn ensure_account_device_registered(
         account_handle: computed_account_handle.to_owned(),
         device_cert_id: cert_id_hex,
     })
+}
+
+fn deterministic_cli_device_certificate(
+    root: &SigningKey,
+    device: &SigningKey,
+    cert_id: [u8; 16],
+) -> anyhow::Result<save_crypto::DeviceCertificate> {
+    issue_device_certificate_with_id(
+        root,
+        &device.verifying_key(),
+        cert_id,
+        1_700_000_000,
+        4_102_444_800,
+        1,
+    )
+    .map_err(Into::into)
 }
 
 fn deterministic_cli_device_key(keys: &save_crypto::AccountKeys) -> SigningKey {
@@ -876,9 +884,21 @@ fn unix_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn unix_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_cli_certificate_is_idempotent_for_repeated_registration() {
+        let keys = derive_account_keys(&[0x33; 32]).unwrap();
+        let root = account_root_signing_key(&keys);
+        let device = deterministic_cli_device_key(&keys);
+        let cert_id = deterministic_cli_device_cert_id(&device);
+        let first = deterministic_cli_device_certificate(&root, &device, cert_id).unwrap();
+        let second = deterministic_cli_device_certificate(&root, &device, cert_id).unwrap();
+        assert_eq!(
+            deterministic_cbor(&first).unwrap(),
+            deterministic_cbor(&second).unwrap()
+        );
+    }
 }
