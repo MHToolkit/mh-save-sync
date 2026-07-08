@@ -139,7 +139,7 @@ Command:
 Local ADB evidence:
 
 ```json
-{"android_ui_copy_smoke":true,"device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","required_copy_count":10,"visible_text_sha256":"fd00dc7c086edf5e9ac0d37e814a1276d97918c4ca096803cb029d9ccf2d697a"}
+{"android_ui_copy_smoke":true,"device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","required_copy_count":10,"visible_text_sha256":"807c8aa30c5056df4b7f77a378553b807d7d880595b859beaebde3a2c0b262e0"}
 ```
 
 Evidence scope:
