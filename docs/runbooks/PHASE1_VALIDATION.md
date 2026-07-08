@@ -220,6 +220,33 @@ Boundary:
   adapter path. It does not prove Android Nemessix, Azahar or Citra MMJ can read
   the restored bytes as a real game save.
 
+
+## Runtime evidence preflight audit executed on 2026-07-08
+
+Command:
+
+```bash
+ADB="$HOME/Library/Android/sdk/platform-tools/adb" python3 scripts/runtime-evidence-audit.py
+```
+
+Local output summary:
+
+```json
+{"runtime_evidence_audit":true,"adapter_count":12,"adb_available":true,"android_devices":[{"serial":"emulator-5554","state":"device","package_count":246}]}
+```
+
+Evidence scope:
+
+- The audit loads descriptors from `mh-save adapters`; it does not maintain a separate hand-written adapter list.
+- It found macOS `Nemessix.app`, confirmed the macOS Nemessix root hint exists, and observed that the `Nemessix` process was not running. That is a preflight gate for a stopped macOS runtime verification attempt, not a runtime-verification upgrade.
+- It found no `io.github.vincentadamnemessisx.nemessix`, `org.azahar_emu.azahar`, or `org.citra.emu` packages on the connected AVD `emulator-5554`, so Android Nemessix/Azahar/Citra Runtime Verified evidence is unavailable on the current local Android target.
+- It found no macOS Citra classic or Azahar app bundles in `/Applications` or `~/Applications`.
+- The generated artifact records package/bundle/process identifiers and booleans only; it does not enumerate user save files or plaintext save contents.
+
+Boundary:
+
+- This is availability evidence only. Runtime Verified still requires real emulator save, stable snapshot, controlled mutation/damage, stopped restore and emulator-readable relaunch proof.
+
 ## Offline bundle recovery gate executed on 2026-07-07
 
 Command:

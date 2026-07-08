@@ -79,7 +79,27 @@ A descriptor can be upgraded to `Runtime Verified` only when the evidence bundle
 9. conflict branch proof if another device committed on the same base;
 10. redacted logs proving no recovery phrase, token, plaintext path content or save bytes were emitted.
 
-## 6. MH Save Sync Android client evidence
+
+## 6. Current local runtime preflight audit
+
+Command:
+
+```bash
+ADB="$HOME/Library/Android/sdk/platform-tools/adb" python3 scripts/runtime-evidence-audit.py
+```
+
+Latest local run: 2026-07-08T12:55:17Z. The script loads `AdapterDescriptor`s from `mh-save adapters`, checks attached ADB devices for required Android package IDs, checks macOS app bundle IDs under `/Applications` and `~/Applications`, checks macOS process names, and writes identifier/boolean-only evidence to `artifacts/runtime/runtime_evidence_audit.json`. It does not enumerate save files or save bytes.
+
+Observed result on this host:
+
+- macOS Nemessix: `Nemessix.app` found, `~/Library/Application Support/Nemessix` exists, and no `Nemessix` process is currently running. This means a real macOS stopped-emulator verification can be started, but it is not by itself Runtime Verified.
+- Android connected device: AVD `emulator-5554` (`sdk_gphone64_arm64`) is attached, but required packages `io.github.vincentadamnemessisx.nemessix`, `org.azahar_emu.azahar`, and `org.citra.emu` are not installed. Android Nemessix/Azahar/Citra Runtime Verified evidence cannot be produced from this current ADB target.
+- Citra classic macOS and Azahar macOS app bundles are not present in audited app roots, so they remain Experimental on this host.
+- PPSSPP, Dolphin, PCSX2/NetherSX2 and Switch-family entries remain descriptor contracts only.
+
+Adoption decision: keep the support levels conservative. The audit can open or close the gate for real runtime verification, but only the full checklist in section 5 can upgrade a descriptor to `Runtime Verified`.
+
+## 7. MH Save Sync Android client evidence
 
 This section validates the save-sync Android shell, not emulator runtime
 compatibility.

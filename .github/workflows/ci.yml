@@ -54,6 +54,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 8
+        continue-on-error: true
       - run: cargo fmt --all -- --check
       - name: Audit dependencies, enforce deny policy and generate SBOM
         env:
