@@ -93,6 +93,20 @@ class MainActivity : ComponentActivity() {
                 ).orEmpty()
             )
         }
+        var syncPhase by remember {
+            mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_PHASE, "暂无后台任务").orEmpty())
+        }
+        var nextAction by remember {
+            mutableStateOf(
+                preferences.getString(
+                    SyncScheduler.LAST_SYNC_NEXT_ACTION,
+                    "先填写服务器地址并授权存档目录，然后做启动前检查。",
+                ).orEmpty()
+            )
+        }
+        var syncError by remember {
+            mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty())
+        }
         var launchGate by remember {
             mutableStateOf(
                 preferences.getString(
@@ -312,6 +326,9 @@ class MainActivity : ComponentActivity() {
                             onClick = {
                                 SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
                                 lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
+                                syncPhase = SyncMessages.queuedPhase("download-cache-only")
+                                nextAction = SyncMessages.queuedNextAction("download-cache-only", sessionActive)
+                                syncError = ""
                                 preferences.edit()
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, "download-cache-only")
@@ -326,16 +343,28 @@ class MainActivity : ComponentActivity() {
                             onClick = {
                                 if (sessionActive) {
                                     lastSummary = SyncMessages.restoreBlockedRunning()
+                                    syncPhase = SyncMessages.completedPhase("restore-blocked-running")
+                                    nextAction = SyncMessages.completedNextAction("restore-blocked-running", sessionActive)
+                                    syncError = "Nemessix 仍在运行"
                                     preferences.edit()
                                         .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                         .putString(SyncScheduler.LAST_SYNC_REASON, "restore-blocked-running")
+                                        .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                        .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                        .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                         .apply()
                                 } else {
                                     SyncScheduler.enqueueImmediate(this@MainActivity, "restore-cloud-head")
                                     lastSummary = SyncMessages.restoreCloudHeadQueued(serverEndpoint)
+                                    syncPhase = SyncMessages.queuedPhase("restore-cloud-head")
+                                    nextAction = SyncMessages.queuedNextAction("restore-cloud-head", sessionActive)
+                                    syncError = ""
                                     preferences.edit()
                                         .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                         .putString(SyncScheduler.LAST_SYNC_REASON, "restore-cloud-head")
+                                        .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                        .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                        .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                         .apply()
                                 }
                             },
@@ -382,10 +411,16 @@ class MainActivity : ComponentActivity() {
                                     "MH3G / Android Nemessix",
                                     serverEndpoint,
                                 )
+                                syncPhase = SyncMessages.queuedPhase("manual-upload")
+                                nextAction = SyncMessages.queuedNextAction("manual-upload", sessionActive)
+                                syncError = ""
                             }
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                 .putString(SyncScheduler.LAST_SYNC_REASON, "manual-upload")
+                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -400,10 +435,16 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
                                 lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
+                                syncPhase = SyncMessages.queuedPhase("download-cache-only")
+                                nextAction = SyncMessages.queuedNextAction("download-cache-only", sessionActive)
+                                syncError = ""
                             }
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                 .putString(SyncScheduler.LAST_SYNC_REASON, "download-cache-only")
+                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -422,10 +463,16 @@ class MainActivity : ComponentActivity() {
                                     serverEndpoint = serverEndpoint,
                                     sessionActive = sessionActive,
                                 )
+                                syncPhase = SyncMessages.queuedPhase("user-use-local")
+                                nextAction = SyncMessages.queuedNextAction("user-use-local", sessionActive)
+                                syncError = ""
                             }
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                 .putString(SyncScheduler.LAST_SYNC_REASON, "user-use-local")
+                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -441,9 +488,15 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 lastSummary = SyncMessages.cloudActionNeedsServer()
+                                syncPhase = "需要服务器地址"
+                                nextAction = "请先填写服务器地址，再执行云端覆盖本地。"
+                                syncError = "未配置服务器"
                                 preferences.edit()
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, "restore-no-server")
+                                    .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                    .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                    .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                     .apply()
                             } else if (sessionActive) {
                                 lastSummary = SyncMessages.restoreBlockedRunning()
@@ -477,6 +530,10 @@ class MainActivity : ComponentActivity() {
                                 )
                                 lastSummary = SyncMessages.sessionStartSummary()
                             }
+                            val oldSessionActive = sessionActive
+                            syncPhase = if (oldSessionActive) SyncMessages.queuedPhase("session-exit") else "游戏运行保护中"
+                            nextAction = if (oldSessionActive) SyncMessages.queuedNextAction("session-exit", false) else "游玩期间不会把云端覆盖到本地；退出后再对账上传。"
+                            syncError = ""
                             sessionActive = !sessionActive
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
@@ -485,6 +542,9 @@ class MainActivity : ComponentActivity() {
                                     if (sessionActive) "session-start" else "session-exit",
                                 )
                                 .putBoolean(SyncScheduler.SESSION_ACTIVE, sessionActive)
+                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -495,6 +555,11 @@ class MainActivity : ComponentActivity() {
 
                 CardSection("最近状态") {
                     StatusLine("最近同步", lastSummary)
+                    StatusLine("当前后台任务", syncPhase)
+                    StatusLine("下一步动作", nextAction)
+                    if (syncError.isNotBlank()) {
+                        StatusLine("最近失败原因", syncError)
+                    }
                     StatusLine(
                         "最近时间",
                         formatTime(preferences.getLong(SyncScheduler.LAST_SYNC_UNIX_MS, 0L)),

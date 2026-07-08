@@ -204,6 +204,18 @@ class SyncMessagesTest {
     }
 
     @Test
+    fun backgroundStatusCopyExplainsQueueAndNextAction() {
+        val phase = SyncMessages.queuedPhase("manual-upload")
+        val next = SyncMessages.queuedNextAction("manual-upload", sessionActive = false)
+        val blocked = SyncMessages.completedNextAction("restore-blocked-running", sessionActive = true)
+
+        assertTrue(phase.contains("上传"))
+        assertTrue(next.contains("等待存档稳定"))
+        assertTrue(next.contains("加密上传到服务器"))
+        assertTrue(blocked.contains("退出 MH3G"))
+    }
+
+    @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID

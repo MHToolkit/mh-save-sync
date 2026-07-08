@@ -18,6 +18,9 @@ object SyncScheduler {
     const val LAST_SYNC_SUMMARY = "last_sync_summary"
     const val LAST_SYNC_TARGET = "last_sync_target"
     const val LAST_SYNC_REASON = "last_sync_reason"
+    const val LAST_SYNC_PHASE = "last_sync_phase"
+    const val LAST_SYNC_NEXT_ACTION = "last_sync_next_action"
+    const val LAST_SYNC_ERROR = "last_sync_error"
     const val LAST_SYNC_UNIX_MS = "last_sync_unix_ms"
     const val REMOTE_VERSION_LABEL = "remote_version_label"
     const val LAUNCH_GATE_SUMMARY = "launch_gate_summary"
@@ -33,12 +36,17 @@ object SyncScheduler {
             "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。"
         val defaultLaunchGateSummary =
             "未检查。启动 MH3G 前点「启动前检查」。"
+        val defaultPhase = "暂无后台任务"
+        val defaultNextAction = "先填写服务器地址并授权存档目录，然后做启动前检查。"
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
                 .putBoolean(SESSION_ACTIVE, true)
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
                 .putString(LAST_SYNC_SUMMARY, defaultLastSyncSummary)
+                .putString(LAST_SYNC_PHASE, defaultPhase)
+                .putString(LAST_SYNC_NEXT_ACTION, defaultNextAction)
+                .putString(LAST_SYNC_ERROR, "")
                 .putString(LAUNCH_GATE_SUMMARY, defaultLaunchGateSummary)
                 .putString(LAUNCH_GATE_REASON, "not-checked")
                 .apply()

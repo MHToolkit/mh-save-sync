@@ -10,6 +10,19 @@ object SyncMessages {
         "SAF",
         "staging",
         "manifest/hash",
+        "hash",
+        "parent",
+        "DAG",
+        "fast-forward",
+        "conflict",
+        "device",
+        "dirty",
+        "watcher",
+        "FileObserver",
+        "FSEvents",
+        "atomic replace",
+        "unknown",
+        "fail closed",
         legacyTerm(0x9501, 0x5b9a),
         legacyTerm(0x6807, 0x8bb0, 0x4f1a, 0x8bdd),
         legacyTerm(0x540c, 0x6b65, 0x4f1a, 0x8bdd),
@@ -60,6 +73,63 @@ object SyncMessages {
             else -> "已执行对账：原因=$reason；同步目标=$target；不会静默覆盖本地或云端。"
         }
     }
+
+
+    fun queuedPhase(reason: String): String =
+        when (reason) {
+            "manual-upload" -> "上传排队中"
+            "download-cache-only" -> "下载排队中"
+            "restore-cloud-head" -> "恢复排队中"
+            "user-use-local" -> "本地替换云端待处理"
+            "session-exit" -> "退出后对账排队中"
+            else -> "后台对账排队中"
+        }
+
+    fun queuedNextAction(reason: String, sessionActive: Boolean): String =
+        when (reason) {
+            "manual-upload" -> "等待存档稳定；通过校验后会加密上传到服务器。"
+            "download-cache-only" -> "只下载到本机缓存；不会覆盖 Nemessix 原目录。"
+            "restore-cloud-head" -> if (sessionActive) {
+                "请先退出 MH3G；运行中不会覆盖本地存档。"
+            } else {
+                "执行前会再次确认 Nemessix 已停止，并先备份当前本地存档。"
+            }
+            "user-use-local" -> if (sessionActive) {
+                "已记录选择；退出并通过稳定校验后才会上传本地版本。"
+            } else {
+                "等待稳定校验；云端旧版本会保留为历史/冲突分支。"
+            }
+            "session-exit" -> "正在准备退出后对账；有稳定新快照才会上传。"
+            else -> "后台会按安全规则检查变化；不会静默覆盖任何一边。"
+        }
+
+    fun completedPhase(reason: String): String =
+        when (reason) {
+            "manual-upload" -> "上传流程已处理"
+            "download-cache-only" -> "下载流程已处理"
+            "restore-cloud-head" -> "恢复流程已处理"
+            "restore-blocked-running" -> "恢复已拒绝"
+            "user-use-local" -> "本地替换云端已处理"
+            "periodic" -> "兜底对账已处理"
+            "session-exit" -> "退出后对账已处理"
+            else -> "后台对账已处理"
+        }
+
+    fun completedNextAction(reason: String, sessionActive: Boolean): String =
+        when (reason) {
+            "manual-upload" -> "如果上传失败，队列会保留；下次云端可用时继续补传。"
+            "download-cache-only" -> "需要恢复时，请确认 Nemessix 已停止后再点云端覆盖本地。"
+            "restore-cloud-head" -> "请启动 Nemessix 检查游戏能否读取恢复后的存档。"
+            "restore-blocked-running" -> "请先退出 MH3G，再执行云端覆盖本地。"
+            "user-use-local" -> if (sessionActive) {
+                "继续游玩即可；退出后再上传稳定快照。"
+            } else {
+                "请确认另一台设备是否也有修改；有冲突时继续保留两边历史。"
+            }
+            "periodic" -> "无需操作；有变化才会继续排队处理。"
+            "session-exit" -> "保持网络可用；后台会上传稳定快照。"
+            else -> "查看最近同步说明；必要时手动重试。"
+        }
 
     fun manualUploadQueued(target: String, serverEndpoint: String): String =
         "已排队：同步到服务器。同步方向是 $target → 本机安全缓存 → ${serverLabel(serverEndpoint)}；后台会先等待存档稳定、复制并校验，再端到端加密上传。"
