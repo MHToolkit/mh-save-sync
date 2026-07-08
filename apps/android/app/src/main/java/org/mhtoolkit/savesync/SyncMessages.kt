@@ -37,5 +37,27 @@ object SyncMessages {
         "已排队：恢复云端 HEAD 到本地。服务器=${serverLabel(serverEndpoint)}；执行前必须确认 Nemessix 已停止，并先备份当前本地存档。"
 
     fun restoreBlockedRunning(): String =
-        "已拒绝恢复：Nemessix 仍在运行，没有覆盖本地存档。请先标记会话结束或退出模拟器。"
+        "已拒绝恢复：Nemessix 仍在运行，没有覆盖本地存档。请先点击“我已退出 MH3G”或退出模拟器，再执行云端覆盖本地。"
+
+    fun sessionStartSummary(): String =
+        "我正在玩 MH3G：已开启本地存档保护。运行中只允许上传已验证稳定快照，禁止云端覆盖本地目录。"
+
+    fun sessionExitSummary(): String =
+        "我已退出 MH3G：退出后对账已排队。若本地有稳定新快照，会加密上传到服务器。"
+
+    fun activeSessionToggleLabel(sessionActive: Boolean): String =
+        if (sessionActive) {
+            "我已退出 MH3G（开始对账上传）"
+        } else {
+            "我正在玩 MH3G（保护本地存档）"
+        }
+
+    fun activeSessionChannelName(): String =
+        "Nemessix 游戏运行保护"
+
+    fun activeSessionNotificationTitle(): String =
+        "MH 云存档：游戏运行保护中"
+
+    fun activeSessionNotificationText(): String =
+        "正在玩 MH3G：禁止云端覆盖本地；退出后再对账上传稳定快照"
 }

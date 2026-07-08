@@ -28,12 +28,14 @@ actual target instead of pressing an opaque “sync” button:
    - Android: enter the server address in the app.
    - Current isolated Alpha test API: `http://8.130.112.207:39082`
      (server API only; MinIO/admin ports are not client endpoints).
-2. macOS Nemessix before launch: run
+2. macOS Nemessix before launch: install the local menu-bar app once with
+   `./scripts/install-macos-app.sh`, then open `/Applications/MH Save Sync.app`.
+   Use the menu item `设置服务器地址…` once, then `启动前检查` before MH3G. For
+   CI/debugging you can still run
    `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
-   start the menu-bar shell with `--app`. For a double-clickable local app,
-   run `./scripts/build-macos-app-bundle.sh` and open
-   `artifacts/macos/MH Save Sync.app`. The gate explains remote-newer, conflict
-   and cloud-unavailable choices before the game starts.
+   build the artifact-only bundle with `./scripts/build-macos-app-bundle.sh`.
+   The gate explains remote-newer, conflict and cloud-unavailable choices before
+   the game starts.
 3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
    keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android also
    probes the configured server `/ready` plus the MH3G cloud HEAD, shows
@@ -99,8 +101,25 @@ cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-s
 swift run --package-path apps/macos MHSaveSyncMac
 swift run --package-path apps/macos MHSaveSyncMac --set-server-url http://127.0.0.1:18080
 ./scripts/build-macos-app-bundle.sh
+MH_SAVE_SYNC_INSTALL_DIR="$PWD/artifacts/local-apps" ./scripts/install-macos-app.sh
 ./scripts/macos-shell-e2e.sh
 ./scripts/macos-config-e2e.sh
+./scripts/macos-install-e2e.sh
+```
+
+To install the macOS Alpha app for normal double-click usage on this Mac:
+
+```bash
+./scripts/install-macos-app.sh
+open -a "/Applications/MH Save Sync.app"
+```
+
+The app menu can set the server directly. The CLI path below writes the same
+persisted config if you prefer scripting:
+
+```bash
+"/Applications/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac" \
+  --set-server-url http://8.130.112.207:39082
 ```
 
 macOS shell can call the same Rust CLI pipeline used by Android/CLI demos:

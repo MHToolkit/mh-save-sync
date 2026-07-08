@@ -22,6 +22,7 @@ scripts/offline-bundle-e2e.sh                                   PASS: export bun
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
+scripts/macos-install-e2e.sh                                    PASS: local .app install path and persisted server URL
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
@@ -262,8 +263,9 @@ Sample local output:
 
 This proves the macOS SwiftPM shell can invoke the shared Rust `mh-save` CLI for
 server upload, server status and stopped-emulator restore while preserving the
-running-emulator fail-closed guard. It is still a SwiftPM/menu-bar alpha shell,
-not a signed `.app` installer or LaunchAgent deployment.
+running-emulator fail-closed guard. It is still an unsigned Alpha shell; the
+local `.app` install path is covered separately below and does not yet claim
+notarization or LaunchAgent deployment.
 
 ## UX correction gates executed on 2026-07-07
 
@@ -276,6 +278,7 @@ Android assembleDebug testDebugUnitTest lintDebug               PASS
 swift build --package-path apps/macos                           PASS
 scripts/build-macos-app-bundle.sh                               PASS: generated local double-clickable .app bundle
 scripts/macos-config-e2e.sh                                      PASS: persisted server URL under Application Support
+scripts/macos-install-e2e.sh                                     PASS: installed app copy reads persisted server URL
 swift run --package-path apps/macos MHSaveSyncMac --status      PASS
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check PASS
 swift run --package-path apps/macos MHSaveSyncMac --conflict-demo PASS
@@ -302,11 +305,17 @@ UX correction scope:
 - Android foreground notification now states that running sessions are game
   protection sessions: they forbid cloud overwrite and reconcile only after
   exit.
+- Android active-session button copy now uses player language
+  `我正在玩 MH3G（保护本地存档）` / `我已退出 MH3G（开始对账上传）`
+  instead of internal lock/session jargon; `SyncMessagesTest` asserts these
+  strings, the running-restore refusal and the Android notification channel do
+  not regress to `锁定`, `标记会话` or `同步会话`.
 - macOS SwiftPM smoke keeps CI-friendly CLI mode, adds `--app` menu-bar shell
-  with status, pre-launch check, conflict and cloud-unavailable actions, and
-  `scripts/build-macos-app-bundle.sh` builds a local
-  `artifacts/macos/MH Save Sync.app` with `LSUIElement` menu-bar behavior for
-  double-click testing.
+  with in-app server URL setting, status, pre-launch check, conflict and
+  cloud-unavailable actions.
+  `scripts/build-macos-app-bundle.sh` builds the local
+  `artifacts/macos/MH Save Sync.app`, while `scripts/install-macos-app.sh`
+  copies it into an Applications-style directory for normal double-click use.
 - macOS now supports `--set-server-url <url>`, persisted at
   `~/Library/Application Support/MH Save Sync/config.json`. The menu-bar app
   and CLI status/pre-launch paths read this config when `MH_SAVE_SYNC_SERVER_URL`
@@ -323,13 +332,13 @@ Artifact hashes from this correction:
 
 ```text
 Android debug APK:
-47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
+a87004d3edb1892a469bb8036dccd503c2d201a767f1caf68253a78db793c9ea  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
-02be36d5a1e8a5334f2e876492a547e881fd7b6c608a65aa00fab78fb51f0f95  apps/macos/.build/debug/MHSaveSyncMac
+7eb3ae13c543b5171e22cddbf5acffd1891795f1ed7c078aa8ddb5c782f02e48  apps/macos/.build/debug/MHSaveSyncMac
 
 macOS local app executable:
-02be36d5a1e8a5334f2e876492a547e881fd7b6c608a65aa00fab78fb51f0f95  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
+7eb3ae13c543b5171e22cddbf5acffd1891795f1ed7c078aa8ddb5c782f02e48  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
 ```
 
 ## Automation trigger policy gate executed on 2026-07-08
@@ -375,6 +384,51 @@ persisted server URL without `MH_SAVE_SYNC_SERVER_URL`, and inspects the JSON
 config file for `server_url`. It proves the local `.app` can show the same
 sync destination after double-click launch instead of depending only on a shell
 environment variable.
+
+## macOS local app install gate executed on 2026-07-08
+
+Command:
+
+```bash
+./scripts/macos-install-e2e.sh
+```
+
+Output:
+
+```json
+{"install_dir":"/tmp/.../Applications","installed_app":"/tmp/.../Applications/MH Save Sync.app","macos_install_e2e":true,"server_url_persisted":"http://127.0.0.1:39082"}
+```
+
+This proves the macOS app is not only an artifact under `artifacts/`:
+`scripts/install-macos-app.sh` builds the menu-bar `.app`, copies it into an
+Applications-style directory, validates `Info.plist`, runs the installed
+executable, and confirms `--set-server-url` persists the same server destination
+used by status and pre-launch checks. Source inspection confirms the menu-bar
+`设置服务器地址…` action calls the same `persistServerURL` helper; this is a
+source-level check, not a GUI automation claim. The default manual install
+target is `/Applications/MH Save Sync.app`; automated verification uses
+`MH_SAVE_SYNC_INSTALL_DIR` with a temporary directory so it does not mutate the
+host app folder. The install e2e also rejects unsafe install dirs and invalid
+app bundle names before any `rm -rf` destination cleanup.
+
+Host install evidence on this Mac:
+
+```json
+{"macos_app_installed":true,"path":"/Applications/MH Save Sync.app","display_name":"MH 云存档","launch":"open -a '/Applications/MH Save Sync.app'"}
+```
+
+The installed app was configured to the public Alpha API and verified with:
+
+```text
+/Applications/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac --status
+同步到服务器：http://8.130.112.207:39082
+```
+
+Public API readiness at capture time:
+
+```json
+{"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+```
 
 
 ## Android restore UX message gate executed on 2026-07-07
@@ -530,10 +584,10 @@ Rust debug binaries:
 3065dd98b545347d3b3446742642299b3703eb3a45789e8116ae9daedd60d3a8  target/debug/mh-save-server
 
 CycloneDX SBOM:
-d8b04710d639efbccfb1701771e361760c07c3a12fd00167b8a5fefdef2e41a6  artifacts/sbom/mh-save-sync.cdx.json
+6a18f97b6c9a2e5040da02081e4d7403b2e20b13cb13b4fe43dfc2fbed75517b  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
-47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
+a87004d3edb1892a469bb8036dccd503c2d201a767f1caf68253a78db793c9ea  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 Rust client cdylib:
 0f28c63cea7d46490044b919aa1705cbd8603b5c91c72dc64760d1782cf961f6  target/release/libsave_client.dylib

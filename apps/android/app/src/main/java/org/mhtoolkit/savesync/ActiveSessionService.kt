@@ -14,14 +14,14 @@ class ActiveSessionService : Service() {
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL,
-                "Nemessix 存档同步会话",
+                SyncMessages.activeSessionChannelName(),
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("MH 云存档：游戏运行保护中")
-            .setContentText("运行中禁止云端覆盖本地；退出后再对账上传稳定快照")
+            .setContentTitle(SyncMessages.activeSessionNotificationTitle())
+            .setContentText(SyncMessages.activeSessionNotificationText())
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, notification)

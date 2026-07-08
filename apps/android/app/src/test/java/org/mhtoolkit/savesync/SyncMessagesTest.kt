@@ -62,6 +62,36 @@ class SyncMessagesTest {
     }
 
     @Test
+    fun activeSessionMessagesUsePlayerLanguageNotLockJargon() {
+        val start = SyncMessages.sessionStartSummary()
+        val exit = SyncMessages.sessionExitSummary()
+        val blockedRestore = SyncMessages.restoreBlockedRunning()
+        val buttonStart = SyncMessages.activeSessionToggleLabel(false)
+        val buttonExit = SyncMessages.activeSessionToggleLabel(true)
+        val channel = SyncMessages.activeSessionChannelName()
+        val notificationTitle = SyncMessages.activeSessionNotificationTitle()
+        val notificationText = SyncMessages.activeSessionNotificationText()
+
+        assertTrue(start.contains("我正在玩 MH3G"))
+        assertTrue(start.contains("本地存档保护"))
+        assertTrue(exit.contains("我已退出 MH3G"))
+        assertTrue(exit.contains("对账已排队"))
+        assertTrue(blockedRestore.contains("我已退出 MH3G"))
+        assertTrue(buttonStart == "我正在玩 MH3G（保护本地存档）")
+        assertTrue(buttonExit == "我已退出 MH3G（开始对账上传）")
+        assertTrue(channel.contains("游戏运行保护"))
+        assertTrue(notificationTitle.contains("游戏运行保护"))
+        assertTrue(notificationText.contains("正在玩 MH3G"))
+
+        listOf(start, exit, blockedRestore, buttonStart, buttonExit, channel, notificationTitle, notificationText)
+            .forEach { message ->
+                assertTrue(!message.contains("锁定"))
+                assertTrue(!message.contains("标记会话"))
+                assertTrue(!message.contains("同步会话"))
+            }
+    }
+
+    @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID

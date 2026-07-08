@@ -62,7 +62,8 @@
 ## 当前 Alpha 边界
 
 - Android UI 已改为中文同步工作台，能显示服务器目标、SAF 授权、MH3G 开关、真实 `/ready` + MH3G HEAD 启动前探测、冲突选择、游戏运行保护、恢复云端到本地（需停止 Nemessix）与后台策略。
+- Android 运行保护按钮使用玩家语言：`我正在玩 MH3G（保护本地存档）` / `我已退出 MH3G（开始对账上传）`，避免把内部 session/lock 术语暴露给用户。
 - Android Alpha 允许 `http://IP:port` 自部署地址；端到端加密保护存档内容，生产入口仍应使用 TLS 反向代理后再收紧 cleartext policy。
-- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳与 `./scripts/build-macos-app-bundle.sh` 生成的本地双击 `.app`；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名、LaunchAgent 和 Finder 安装包仍是后续交付项。
+- macOS SwiftPM 入口保留 CI CLI，同时提供 `--app` 菜单栏壳、菜单内 `设置服务器地址…`、`./scripts/build-macos-app-bundle.sh` 生成的本地双击 `.app`，以及 `./scripts/install-macos-app.sh` 安装到 `/Applications/MH Save Sync.app` 的本机 Alpha 路径；`--server-upload` / `--server-status` / `--server-restore` 已能调用同一 Rust CLI 管线展示服务器、HEAD、冲突/恢复结果。正式签名、LaunchAgent 和 Finder 安装包仍是后续交付项。
 - CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。

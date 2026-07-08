@@ -69,7 +69,7 @@ func loadContext() -> MacSyncContext {
     )
 }
 
-func saveServerURL(_ raw: String) throws {
+func persistServerURL(_ raw: String) throws -> String {
     guard let serverURL = normalizedServerURL(raw) else {
         throw CommandFailure(command: ["MHSaveSyncMac", "--set-server-url"], status: 2, stderr: "服务器地址不能为空。\n")
     }
@@ -79,6 +79,11 @@ func saveServerURL(_ raw: String) throws {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(MacConfig(serverURL: serverURL))
     try data.write(to: configFileURL(), options: [.atomic])
+    return serverURL
+}
+
+func saveServerURL(_ raw: String) throws {
+    let serverURL = try persistServerURL(raw)
     print("已保存服务器地址：\(serverURL)")
     print("配置文件：~/Library/Application Support/MH Save Sync/config.json")
     print("Mac 和 Android 请填写同一个服务器地址；服务器只保存端到端加密快照。")
@@ -92,6 +97,7 @@ func printStatus(_ context: MacSyncContext) {
     模拟器：\(context.emulator)
     存档目录提示：\(context.saveRootHint)
     自动化边界：FSEvents 只标记 dirty；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
+    本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；菜单里可直接设置服务器地址。
     常用命令：--set-server-url <url> / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
 }
@@ -253,7 +259,8 @@ func printServerRestore(_ args: [String], context: MacSyncContext) throws {
 @MainActor
 final class MenuController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private let context: MacSyncContext
+    private var serverMenuItem: NSMenuItem?
+    private var context: MacSyncContext
 
     init(context: MacSyncContext) {
         self.context = context
@@ -265,9 +272,12 @@ final class MenuController: NSObject, NSApplicationDelegate {
         item.button?.title = "MH 云存档"
         item.button?.toolTip = "MH 云存档同步 · macOS Alpha"
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "同步到：\(context.serverLabel)", action: nil, keyEquivalent: ""))
+        let serverItem = NSMenuItem(title: "同步到：\(context.serverLabel)", action: nil, keyEquivalent: "")
+        menu.addItem(serverItem)
+        serverMenuItem = serverItem
         menu.addItem(NSMenuItem(title: "对象：\(context.profile)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "设置服务器地址…", action: #selector(promptServerURL), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "启动前检查", action: #selector(showPrelaunch), keyEquivalent: "p"))
         menu.addItem(NSMenuItem(title: "查看冲突处理", action: #selector(showConflict), keyEquivalent: "c"))
         menu.addItem(NSMenuItem(title: "云端不可用策略", action: #selector(showCloudUnavailable), keyEquivalent: "u"))
@@ -276,6 +286,32 @@ final class MenuController: NSObject, NSApplicationDelegate {
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
+    }
+
+    @objc private func promptServerURL() {
+        let alert = NSAlert()
+        alert.messageText = "设置同步服务器地址"
+        alert.informativeText = "Mac 和 Android 必须填写同一个服务器地址。服务器只保存端到端加密快照，不保存恢复密钥或明文存档。"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        input.placeholderString = "例如 http://8.130.112.207:39082"
+        input.stringValue = context.serverURL ?? ""
+        alert.accessoryView = input
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+        do {
+            let saved = try persistServerURL(input.stringValue)
+            context = loadContext()
+            serverMenuItem?.title = "同步到：\(context.serverLabel)"
+            showAlert(
+                title: "服务器地址已保存",
+                message: "当前同步到：\(saved)\nAndroid App 里也填写同一个地址，两个客户端才会同步到同一套云端快照。"
+            )
+        } catch {
+            showAlert(title: "服务器地址无效", message: "\(error)")
+        }
     }
 
     @objc private func showPrelaunch() {
@@ -349,7 +385,7 @@ do {
     } else if args.contains("--cloud-unavailable") {
         printCloudUnavailable()
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n双击 artifacts/macos/MH Save Sync.app 会自动进入菜单栏模式，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
+        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，菜单内可设置服务器地址，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
     } else {
         printStatus(context)
     }

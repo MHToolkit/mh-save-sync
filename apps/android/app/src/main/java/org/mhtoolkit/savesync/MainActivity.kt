@@ -371,13 +371,13 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             if (sessionActive) {
                                 stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
-                                lastSummary = "已标记 Nemessix 会话结束：退出后对账已排队。若本地有稳定新快照，会加密上传到服务器。"
+                                lastSummary = SyncMessages.sessionExitSummary()
                             } else {
                                 ContextCompat.startForegroundService(
                                     this@MainActivity,
                                     Intent(this@MainActivity, ActiveSessionService::class.java),
                                 )
-                                lastSummary = "已标记 Nemessix 会话开始：运行中只允许上传已验证稳定快照，禁止云端覆盖本地目录。"
+                                lastSummary = SyncMessages.sessionStartSummary()
                             }
                             sessionActive = !sessionActive
                             preferences.edit()
@@ -390,7 +390,7 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(if (sessionActive) "标记 Nemessix 会话结束" else "标记 Nemessix 会话开始")
+                        Text(SyncMessages.activeSessionToggleLabel(sessionActive))
                     }
                 }
 
