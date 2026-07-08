@@ -135,14 +135,18 @@ jobs:
           java -version
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v5
-      - name: Build, unit test and lint Android client
-        working-directory: apps/android
-        run: ./gradlew assembleDebug testDebugUnitTest lintDebug
+      - name: Build, unit test, lint and package Android Alpha evidence
+        env:
+          MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha
+          MH_SAVE_SYNC_RUN_ADB_SMOKE: "false"
+        run: ./scripts/android-package-alpha.sh
       - name: Generate Android artifact checksums
         run: |
           mkdir -p artifacts/checksums
           ./scripts/artifact-checksums.sh \
             apps/android/app/build/outputs/apk/debug/app-debug.apk \
+            artifacts/android-alpha/*.apk \
+            artifacts/android-alpha/*.evidence.json \
             > artifacts/checksums/android.sha256
           test -s artifacts/checksums/android.sha256
       - uses: actions/upload-artifact@v5
@@ -150,6 +154,7 @@ jobs:
           name: android-debug-apk
           path: |
             apps/android/app/build/outputs/apk/debug/app-debug.apk
+            artifacts/android-alpha/*
             artifacts/checksums/android.sha256
 
   macos-smoke:
