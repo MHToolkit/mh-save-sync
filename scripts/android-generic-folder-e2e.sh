@@ -9,6 +9,58 @@ blocked() {
   exit 77
 }
 
+retry_cmd() {
+  local attempt=1
+  local max_attempts="${MH_SAVE_SYNC_E2E_RETRIES:-4}"
+  local sleep_seconds
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( attempt >= max_attempts )); then
+      return 1
+    fi
+    sleep_seconds=$(( attempt * 5 ))
+    echo "retrying after transient failure (attempt ${attempt}/${max_attempts}, sleep ${sleep_seconds}s): $*" >&2
+    sleep "$sleep_seconds"
+    attempt=$(( attempt + 1 ))
+  done
+}
+
+expect_running_restore_blocked() {
+  local attempt=1
+  local max_attempts="${MH_SAVE_SYNC_E2E_RETRIES:-4}"
+  local sleep_seconds
+  while true; do
+    rm -rf "$tmp/blocked-running" "$tmp/blocked.json" "$tmp/blocked.err"
+    if cargo run -q -p save-cli --bin mh-save -- server-restore \
+      --server-url "$server_url" \
+      --secret-hex "$secret_hex" \
+      --logical-save-id "$logical_save_id" \
+      --target "$tmp/blocked-running" \
+      --emulator-state running \
+      > "$tmp/blocked.json" 2> "$tmp/blocked.err"; then
+      echo "running Android generic-folder restore unexpectedly succeeded" >&2
+      exit 1
+    fi
+    if grep -q "restore refused while emulator is running" "$tmp/blocked.err"; then
+      if [[ -e "$tmp/blocked-running" ]]; then
+        echo "running restore created target directory" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if (( attempt >= max_attempts )); then
+      cat "$tmp/blocked.err" >&2 || true
+      return 1
+    fi
+    sleep_seconds=$(( attempt * 5 ))
+    echo "retrying running-restore fail-closed check after transient failure (attempt ${attempt}/${max_attempts}, sleep ${sleep_seconds}s)" >&2
+    sleep "$sleep_seconds"
+    attempt=$(( attempt + 1 ))
+  done
+}
+
 server_url="${MH_SAVE_SYNC_SERVER_URL:-}"
 if [[ -z "$server_url" ]]; then
   blocked "set MH_SAVE_SYNC_SERVER_URL to a running mh-save-sync API, for example the isolated Alpha API"
@@ -35,7 +87,7 @@ cleanup() {
 trap cleanup EXIT
 
 ready_json="$tmp/ready.json"
-curl -fsS "$server_url/ready" > "$ready_json"
+retry_cmd curl -fsS "$server_url/ready" > "$ready_json"
 
 device_json="$tmp/device-identity.json"
 cargo run -q -p save-cli --bin mh-save -- crypto-device-fixture > "$device_json"
@@ -43,6 +95,8 @@ cargo run -q -p save-cli --bin mh-save -- crypto-device-fixture > "$device_json"
 python3 - "$server_url" "$device_json" <<'PY'
 import json
 import sys
+import http.client
+import time
 import urllib.error
 import urllib.request
 
@@ -51,19 +105,30 @@ identity = json.load(open(device_path, encoding="utf-8"))
 
 def post(path, payload, expected):
     data = json.dumps(payload, separators=(",", ":")).encode()
-    request = urllib.request.Request(
-        server_url + path,
-        data=data,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            body = response.read()
-            status = response.status
-    except urllib.error.HTTPError as error:
-        body = error.read()
-        status = error.code
+    last_error = None
+    for attempt in range(1, 5):
+        request = urllib.request.Request(
+            server_url + path,
+            data=data,
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                body = response.read()
+                status = response.status
+        except urllib.error.HTTPError as error:
+            body = error.read()
+            status = error.code
+        except (urllib.error.URLError, http.client.RemoteDisconnected, ConnectionError) as error:
+            last_error = error
+            if attempt == 4:
+                raise
+            time.sleep(attempt * 5)
+            continue
+        break
+    else:
+        raise last_error
     if status not in expected:
         raise SystemExit(
             f"POST {path}: expected {expected}, got {status}: "
@@ -121,7 +186,7 @@ printf 'macos-generic-folder-head-v1\n' > "$mac_dir/slot1/main.bin"
 "$adb" shell "printf 'android-generic-folder-divergent-branch\n' > '$android_root/source/slot1/main.bin'"
 "$adb" pull "$android_root/source/." "$android_pull" >/dev/null
 
-cargo run -q -p save-cli --bin mh-save -- server-upload \
+retry_cmd cargo run -q -p save-cli --bin mh-save -- server-upload \
   --server-url "$server_url" \
   --root "$mac_dir" \
   --secret-hex "$secret_hex" \
@@ -131,7 +196,7 @@ cargo run -q -p save-cli --bin mh-save -- server-upload \
   --device-cert-id "$device_cert_id" \
   > "$tmp/macos-upload.json"
 
-cargo run -q -p save-cli --bin mh-save -- server-upload \
+retry_cmd cargo run -q -p save-cli --bin mh-save -- server-upload \
   --server-url "$server_url" \
   --root "$android_pull" \
   --secret-hex "$secret_hex" \
@@ -141,13 +206,13 @@ cargo run -q -p save-cli --bin mh-save -- server-upload \
   --device-cert-id "$device_cert_id" \
   > "$tmp/android-conflict.json"
 
-cargo run -q -p save-cli --bin mh-save -- server-status \
+retry_cmd cargo run -q -p save-cli --bin mh-save -- server-status \
   --server-url "$server_url" \
   --secret-hex "$secret_hex" \
   --logical-save-id "$logical_save_id" \
   > "$tmp/status.json"
 
-cargo run -q -p save-cli --bin mh-save -- server-restore \
+retry_cmd cargo run -q -p save-cli --bin mh-save -- server-restore \
   --server-url "$server_url" \
   --secret-hex "$secret_hex" \
   --logical-save-id "$logical_save_id" \
@@ -155,21 +220,7 @@ cargo run -q -p save-cli --bin mh-save -- server-restore \
   --emulator-state stopped \
   > "$tmp/restore.json"
 
-if cargo run -q -p save-cli --bin mh-save -- server-restore \
-  --server-url "$server_url" \
-  --secret-hex "$secret_hex" \
-  --logical-save-id "$logical_save_id" \
-  --target "$tmp/blocked-running" \
-  --emulator-state running \
-  > "$tmp/blocked.json" 2> "$tmp/blocked.err"; then
-  echo "running Android generic-folder restore unexpectedly succeeded" >&2
-  exit 1
-fi
-grep -q "restore refused while emulator is running" "$tmp/blocked.err"
-if [[ -e "$tmp/blocked-running" ]]; then
-  echo "running restore created target directory" >&2
-  exit 1
-fi
+expect_running_restore_blocked
 
 "$adb" shell rm -rf "$android_root/restored-head"
 "$adb" shell mkdir -p "$android_root/restored-head"

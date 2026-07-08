@@ -513,7 +513,7 @@ Boundary:
   protected by application-layer E2EE; production deployment should use a TLS
   reverse proxy and can later tighten cleartext policy.
 
-## Android Generic Folder shared-storage E2E executed on 2026-07-07
+## Android Generic Folder shared-storage E2E executed on 2026-07-08
 
 Command:
 
@@ -525,7 +525,7 @@ MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 \
 Output:
 
 ```json
-{"adb_device":"emulator-5554","android_conflict_snapshot":"52d20b762989d01e10ea2a61a07fe77d518c80f12789da1fd3d4e502e2afd5ff","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"f304d1a50711a7306d4a28ab41307ee221b967b1c40442ba8b2af0cf6b6bf77d","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783427004776726000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"f304d1a50711a7306d4a28ab41307ee221b967b1c40442ba8b2af0cf6b6bf77d","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
+{"adb_device":"emulator-5554","android_conflict_snapshot":"727e1eeafe3cdf6a0eadf91f8a36877c6d4ac4e17e302fe430495cfc1578cfd2","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"95eb40f1ccb8f5faa2af9c558c6bdfce804f99d6543474d0356bc2c3c5b74364","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783478744582274000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"95eb40f1ccb8f5faa2af9c558c6bdfce804f99d6543474d0356bc2c3c5b74364","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
 ```
 
 What this proves:
@@ -541,6 +541,9 @@ What this proves:
   sha256 was `d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268`.
 - Running-emulator restore still failed closed and did not create the blocked
   target directory.
+- The public Alpha API occasionally returned empty/closed connections during this
+  run; the script now uses bounded, low-frequency retries for `/ready`,
+  bootstrap/register and CLI server operations instead of high-frequency polling.
 
 Boundary:
 
