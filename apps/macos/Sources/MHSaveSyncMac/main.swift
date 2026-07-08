@@ -1,6 +1,14 @@
 import AppKit
 import Foundation
 
+struct MacConfig: Codable {
+    var serverURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case serverURL = "server_url"
+    }
+}
+
 struct MacSyncContext {
     let serverURL: String?
     let profile: String
@@ -15,12 +23,66 @@ struct MacSyncContext {
     }
 }
 
-let context = MacSyncContext(
-    serverURL: ProcessInfo.processInfo.environment["MH_SAVE_SYNC_SERVER_URL"],
-    profile: "MH3G / macOS Nemessix",
-    emulator: "Nemessix",
-    saveRootHint: "~/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/.../data/00000001/"
-)
+func configDirectory() -> URL {
+    let home = ProcessInfo.processInfo.environment["HOME"]
+        .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? FileManager.default.homeDirectoryForCurrentUser
+    return home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("MH Save Sync", isDirectory: true)
+}
+
+func configFileURL() -> URL {
+    configDirectory().appendingPathComponent("config.json")
+}
+
+func loadConfig() -> MacConfig {
+    let url = configFileURL()
+    guard let data = try? Data(contentsOf: url) else {
+        return MacConfig(serverURL: nil)
+    }
+    return (try? JSONDecoder().decode(MacConfig.self, from: data)) ?? MacConfig(serverURL: nil)
+}
+
+func normalizedServerURL(_ raw: String?) -> String? {
+    var trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    while trimmed.count > 1 && trimmed.hasSuffix("/") {
+        trimmed.removeLast()
+    }
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+func configuredServerURL() -> String? {
+    if let envURL = normalizedServerURL(ProcessInfo.processInfo.environment["MH_SAVE_SYNC_SERVER_URL"]) {
+        return envURL
+    }
+    return normalizedServerURL(loadConfig().serverURL)
+}
+
+func loadContext() -> MacSyncContext {
+    MacSyncContext(
+        serverURL: configuredServerURL(),
+        profile: "MH3G / macOS Nemessix",
+        emulator: "Nemessix",
+        saveRootHint: "~/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/.../data/00000001/"
+    )
+}
+
+func saveServerURL(_ raw: String) throws {
+    guard let serverURL = normalizedServerURL(raw) else {
+        throw CommandFailure(command: ["MHSaveSyncMac", "--set-server-url"], status: 2, stderr: "服务器地址不能为空。\n")
+    }
+    let dir = configDirectory()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(MacConfig(serverURL: serverURL))
+    try data.write(to: configFileURL(), options: [.atomic])
+    print("已保存服务器地址：\(serverURL)")
+    print("配置文件：~/Library/Application Support/MH Save Sync/config.json")
+    print("Mac 和 Android 请填写同一个服务器地址；服务器只保存端到端加密快照。")
+}
 
 func printStatus(_ context: MacSyncContext) {
     print("""
@@ -30,7 +92,7 @@ func printStatus(_ context: MacSyncContext) {
     模拟器：\(context.emulator)
     存档目录提示：\(context.saveRootHint)
     自动化边界：FSEvents 只标记 dirty；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
-    常用命令：--prelaunch-check / --server-upload / --server-status / --server-restore / --app
+    常用命令：--set-server-url <url> / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
 }
 
@@ -112,7 +174,7 @@ func serverURLOrThrow(_ context: MacSyncContext) throws -> String {
         throw CommandFailure(
             command: ["MHSaveSyncMac"],
             status: 2,
-            stderr: "未配置服务器地址：请设置 MH_SAVE_SYNC_SERVER_URL。\n"
+            stderr: "未配置服务器地址：请设置 MH_SAVE_SYNC_SERVER_URL，或运行 --set-server-url <url>。\n"
         )
     }
     return serverURL
@@ -191,6 +253,11 @@ func printServerRestore(_ args: [String], context: MacSyncContext) throws {
 @MainActor
 final class MenuController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private let context: MacSyncContext
+
+    init(context: MacSyncContext) {
+        self.context = context
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -254,18 +321,21 @@ final class MenuController: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-func runMenuBarApp() {
-    let delegate = MenuController()
+func runMenuBarApp(context: MacSyncContext) {
+    let delegate = MenuController(context: context)
     NSApplication.shared.delegate = delegate
     NSApplication.shared.run()
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
 do {
+    let context = loadContext()
     let launchedFromAppBundle =
         args.isEmpty && Bundle.main.bundlePath.hasSuffix(".app")
-    if args.contains("--app") || launchedFromAppBundle {
-        runMenuBarApp()
+    if args.contains("--set-server-url") {
+        try saveServerURL(try requireOption("--set-server-url", in: args))
+    } else if args.contains("--app") || launchedFromAppBundle {
+        runMenuBarApp(context: context)
     } else if args.contains("--server-upload") {
         try printServerUpload(args, context: context)
     } else if args.contains("--server-status") {
@@ -279,7 +349,7 @@ do {
     } else if args.contains("--cloud-unavailable") {
         printCloudUnavailable()
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n双击 artifacts/macos/MH Save Sync.app 会自动进入菜单栏模式。")
+        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--prelaunch-check] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n双击 artifacts/macos/MH Save Sync.app 会自动进入菜单栏模式，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
     } else {
         printStatus(context)
     }

@@ -22,7 +22,9 @@ Phase 1 alpha now uses a Chinese-first sync workbench so the user can see the
 actual target instead of pressing an opaque “sync” button:
 
 1. Run or self-host the server and use the same URL on both devices.
-   - macOS: set `MH_SAVE_SYNC_SERVER_URL`.
+   - macOS: run
+     `swift run --package-path apps/macos MHSaveSyncMac --set-server-url <url>`
+     once, or set `MH_SAVE_SYNC_SERVER_URL` for one-off CLI sessions.
    - Android: enter the server address in the app.
    - Current isolated Alpha test API: `http://8.130.112.207:39082`
      (server API only; MinIO/admin ports are not client endpoints).
@@ -94,8 +96,10 @@ cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-s
 ./scripts/offline-bundle-e2e.sh
 ./scripts/supply-chain-gate.sh
 swift run --package-path apps/macos MHSaveSyncMac
+swift run --package-path apps/macos MHSaveSyncMac --set-server-url http://127.0.0.1:18080
 ./scripts/build-macos-app-bundle.sh
 ./scripts/macos-shell-e2e.sh
+./scripts/macos-config-e2e.sh
 ```
 
 macOS shell can call the same Rust CLI pipeline used by Android/CLI demos:
@@ -103,6 +107,8 @@ macOS shell can call the same Rust CLI pipeline used by Android/CLI demos:
 ```bash
 export MH_SAVE_SYNC_SERVER_URL=http://127.0.0.1:18080
 export MH_SAVE_SYNC_CLI="$PWD/target/debug/mh-save"
+
+swift run --package-path apps/macos MHSaveSyncMac --set-server-url "$MH_SAVE_SYNC_SERVER_URL"
 
 swift run --package-path apps/macos MHSaveSyncMac --server-upload \
   --root tests/fixtures/generic-save \

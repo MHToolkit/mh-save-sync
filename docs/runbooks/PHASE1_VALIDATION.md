@@ -274,6 +274,7 @@ cargo clippy --workspace --all-targets -- -D warnings           PASS
 Android assembleDebug testDebugUnitTest lintDebug               PASS
 swift build --package-path apps/macos                           PASS
 scripts/build-macos-app-bundle.sh                               PASS: generated local double-clickable .app bundle
+scripts/macos-config-e2e.sh                                      PASS: persisted server URL under Application Support
 swift run --package-path apps/macos MHSaveSyncMac --status      PASS
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check PASS
 swift run --package-path apps/macos MHSaveSyncMac --conflict-demo PASS
@@ -305,6 +306,11 @@ UX correction scope:
   `scripts/build-macos-app-bundle.sh` builds a local
   `artifacts/macos/MH Save Sync.app` with `LSUIElement` menu-bar behavior for
   double-click testing.
+- macOS now supports `--set-server-url <url>`, persisted at
+  `~/Library/Application Support/MH Save Sync/config.json`. The menu-bar app
+  and CLI status/pre-launch paths read this config when `MH_SAVE_SYNC_SERVER_URL`
+  is not set, so office Mac and home Android can both point at the same server
+  without requiring a shell environment.
 - Shared Rust client exposes Chinese launch-gate/conflict decision records for
   future UniFFI UI wiring and tests cloud-unavailable, remote-newer and conflict
   behavior without last-write-wins.
@@ -319,11 +325,32 @@ Android debug APK:
 47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 macOS smoke executable:
-e1a68fa699680ce637b4bcb8ea1677ed96604337fd941be0bfb53e5a7eb98228  apps/macos/.build/debug/MHSaveSyncMac
+02be36d5a1e8a5334f2e876492a547e881fd7b6c608a65aa00fab78fb51f0f95  apps/macos/.build/debug/MHSaveSyncMac
 
 macOS local app executable:
-e1a68fa699680ce637b4bcb8ea1677ed96604337fd941be0bfb53e5a7eb98228  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
+02be36d5a1e8a5334f2e876492a547e881fd7b6c608a65aa00fab78fb51f0f95  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
 ```
+
+## macOS persisted server configuration gate executed on 2026-07-08
+
+Command:
+
+```bash
+./scripts/macos-config-e2e.sh
+```
+
+Output:
+
+```json
+{"config_path":"~/Library/Application Support/MH Save Sync/config.json","macos_config_e2e":true,"server_url":"http://127.0.0.1:39082"}
+```
+
+This runs the Swift shell with an isolated `HOME`, saves a server URL through
+`--set-server-url`, verifies `--status` and `--prelaunch-check` read the same
+persisted server URL without `MH_SAVE_SYNC_SERVER_URL`, and inspects the JSON
+config file for `server_url`. It proves the local `.app` can show the same
+sync destination after double-click launch instead of depending only on a shell
+environment variable.
 
 
 ## Android restore UX message gate executed on 2026-07-07

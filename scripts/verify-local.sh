@@ -18,6 +18,7 @@ mkdir -p artifacts/checksums
 ./scripts/offline-bundle-e2e.sh
 ./scripts/server-sync-e2e.sh
 ./scripts/macos-shell-e2e.sh
+./scripts/macos-config-e2e.sh
 ./scripts/build-macos-app-bundle.sh
 if [[ -z "${JAVA_HOME:-}" && -x "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
