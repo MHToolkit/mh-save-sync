@@ -243,8 +243,32 @@ Known deployment boundary:
 - `39082` packet capture showed public TCP handshake, HTTP request and 200 OK
   response on the ECS private interface, so the user-facing API path is open.
 - The `39082` proxy is an alpha-test convenience, not the final production
-  ingress design. Production should replace it with a managed reverse proxy or
-  load balancer/TLS endpoint and keep Compose internals private.
+  ingress design. Production deployments should use `deploy/compose/compose.tls.yaml`
+  with Caddy or an equivalent managed reverse proxy/load balancer TLS endpoint,
+  bind `MH_SAVE_SYNC_HTTP_PORT` to `127.0.0.1:<port>`, and keep Compose internals
+  private. A public-trusted certificate still requires a real DNS name pointed
+  at the host; the current IP-only Alpha endpoint remains HTTP.
+
+TLS reverse-proxy config gate executed on 2026-07-08:
+
+Command:
+
+```bash
+./scripts/compose-tls-config-test.sh
+```
+
+Evidence:
+
+```json
+{"compose_tls_config_test":true,"static_files_checked":true,"compose_config_checked":true,"tls_proxy":"caddy","public_ports":[80,443],"upstream":"server:8080"}
+```
+
+The gate verifies `deploy/compose/Caddyfile`, `deploy/compose/compose.tls.yaml`,
+loopback API binding projection (`127.0.0.1:18082`), public 80/443 projection,
+Caddy persistent volumes, TLS proxy healthcheck tunables and security headers.
+It does not claim the current `8.130.112.207:39082` Alpha URL has a trusted TLS
+certificate; DNS-backed deployment remains required before marking production
+TLS fully verified.
 
 
 ## macOS shell server sync gate executed on 2026-07-07

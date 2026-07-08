@@ -84,15 +84,18 @@ Phase 1 feature branch currently contains:
   same host. A separate weekly `ci-canary` runs only lightweight runner/script/
   UX-copy health checks. Self-hosted Compose healthchecks default to 15s/15s/30s
   PostgreSQL/MinIO/server intervals and can be tuned with `MH_SAVE_SYNC_*_HEALTH_*`
-  env vars for smaller hosts; macOS and Compose evidence remains recorded in
+  env vars for smaller hosts. `deploy/compose/compose.tls.yaml` adds an optional
+  Caddy reverse proxy so production deployments can keep the API on loopback and
+  publish only 80/443; macOS and Compose evidence remains recorded in
   `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished
-export/import UX, upgrade/rollback benchmark, production TLS ingress and
-real-emulator bundle recovery remain open gates in `docs/ROADMAP.md`. Fixture
-no-server bundle recovery is covered by `scripts/offline-bundle-e2e.sh`; the
-isolated `mh-save-sync-aliyun` deployment, public Alpha API gate and
-disaster-recovery gate are recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
+export/import UX, upgrade/rollback benchmark, public-trusted TLS endpoint
+verification and real-emulator bundle recovery remain open gates in
+`docs/ROADMAP.md`. Fixture no-server bundle recovery is covered by
+`scripts/offline-bundle-e2e.sh`; the isolated `mh-save-sync-aliyun` deployment,
+public Alpha API gate, disaster-recovery gate and optional Caddy TLS reverse
+proxy config gate are recorded in `docs/runbooks/PHASE1_VALIDATION.md`.
 
 ## Five-minute local demo
 

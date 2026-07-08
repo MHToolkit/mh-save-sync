@@ -33,6 +33,37 @@ MH_SAVE_SYNC_MINIO_API_PORT="19082"
 MH_SAVE_SYNC_MINIO_CONSOLE_PORT="19083"
 ```
 
+For a public self-hosted endpoint, run the API behind the optional Caddy TLS
+reverse proxy and keep the direct API port private to the host. DNS for
+`MH_SAVE_SYNC_PUBLIC_HOST` must already point at the server, and ports 80/443
+must reach the proxy. MinIO ports remain internal/admin-only; clients use only
+`https://<host>/`.
+
+```bash
+cat >> "$HOME/Documents/Secrets/mh-save-sync.env" <<'EOF'
+MH_SAVE_SYNC_PUBLIC_HOST="save.example.com"
+MH_SAVE_SYNC_HTTP_PORT="127.0.0.1:18082"
+MH_SAVE_SYNC_PUBLIC_HTTP_PORT="80"
+MH_SAVE_SYNC_PUBLIC_HTTPS_PORT="443"
+EOF
+
+docker compose \
+  --env-file "$HOME/Documents/Secrets/mh-save-sync.env" \
+  -f deploy/compose/compose.yaml \
+  -f deploy/compose/compose.tls.yaml up -d --wait
+curl -fsS https://save.example.com/ready
+```
+
+On low-resource hosts, leave the Rust API exposed only on loopback and tune the
+healthcheck intervals instead of increasing runner/job concurrency:
+
+```bash
+MH_SAVE_SYNC_DB_HEALTH_INTERVAL="15s"
+MH_SAVE_SYNC_MINIO_HEALTH_INTERVAL="15s"
+MH_SAVE_SYNC_SERVER_HEALTH_INTERVAL="30s"
+MH_SAVE_SYNC_TLS_HEALTH_INTERVAL="30s"
+```
+
 This stack is for isolated development and disaster-recovery testing. It must not be deployed over `nemessix-room`; use a distinct Compose project name and non-conflicting ports.
 
 Backups require both PostgreSQL and MinIO object data. Restoring only one side must be treated as not ready until `scripts/verify-repository.sh` proves every committed snapshot references durable encrypted objects.

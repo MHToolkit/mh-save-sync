@@ -1,0 +1,30 @@
+services:
+  tls-proxy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      MH_SAVE_SYNC_PUBLIC_HOST: ${MH_SAVE_SYNC_PUBLIC_HOST:-localhost}
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${MH_SAVE_SYNC_PUBLIC_HTTP_PORT:-80}:80"
+      - "${MH_SAVE_SYNC_PUBLIC_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost/ready >/dev/null || wget -qO- http://localhost/ready >/dev/null"]
+      interval: ${MH_SAVE_SYNC_TLS_HEALTH_INTERVAL:-30s}
+      timeout: ${MH_SAVE_SYNC_TLS_HEALTH_TIMEOUT:-5s}
+      retries: ${MH_SAVE_SYNC_TLS_HEALTH_RETRIES:-10}
+      start_period: ${MH_SAVE_SYNC_TLS_HEALTH_START_PERIOD:-20s}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+volumes:
+  caddy-data:
+  caddy-config:
