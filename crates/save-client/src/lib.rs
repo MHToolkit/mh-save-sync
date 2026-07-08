@@ -92,6 +92,123 @@ pub struct LaunchGateDecisionZh {
     pub remote_side: Option<ConflictSideInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+pub enum AutomationEventKind {
+    DirtyObserved,
+    SaveComplete,
+    EmulatorExit,
+    PeriodicReconcile,
+    ManualSync,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AutomationDecisionZh {
+    pub event_kind: String,
+    pub mark_dirty: bool,
+    pub create_snapshot_candidate: bool,
+    pub upload_allowed: bool,
+    pub download_to_cas_allowed: bool,
+    pub restore_allowed: bool,
+    pub summary_zh: String,
+}
+
+#[uniffi::export]
+pub fn decide_automation_event(
+    event: AutomationEventKind,
+    dirty: bool,
+    emulator_stopped: bool,
+) -> AutomationDecisionZh {
+    match event {
+        AutomationEventKind::DirtyObserved => AutomationDecisionZh {
+            event_kind: "dirty-observed".into(),
+            mark_dirty: true,
+            create_snapshot_candidate: false,
+            upload_allowed: false,
+            download_to_cas_allowed: false,
+            restore_allowed: false,
+            summary_zh:
+                "文件变化/FSEvents/FileObserver 只标记 dirty，不直接上传，也不会覆盖本地存档。"
+                    .into(),
+        },
+        AutomationEventKind::SaveComplete => reconcile_decision(
+            "save-complete",
+            dirty,
+            emulator_stopped,
+            "收到明确 save-complete 后才允许进入稳定窗口、staging copy 和 manifest/hash 校验。",
+        ),
+        AutomationEventKind::EmulatorExit => reconcile_decision(
+            "emulator-exit",
+            dirty,
+            emulator_stopped,
+            "模拟器正常退出后执行 session-boundary 对账，形成稳定快照候选。",
+        ),
+        AutomationEventKind::PeriodicReconcile => reconcile_decision(
+            "periodic-reconcile",
+            dirty,
+            emulator_stopped,
+            "定时兜底只处理已 dirty 的目录，无变化时不读全量文件；有变化也必须先形成稳定快照。",
+        ),
+        AutomationEventKind::ManualSync => reconcile_decision(
+            "manual-sync",
+            true,
+            emulator_stopped,
+            "手动同步立即触发稳定快照候选，但仍经过 staging、manifest/hash 和一致性校验。",
+        ),
+    }
+}
+
+fn reconcile_decision(
+    event_kind: &str,
+    dirty: bool,
+    emulator_stopped: bool,
+    prefix: &str,
+) -> AutomationDecisionZh {
+    let create_snapshot_candidate = dirty;
+    AutomationDecisionZh {
+        event_kind: event_kind.into(),
+        mark_dirty: dirty,
+        create_snapshot_candidate,
+        upload_allowed: create_snapshot_candidate,
+        download_to_cas_allowed: true,
+        restore_allowed: false,
+        summary_zh: if create_snapshot_candidate {
+            format!(
+                "{} 当前只允许上传已验证稳定快照；恢复仍需单独确认模拟器停止。emulator_stopped={}.",
+                prefix, emulator_stopped
+            )
+        } else {
+            format!("{} 当前没有 dirty 标记，不创建快照候选。", prefix)
+        },
+    }
+}
+
+#[uniffi::export]
+pub fn decide_restore_event(
+    emulator_running: bool,
+    remote_available: bool,
+) -> AutomationDecisionZh {
+    if emulator_running {
+        return AutomationDecisionZh {
+            event_kind: "restore".into(),
+            mark_dirty: false,
+            create_snapshot_candidate: false,
+            upload_allowed: false,
+            download_to_cas_allowed: remote_available,
+            restore_allowed: false,
+            summary_zh: "模拟器运行中禁止云端覆盖本地；云端内容最多先下载到 local CAS，退出后再由用户确认恢复。".into(),
+        };
+    }
+    AutomationDecisionZh {
+        event_kind: "restore".into(),
+        mark_dirty: false,
+        create_snapshot_candidate: false,
+        upload_allowed: false,
+        download_to_cas_allowed: remote_available,
+        restore_allowed: remote_available,
+        summary_zh: "模拟器已停止且云端可用时，恢复前必须先快照/备份当前本地状态，再从 staging 提交到原目录。".into(),
+    }
+}
+
 #[uniffi::export]
 pub fn describe_launch_gate_zh(
     saf_authorized: bool,
@@ -349,5 +466,38 @@ mod tests {
         assert_eq!(decision.kind, LaunchGateKind::RemoteNewer);
         assert!(decision.allows_restore_now);
         assert!(decision.summary_zh.contains("先下载到本地 CAS 缓存"));
+    }
+
+    #[test]
+    fn watcher_marks_dirty_but_never_uploads() {
+        let decision = decide_automation_event(AutomationEventKind::DirtyObserved, false, true);
+        assert!(decision.mark_dirty);
+        assert!(!decision.create_snapshot_candidate);
+        assert!(!decision.upload_allowed);
+        assert!(decision.summary_zh.contains("只标记 dirty"));
+    }
+
+    #[test]
+    fn exit_and_save_complete_reconcile_dirty_session() {
+        for event in [
+            AutomationEventKind::SaveComplete,
+            AutomationEventKind::EmulatorExit,
+            AutomationEventKind::PeriodicReconcile,
+            AutomationEventKind::ManualSync,
+        ] {
+            let decision = decide_automation_event(event, true, true);
+            assert!(decision.create_snapshot_candidate, "{event:?}");
+            assert!(decision.upload_allowed, "{event:?}");
+            assert!(!decision.restore_allowed, "{event:?}");
+            assert!(decision.summary_zh.contains("稳定快照"));
+        }
+    }
+
+    #[test]
+    fn running_emulator_blocks_restore_even_when_remote_newer() {
+        let decision = decide_restore_event(true, true);
+        assert!(!decision.restore_allowed);
+        assert!(!decision.upload_allowed);
+        assert!(decision.summary_zh.contains("禁止云端覆盖本地"));
     }
 }

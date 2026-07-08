@@ -95,6 +95,7 @@ cargo run -p save-cli --bin mh-save -- crypto-device-fixture
 cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
 ./scripts/offline-bundle-e2e.sh
 ./scripts/supply-chain-gate.sh
+./scripts/automation-policy-e2e.sh
 swift run --package-path apps/macos MHSaveSyncMac
 swift run --package-path apps/macos MHSaveSyncMac --set-server-url http://127.0.0.1:18080
 ./scripts/build-macos-app-bundle.sh
@@ -146,6 +147,17 @@ cargo run -p save-cli --bin mh-save -- server-status \\
 gate is `./scripts/server-sync-e2e.sh`: it uploads an office snapshot, uploads
 a home/Android-style divergent branch without a base head, and verifies the
 cloud HEAD is preserved while the conflict branch is retained.
+
+Automation policy gate:
+
+```bash
+./scripts/automation-policy-e2e.sh
+```
+
+This fixes the trigger contract shared by macOS and Android: file-system events
+only mark dirty; save-complete, emulator-exit, periodic reconcile and manual
+sync may create a stable snapshot candidate; remote restore remains blocked
+while an emulator is running.
 
 Android local build/lint, using Android Studio's bundled JBR when macOS has no
 system Java:

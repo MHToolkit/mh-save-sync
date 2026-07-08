@@ -8,7 +8,7 @@
 
 1. **Mac 和 Android 都同步到同一个服务器**：客户端填写同一个 `MH_SAVE_SYNC_SERVER_URL` / Android 服务器地址。当前隔离 Alpha 测试 API 是 `http://8.130.112.207:39082`；服务器只保存端到端加密后的 chunk、manifest 和最小图元数据。
 2. **启动前先检查，不静默覆盖**：启动 MH3G 前做 pre-launch check。远端较新、冲突、云端不可用都必须在 UI 中可见。
-3. **watcher 不是上传器**：FSEvents/FileObserver/SAF reconciliation 只标记 dirty；候选必须经过 debounce、稳定指纹、只读 staging copy、manifest/hash 和 adapter consistency validation。
+3. **watcher 不是上传器**：FSEvents/FileObserver/SAF reconciliation 只标记 dirty；只有 save-complete、模拟器退出、定时对账或手动同步会创建稳定快照候选；候选必须经过 debounce、稳定指纹、只读 staging copy、manifest/hash 和 adapter consistency validation。
 4. **运行中不恢复**：模拟器运行时禁止把远端内容覆盖到原存档目录。下载只进入 local CAS；恢复必须等模拟器停止，并先快照当前本地状态。
 5. **冲突是分支，不是 latest-wins**：本地/云端两边都从同一 parent 分叉时，列出 device、时间、parent、size/hash，让用户选择“本地替换云端”“云端覆盖本地”或暂不处理；未选择前不推进 HEAD。
 6. **手动同步必须可解释**：CLI/桌面/Android 同步动作都要显示 `server_url`、`sync_target`、`logical_save_id`、上传设备、云端旧 HEAD、新 HEAD、`outcome` 与 `conflict_snapshot`；恢复动作还要显示下载的 `snapshot_id`、备份位置和恢复前置条件。只显示“同步成功”不算合格。

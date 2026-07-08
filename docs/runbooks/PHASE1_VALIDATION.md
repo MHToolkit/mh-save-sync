@@ -1,7 +1,7 @@
 # Phase 1 validation evidence ledger
 
 - Status: live evidence ledger, not a stability claim
-- Last updated: 2026-07-07
+- Last updated: 2026-07-08
 - Git commit when captured: this branch state; exact commit reported in PR/final status
 - Secret policy: commands below use external secret files under
   `~/Documents/Secrets`; no recovery phrase, access token, device secret,
@@ -11,7 +11,7 @@
 
 ```text
 cargo fmt --all -- --check                                      PASS
-cargo test --workspace                                          PASS: 26 tests / 16 suites
+cargo test --workspace                                          PASS: includes automation policy tests
 cargo clippy --workspace --all-targets -- -D warnings           PASS
 cargo build --workspace --bins                                  PASS
 scripts/supply-chain-gate.sh                                    PASS: cargo-deny + cargo-audit + CycloneDX SBOM
@@ -21,6 +21,7 @@ cargo test -p save-cli --test server_sync_cli                  PASS: 2 tests / 1
 scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
+scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
@@ -269,7 +270,7 @@ not a signed `.app` installer or LaunchAgent deployment.
 ```text
 cargo fmt --all -- --check                                      PASS
 git diff --check                                                PASS
-cargo test --workspace                                          PASS: 26 tests / 16 suites
+cargo test --workspace                                          PASS: includes automation policy tests
 cargo clippy --workspace --all-targets -- -D warnings           PASS
 Android assembleDebug testDebugUnitTest lintDebug               PASS
 swift build --package-path apps/macos                           PASS
@@ -330,6 +331,29 @@ macOS smoke executable:
 macOS local app executable:
 02be36d5a1e8a5334f2e876492a547e881fd7b6c608a65aa00fab78fb51f0f95  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
 ```
+
+## Automation trigger policy gate executed on 2026-07-08
+
+Command:
+
+```bash
+./scripts/automation-policy-e2e.sh
+```
+
+Output:
+
+```json
+{"automation_policy_e2e":true,"remote_download_live_overwrite":false,"running_restore_fail_closed":true,"session_boundary_events":["save-complete","emulator-exit","periodic-reconcile","manual-sync"],"stable_snapshot_required_before_upload":true,"watcher_event":"dirty-only-no-upload"}
+```
+
+This gate targets the shared Rust client automation contract used by macOS and
+Android shells. It proves that FSEvents/FileObserver-style dirty observations
+only set a dirty flag and never upload directly, while `save-complete`,
+`emulator-exit`, periodic reconcile and manual sync are the only events that
+create a stable snapshot candidate. It also proves remote content may download
+to local CAS while an emulator is running, but live overwrite restore remains
+blocked until the emulator stops. The script asserts each targeted Rust test ran
+with `1 passed` to avoid false-green filtered test output.
 
 ## macOS persisted server configuration gate executed on 2026-07-08
 
@@ -506,7 +530,7 @@ Rust debug binaries:
 3065dd98b545347d3b3446742642299b3703eb3a45789e8116ae9daedd60d3a8  target/debug/mh-save-server
 
 CycloneDX SBOM:
-01b91bef41441df28da53f9245442c9d656aca377a394928ae511a1efbc89698  artifacts/sbom/mh-save-sync.cdx.json
+d8b04710d639efbccfb1701771e361760c07c3a12fd00167b8a5fefdef2e41a6  artifacts/sbom/mh-save-sync.cdx.json
 
 Android debug APK:
 47626c6e7aed57644316a465c059fcda4bdcceb61b894fda0cceb075e4ae5fa7  apps/android/app/build/outputs/apk/debug/app-debug.apk
