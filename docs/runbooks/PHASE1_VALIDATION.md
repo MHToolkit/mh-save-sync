@@ -23,6 +23,7 @@ scripts/server-sync-e2e.sh                                      PASS: upload/sta
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
 scripts/macos-install-e2e.sh                                    PASS: local .app install, bundled CLI, persisted server URL, save root, recovery secret file, manual/auto menu labels
+scripts/android-avd-generic-folder-e2e.sh                    PASS: headless AVD shared-storage public Alpha conflict/restore gate
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
@@ -587,22 +588,32 @@ Boundary:
 
 ## Android Generic Folder shared-storage E2E executed on 2026-07-08
 
-Command:
+Commands:
+
+```bash
+MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 \
+  ./scripts/android-avd-generic-folder-e2e.sh
+```
+
+The wrapper starts Android Studio AVD `Pixel_9_API_36_Daily` headlessly with
+`-no-snapshot-load` and `-gpu swiftshader_indirect`, waits for
+`sys.boot_completed=1`, runs the shared-storage E2E, then shuts the emulator
+down. The underlying direct-device command remains:
 
 ```bash
 MH_SAVE_SYNC_SERVER_URL=http://8.130.112.207:39082 \
   ./scripts/android-generic-folder-e2e.sh
 ```
 
-Output:
+Latest wrapper output:
 
 ```json
-{"adb_device":"emulator-5554","android_conflict_snapshot":"727e1eeafe3cdf6a0eadf91f8a36877c6d4ac4e17e302fe430495cfc1578cfd2","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"95eb40f1ccb8f5faa2af9c558c6bdfce804f99d6543474d0356bc2c3c5b74364","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783478744582274000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"95eb40f1ccb8f5faa2af9c558c6bdfce804f99d6543474d0356bc2c3c5b74364","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
+{"adb_device":"emulator-5554","android_conflict_snapshot":"e9ab320f2d3b436779b3a983b3206fd9a350c93864e089708cb258d00f8056d5","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"00dee8f6675d5a7c2639096916889f2ceecfe20a17698fd00b46a9a1e470a8a7","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783498976075623000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"00dee8f6675d5a7c2639096916889f2ceecfe20a17698fd00b46a9a1e470a8a7","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
 ```
 
 What this proves:
 
-- A real Android ADB device shared-storage tree under `/sdcard/MHSaveSyncE2E`
+- A real Android Studio AVD shared-storage tree under `/sdcard/MHSaveSyncE2E`
   can participate in the same PostgreSQL/S3 server protocol as the macOS
   Generic Folder flow.
 - A macOS Generic Folder snapshot became cloud HEAD, an Android shared-storage
