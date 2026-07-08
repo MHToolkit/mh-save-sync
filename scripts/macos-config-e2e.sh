@@ -64,6 +64,7 @@ swift run --package-path apps/macos MHSaveSyncMac --auto-upload-on-exit off \
 grep -q "已关闭：只保留手动同步" "$tmp/set-auto-off.txt"
 
 swift run --package-path apps/macos MHSaveSyncMac --status > "$tmp/status.txt"
+grep -q "下一步：启动 MH3G 前点「启动前检查」" "$tmp/status.txt"
 grep -q "同步到服务器：$server_url" "$tmp/status.txt"
 grep -q "Mac 存档目录：$tmp/save-root" "$tmp/status.txt"
 grep -q "恢复密钥文件：$HOME/Documents/Secrets/mh-save-sync-test-secret.hex" "$tmp/status.txt"

@@ -41,6 +41,7 @@ HOME="$tmp/home" "$exe" --set-recovery-secret-file "$tmp/home/Documents/Secrets/
 HOME="$tmp/home" "$exe" --auto-upload-on-exit off >/dev/null
 status="$(HOME="$tmp/home" "$exe" --status)"
 grep -q "同步到服务器：http://127.0.0.1:39082" <<<"$status"
+grep -q "下一步：启动 MH3G 前点「启动前检查」" <<<"$status"
 grep -q "当前同步对象：MH3G / macOS Nemessix" <<<"$status"
 grep -q "Mac 存档目录：$tmp/save-root" <<<"$status"
 grep -q "恢复密钥文件：$tmp/home/Documents/Secrets/mh-save-sync-test-secret.hex" <<<"$status"
@@ -48,6 +49,7 @@ grep -q "自动同步：已关闭：只手动同步" <<<"$status"
 
 help="$(HOME="$tmp/home" "$exe" --help)"
 grep -q "双击" <<<"$help"
+grep -q "菜单顶部会显示「下一步」" <<<"$help"
 grep -q -- "--set-server-url" <<<"$help"
 grep -q "立即上传 Mac 存档到服务器" <<<"$help"
 grep -q "查看云端状态" <<<"$help"

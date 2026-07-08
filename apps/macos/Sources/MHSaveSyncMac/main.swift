@@ -48,6 +48,22 @@ struct MacSyncContext {
     var autoUploadLabel: String {
         autoUploadOnExit ? "已开启：菜单栏运行时，检测到 Nemessix 退出后上传稳定快照" : "已关闭：只手动同步"
     }
+
+    var hasServerURL: Bool {
+        !(serverURL?.isEmpty ?? true)
+    }
+
+    var hasSaveRoot: Bool {
+        !(saveRootPath?.isEmpty ?? true)
+    }
+
+    var hasRecoverySecretFile: Bool {
+        !(recoverySecretFile?.isEmpty ?? true)
+    }
+
+    var onboardingComplete: Bool {
+        hasServerURL && hasSaveRoot && hasRecoverySecretFile
+    }
 }
 
 
@@ -273,6 +289,7 @@ func saveAutoUploadOnExit(_ raw: String) throws {
 func printStatus(_ context: MacSyncContext) {
     print("""
     MH 云存档同步 · macOS Alpha
+    下一步：\(nextActionText(context))
     同步到服务器：\(context.serverLabel)
     当前同步对象：\(context.profile)
     模拟器：\(context.emulator)
@@ -285,6 +302,53 @@ func printStatus(_ context: MacSyncContext) {
     本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；屏幕右上角出现「MH 云存档」。
     常用命令：--set-server-url <url> / --set-save-root <path> / --set-recovery-secret-file <path> / --auto-upload-on-exit on|off / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
+}
+
+func nextActionText(_ context: MacSyncContext) -> String {
+    if !context.hasServerURL {
+        return "设置服务器地址；Mac 和 Android 必须填同一个地址。"
+    }
+    if !context.hasSaveRoot {
+        return "选择 Mac Nemessix 存档目录；通常是 MH3G 的 data/00000001 目录。"
+    }
+    if !context.hasRecoverySecretFile {
+        return "选择恢复密钥文件；必须在 ~/Documents/Secrets 下，配置只保存路径。"
+    }
+    return "启动 MH3G 前点「启动前检查」；退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步。"
+}
+
+func onboardingChecklistText(_ context: MacSyncContext) -> String {
+    let server = context.hasServerURL ? "✅ 服务器：\(context.serverLabel)" : "⬜ 服务器：点「设置服务器地址…」"
+    let saveRoot = context.hasSaveRoot ? "✅ Mac 存档目录：\(context.saveRootLabel)" : "⬜ Mac 存档目录：点「选择 Mac Nemessix 存档目录…」"
+    let secret = context.hasRecoverySecretFile ? "✅ 恢复密钥文件：已配置文件" : "⬜ 恢复密钥文件：点「选择恢复密钥文件…」"
+    return """
+    当前配置进度：
+    \(server)
+    \(saveRoot)
+    \(secret)
+
+    下一步：\(nextActionText(context))
+    """
+}
+
+func quickGuideText(_ context: MacSyncContext) -> String {
+    """
+    你现在用的是菜单栏 App，不会出现在 Dock。请看屏幕右上角的「MH 云存档」。
+
+    \(onboardingChecklistText(context))
+
+    第一次使用：
+    1. 点「设置服务器地址…」，Mac 和 Android 填同一个地址。
+    2. 点「选择 Mac Nemessix 存档目录…」。
+    3. 点「选择恢复密钥文件…」，文件必须放在 ~/Documents/Secrets；配置只保存路径，不保存密钥内容。
+    4. 启动 MH3G 前点「启动前检查」。退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步让菜单栏检测 Nemessix 退出后上传。
+
+    手动同步：点「立即上传 Mac 存档到服务器」。
+    查看云端：点「查看云端状态」。
+    从云端恢复：点「云端覆盖本地」，但 Nemessix 必须先退出，恢复前会先备份当前本地。
+
+    底线：运行中的 Nemessix 不会被云端覆盖；文件变化不会直接上传，必须等稳定快照通过校验。
+    """
 }
 
 
@@ -608,6 +672,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
     private var secretMenuItem: NSMenuItem?
     private var autoUploadMenuItem: NSMenuItem?
     private var syncStateMenuItem: NSMenuItem?
+    private var nextActionMenuItem: NSMenuItem?
     private var processTimer: Timer?
     private var wasNemessixRunning = false
     private var context: MacSyncContext
@@ -637,6 +702,9 @@ final class MenuController: NSObject, NSApplicationDelegate {
         let stateItem = NSMenuItem(title: "状态：等待操作", action: nil, keyEquivalent: "")
         menu.addItem(stateItem)
         syncStateMenuItem = stateItem
+        let nextItem = NSMenuItem(title: "下一步：\(nextActionText(context))", action: #selector(showQuickGuide), keyEquivalent: "")
+        menu.addItem(nextItem)
+        nextActionMenuItem = nextItem
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "设置服务器地址…", action: #selector(promptServerURL), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "选择 Mac Nemessix 存档目录…", action: #selector(promptSaveRoot), keyEquivalent: "r"))
@@ -664,30 +732,17 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     private func showStartupGuideIfNeeded() {
-        guard context.serverURL == nil else { return }
+        guard !context.onboardingComplete else { return }
         DispatchQueue.main.async { [weak self] in
             self?.showQuickGuide()
         }
     }
 
     @objc private func showQuickGuide() {
+        refreshContext()
         showAlert(
             title: "MH 云存档已在菜单栏运行",
-            message: """
-            你现在用的是菜单栏 App，不会出现在 Dock。请看屏幕右上角的「MH 云存档」。
-
-            第一次使用：
-            1. 点「设置服务器地址…」，Mac 和 Android 填同一个地址。
-            2. 点「选择 Mac Nemessix 存档目录…」。
-            3. 点「选择恢复密钥文件…」，文件必须放在 ~/Documents/Secrets；配置只保存路径，不保存密钥内容。
-            4. 启动 MH3G 前点「启动前检查」。退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步让菜单栏检测 Nemessix 退出后上传。
-
-            手动同步：点「立即上传 Mac 存档到服务器」。
-            查看云端：点「查看云端状态」。
-            从云端恢复：点「云端覆盖本地」，但 Nemessix 必须先退出，恢复前会先备份当前本地。
-
-            底线：运行中的 Nemessix 不会被云端覆盖；文件变化不会直接上传，必须等稳定快照通过校验。
-            """
+            message: quickGuideText(context)
         )
     }
 
@@ -707,10 +762,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         do {
             let saved = try persistServerURL(input.stringValue)
             context = loadContext()
-            serverMenuItem?.title = "同步到：\(context.serverLabel)"
+            refreshMenuLabels()
             showAlert(
                 title: "服务器地址已保存",
-                message: "当前同步到：\(saved)\nAndroid App 里也填写同一个地址，两个客户端才会同步到同一套云端快照。"
+                message: """
+                当前同步到：\(saved)
+                Android App 里也填写同一个地址，两个客户端才会同步到同一套云端快照。
+
+                \(onboardingChecklistText(context))
+                """
             )
         } catch {
             showAlert(title: "服务器地址无效", message: "\(error)")
@@ -727,6 +787,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
         saveRootMenuItem?.title = "Mac 存档目录：\(context.saveRootLabel)"
         secretMenuItem?.title = "恢复密钥：\(context.recoverySecretFile == nil ? "未配置" : "已配置文件")"
         autoUploadMenuItem?.title = "自动同步：\(context.autoUploadOnExit ? "退出后自动上传" : "关闭")"
+        nextActionMenuItem?.title = "下一步：\(nextActionText(context))"
     }
 
     private func setSyncState(_ message: String) {
@@ -780,7 +841,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         do {
             let saved = try persistSaveRootPath(url.path)
             refreshContext()
-            showAlert(title: "Mac 存档目录已保存", message: "目录：\(saved)\n不会立刻上传；请在退出 MH3G 后点「立即上传」或开启自动同步。")
+            showAlert(
+                title: "Mac 存档目录已保存",
+                message: """
+                目录：\(saved)
+                不会立刻上传；手动上传和退出后自动上传都会先做稳定快照校验。
+
+                \(onboardingChecklistText(context))
+                """
+            )
         } catch {
             showAlert(title: "Mac 存档目录无效", message: "\(error)")
         }
@@ -798,7 +867,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         do {
             let saved = try persistRecoverySecretFile(url.path)
             refreshContext()
-            showAlert(title: "恢复密钥文件已保存", message: "文件：\(saved)\n密钥内容没有写入配置、日志或提示。现在可以手动上传或查看云端状态。")
+            showAlert(
+                title: "恢复密钥文件已保存",
+                message: """
+                文件：\(saved)
+                密钥内容没有写入配置、日志或提示。
+
+                \(onboardingChecklistText(context))
+                """
+            )
         } catch {
             showAlert(title: "恢复密钥文件无效", message: "\(error)")
         }
@@ -947,7 +1024,7 @@ do {
     } else if args.contains("--configured-restore") {
         print(try configuredServerRestore(context: context), terminator: "")
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档」，菜单内可点：设置服务器地址…、选择 Mac Nemessix 存档目录…、选择恢复密钥文件…、启动前检查、立即上传 Mac 存档到服务器、我已退出 MH3G：立即对账上传、查看云端状态、云端覆盖本地（先备份，需停止 Nemessix）、自动同步：退出 Nemessix 后上传，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
+        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档」。菜单顶部会显示「下一步」，配置后也会继续提示还缺什么；菜单内可点：设置服务器地址…、选择 Mac Nemessix 存档目录…、选择恢复密钥文件…、启动前检查、立即上传 Mac 存档到服务器、我已退出 MH3G：立即对账上传、查看云端状态、云端覆盖本地（先备份，需停止 Nemessix）、自动同步：退出 Nemessix 后上传，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
     } else {
         printStatus(context)
     }
