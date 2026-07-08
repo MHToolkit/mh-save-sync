@@ -45,6 +45,7 @@ actual target instead of pressing an opaque “sync” button:
 
 Player-facing Chinese guide: `docs/ux/USER_GUIDE_ZH.md`.
 Engineering UX contract: `docs/ux/SYNC_USER_FLOWS.md`.
+UI/UX research baseline: `docs/research/UI_UX_PATTERNS.md`.
 
 ## Repository map
 
