@@ -7,16 +7,17 @@
 
 ## 1. Pick an APK artifact
 
-Current local installable alpha APK on this Mac:
+Current local installable alpha APK on this Mac, from the last CI-green Android
+handoff build:
 
 ```bash
-adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk
+adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk
 ```
 
 Evidence file:
 
 ```text
-/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.evidence.json
+/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.evidence.json
 ```
 
 Generate or refresh the APK with:
@@ -32,14 +33,16 @@ the APK as the artifact authority. Do not infer the APK build commit from this
 runbook's Git commit: documentation or validation-script commits may happen
 after the Android APK is built. If Android app code changes, rebuild the APK,
 copy it to `~/Games/Backups/MHSaveSync/apk/`, regenerate its evidence JSON, and
-set `MH_SAVE_SYNC_APK` to that new file before real-device validation.
+set `MH_SAVE_SYNC_APK` to that new file before real-device validation. If the
+script prints a newer `mh-save-sync-<commit>-debug.apk`, use that printed path
+instead of the example above.
 
 ## 2. Run device preflight
 
 From the repository root:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk" \
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-home-device-preflight.sh
@@ -61,7 +64,56 @@ Privacy boundary: it records package/activity/server facts only. It does not
 enumerate save directories, filenames, save bytes, character names, ROM paths,
 keys or recovery phrases.
 
-## 3. Interpret results
+## 3. Build a redacted runtime evidence bundle
+
+After installing the APK and completing the in-app setup steps, collect a
+metadata-only bundle:
+
+```bash
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
+MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
+ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
+./scripts/android-runtime-evidence-bundle.sh
+```
+
+If multiple Android devices are attached, set `ANDROID_SERIAL=<serial>`.
+
+For a real emulator-specific acceptance pass, add redacted operator metadata:
+
+```bash
+MH_SAVE_SYNC_RUNTIME_TARGET_PACKAGE="io.github.vincentadamnemessisx.nemessix" \
+MH_SAVE_SYNC_RUNTIME_TARGET_EMULATOR="android-nemessix" \
+MH_SAVE_SYNC_LOGICAL_SAVE_ID="<copy from app/CLI status; no plaintext paths>" \
+MH_SAVE_SYNC_SNAPSHOT_ID="<cloud/local snapshot id>" \
+MH_SAVE_SYNC_CONFLICT_COUNT="<0 or conflict count shown by app>" \
+MH_SAVE_SYNC_SAF_GRANT_CONFIRMED="true" \
+MH_SAVE_SYNC_STOPPED_RESTORE_CONFIRMED="true" \
+MH_SAVE_SYNC_READBACK_CONFIRMED="true" \
+MH_SAVE_SYNC_CONFLICT_CONFIRMED="true" \
+MH_SAVE_SYNC_REDACTED_LOGS_REVIEWED="true" \
+MH_SAVE_SYNC_RUNTIME_NOTE="真实保存、退出后上传、停止状态恢复、重启后游戏可读；不含角色名/路径/密钥" \
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
+MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
+ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
+./scripts/android-runtime-evidence-bundle.sh
+```
+
+The bundle writes:
+
+- `android_home_device_preflight.json`;
+- `runtime_evidence_audit.json`;
+- package fact JSON for MH Save Sync and target emulator packages;
+- `ui_visibility_summary.json` with UI text hash and required-copy booleans
+  only;
+- `runtime_claim.json` as a redacted checklist template;
+- `<timestamp>.tar.gz` plus SHA256.
+
+Privacy boundary: the bundle stores metadata, hashes, booleans and redacted
+operator notes only. It does **not** enumerate save directories, copy save
+files, record character names, print recovery phrases or include plaintext save
+bytes.
+
+## 4. Interpret results
 
 If `runtime_targets_available=false`, the device can only support:
 
@@ -71,7 +123,8 @@ If `runtime_targets_available=false`, the device can only support:
 
 Do not mark Android Nemessix, Azahar or Citra MMJ Runtime Verified.
 
-If `runtime_targets_available=true`, proceed to the real runtime checklist:
+If `runtime_targets_available=true`, proceed to the real runtime checklist and
+then rerun the bundle script:
 
 1. open MH Save Sync;
 2. configure the same server URL as the Mac;
@@ -93,14 +146,20 @@ Conflict acceptance requires a second branch:
 5. verify two conflict branches are shown;
 6. choose local, cloud or keep both explicitly.
 
-## 4. Cloud endpoint caveat
+The bundle summary can set `support_upgrade_ready=true` only when all required
+RuntimeVerified checklist booleans are satisfied. The confirmation variables
+above must be set only after the matching real action has been performed and
+reviewed. A green APK install, server reachability, target package presence, or
+free-form note is not enough by itself.
+
+## 5. Cloud endpoint caveat
 
 If `server_ready=false` and SSH to the server still works, check whether the
 problem is Aliyun security group / firewall exposure. SSH access alone cannot
 open Alibaba Cloud console security-group ports; if a cloud-console rule is
 missing, the user must change it in the Aliyun console.
 
-## 5. Evidence required before support-level upgrade
+## 6. Evidence required before support-level upgrade
 
 The adapter can be upgraded to Runtime Verified only when the evidence bundle
 contains:

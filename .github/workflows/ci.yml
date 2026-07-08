@@ -73,6 +73,11 @@ jobs:
         run: ./scripts/automation-policy-e2e.sh
       - name: Verify Chinese-first UX copy does not expose internal sync jargon
         run: python3 scripts/ux-copy-guard.py
+      - name: Verify Android handoff shell scripts parse
+        run: |
+          bash -n scripts/android-package-alpha.sh
+          bash -n scripts/android-home-device-preflight.sh
+          bash -n scripts/android-runtime-evidence-bundle.sh
       - name: Verify compose persistent-sync runtime selection
         run: ./scripts/compose-server-sync-e2e-runtime-test.sh
       - name: Verify compose project-aware backup volumes
