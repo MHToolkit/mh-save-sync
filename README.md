@@ -31,8 +31,11 @@ actual target instead of pressing an opaque “sync” button:
 2. macOS Nemessix before launch: install the local menu-bar app once with
    `./scripts/install-macos-app.sh`, then open `/Applications/MH Save Sync.app`.
    The app is a menu-bar utility: look for `MH 云存档` in the top-right menu bar,
-   not in the Dock. Use `设置服务器地址…` once, then `启动前检查` before MH3G.
-   `新手引导：办公室 Mac ↔ 回家 Android` explains the same flow inside the app.
+   not in the Dock. First configure `设置服务器地址…`, `选择 Mac Nemessix 存档目录…`
+   and `选择恢复密钥文件…`; then use `启动前检查` before MH3G, `立即上传 Mac 存档到服务器`
+   for manual sync, `我已退出 MH3G：立即对账上传` after quitting, `查看云端状态` to see
+   where the save went, and `自动同步：退出 Nemessix 后上传` if you want menu-bar exit
+   detection. `新手引导：办公室 Mac ↔ 回家 Android` explains the same flow inside the app.
 3. Android Nemessix before launch: authorize the Nemessix save folder, keep
    `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android shows whether
    it is uploading, downloading to the phone cache, waiting for you to exit MH3G,
@@ -118,8 +121,9 @@ To install the macOS Alpha app for normal double-click usage on this Mac:
 open -a "/Applications/MH Save Sync.app"
 ```
 
-The app menu can set the server directly. The CLI path below writes the same
-persisted config if you prefer scripting:
+The app menu can set the server, save directory, recovery-secret file, manual upload,
+cloud status, restore and exit-after-upload automation directly. The CLI path below
+writes the same persisted config if you prefer scripting:
 
 ```bash
 "/Applications/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac" \

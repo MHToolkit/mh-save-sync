@@ -47,8 +47,27 @@ swift run --package-path apps/macos MHSaveSyncMac --set-server-url "$server_url"
   > "$tmp/set.txt"
 grep -q "已保存服务器地址：$server_url" "$tmp/set.txt"
 
+
+mkdir -p "$HOME/Documents/Secrets" "$tmp/save-root/slot1"
+printf "6666666666666666666666666666666666666666666666666666666666666666" > "$HOME/Documents/Secrets/mh-save-sync-test-secret.hex"
+
+swift run --package-path apps/macos MHSaveSyncMac --set-save-root "$tmp/save-root" \
+  > "$tmp/set-save-root.txt"
+grep -q "已保存 Mac Nemessix 存档目录：$tmp/save-root" "$tmp/set-save-root.txt"
+
+swift run --package-path apps/macos MHSaveSyncMac --set-recovery-secret-file "$HOME/Documents/Secrets/mh-save-sync-test-secret.hex" \
+  > "$tmp/set-secret-file.txt"
+grep -q "已保存恢复密钥文件路径" "$tmp/set-secret-file.txt"
+
+swift run --package-path apps/macos MHSaveSyncMac --auto-upload-on-exit off \
+  > "$tmp/set-auto-off.txt"
+grep -q "已关闭：只保留手动同步" "$tmp/set-auto-off.txt"
+
 swift run --package-path apps/macos MHSaveSyncMac --status > "$tmp/status.txt"
 grep -q "同步到服务器：$server_url" "$tmp/status.txt"
+grep -q "Mac 存档目录：$tmp/save-root" "$tmp/status.txt"
+grep -q "恢复密钥文件：$HOME/Documents/Secrets/mh-save-sync-test-secret.hex" "$tmp/status.txt"
+grep -q "自动同步：已关闭：只手动同步" "$tmp/status.txt"
 
 swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check \
   > "$tmp/prelaunch.txt"
@@ -70,6 +89,9 @@ import sys
 config_file, expected = sys.argv[1:3]
 doc = json.load(open(config_file, encoding="utf-8"))
 assert doc["server_url"] == expected, doc
+assert doc["save_root_path"].endswith("/save-root"), doc
+assert doc["recovery_secret_file"].endswith("/Documents/Secrets/mh-save-sync-test-secret.hex"), doc
+assert doc["auto_upload_on_exit"] is False, doc
 PY
 
 python3 - "$server_url" <<'PY'
@@ -81,5 +103,8 @@ print(json.dumps({
     "server_url": sys.argv[1],
     "continue_local_visible": True,
     "config_path": "~/Library/Application Support/MH Save Sync/config.json",
+    "save_root_configured": True,
+    "recovery_secret_file_configured": True,
+    "auto_upload_on_exit": False,
 }, ensure_ascii=False, sort_keys=True))
 PY

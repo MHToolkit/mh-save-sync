@@ -5,6 +5,19 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 swift build --package-path apps/macos
+cargo build -q -p save-cli --bin mh-save
+
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  if [[ "${CARGO_TARGET_DIR}" = /* ]]; then
+    cargo_target_dir="${CARGO_TARGET_DIR}"
+  else
+    cargo_target_dir="${repo_root}/${CARGO_TARGET_DIR}"
+  fi
+else
+  cargo_target_dir="${repo_root}/target"
+fi
+cli_bin="${cargo_target_dir}/debug/mh-save"
+test -x "$cli_bin"
 
 app_dir="${repo_root}/artifacts/macos/MH Save Sync.app"
 contents="${app_dir}/Contents"
@@ -14,7 +27,8 @@ rm -rf "$app_dir"
 mkdir -p "$macos" "$resources"
 
 cp "${repo_root}/apps/macos/.build/debug/MHSaveSyncMac" "${macos}/MHSaveSyncMac"
-chmod 755 "${macos}/MHSaveSyncMac"
+cp "$cli_bin" "${macos}/mh-save"
+chmod 755 "${macos}/MHSaveSyncMac" "${macos}/mh-save"
 
 cat > "${contents}/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -52,6 +66,8 @@ PLIST
 
 plutil -lint "${contents}/Info.plist" >/dev/null
 test -x "${macos}/MHSaveSyncMac"
+test -x "${macos}/mh-save"
 "${macos}/MHSaveSyncMac" --prelaunch-check >/dev/null
+"${macos}/mh-save" --help >/dev/null
 
-printf '{"macos_app_bundle":true,"path":"%s"}\n' "$app_dir"
+printf '{"macos_app_bundle":true,"bundled_cli":true,"path":"%s"}\n' "$app_dir"

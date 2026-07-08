@@ -22,7 +22,7 @@ scripts/offline-bundle-e2e.sh                                   PASS: export bun
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
-scripts/macos-install-e2e.sh                                    PASS: local .app install path and persisted server URL
+scripts/macos-install-e2e.sh                                    PASS: local .app install, bundled CLI, persisted server URL, save root, recovery secret file, manual/auto menu labels
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
@@ -45,6 +45,24 @@ now pass with two reviewed temporary ignores for `quick-xml` advisories
 user-provided XML; the ignore must be removed when object_store releases a
 quick-xml `>=0.41` update.
 
+
+## macOS menu-bar sync UX gate executed on 2026-07-08
+
+Commands:
+
+```bash
+swift build --package-path apps/macos
+./scripts/build-macos-app-bundle.sh
+./scripts/macos-install-e2e.sh
+./scripts/macos-config-e2e.sh
+```
+
+Evidence scope:
+
+- The menu-bar app now exposes player-facing Chinese actions for `设置服务器地址…`, `选择 Mac Nemessix 存档目录…`, `选择恢复密钥文件…`, `启动前检查`, `立即上传 Mac 存档到服务器`, `我已退出 MH3G：立即对账上传`, `查看云端状态`, `云端覆盖本地（先备份，需停止 Nemessix）`, and `自动同步：退出 Nemessix 后上传`.
+- The app bundle includes `Contents/MacOS/mh-save`; installed menu actions therefore use the same Rust CLI pipeline without requiring an external `MH_SAVE_SYNC_CLI` environment variable.
+- Config E2E verifies persisted server URL, save-root path, recovery-secret file path under `~/Documents/Secrets`, and `auto_upload_on_exit=false`; the recovery secret contents are never written into config, logs, docs or GitHub output.
+- Automation remains session-boundary based: the menu bar checks Nemessix process exit every 15 seconds and only then triggers stable snapshot upload; file changes do not upload directly, and restore stays blocked while Nemessix is running.
 
 ## Offline bundle recovery gate executed on 2026-07-07
 
