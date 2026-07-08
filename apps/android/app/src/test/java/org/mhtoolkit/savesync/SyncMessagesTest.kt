@@ -241,6 +241,58 @@ class SyncMessagesTest {
         assertTrue(next.contains("不会被静默覆盖"))
     }
 
+
+    @Test
+    fun dashboardSummaryExplainsCurrentStateAndNextAction() {
+        val noServer = SyncMessages.dashboardStateSummary(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "",
+            sessionActive = false,
+        )
+        val noServerNext = SyncMessages.dashboardNextAction(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "",
+            sessionActive = false,
+        )
+        val ready = SyncMessages.dashboardStateSummary(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = false,
+        )
+        val playingNext = SyncMessages.dashboardNextAction(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = true,
+        )
+
+        assertTrue(noServer.contains("还没有同步到服务器"))
+        assertTrue(noServerNext.contains("未填写前不会上传到任何地方"))
+        assertTrue(ready.contains("先做启动前检查"))
+        assertTrue(playingNext.contains("我已退出 MH3G"))
+    }
+
+    @Test
+    fun confirmationCopyExplainsRestoreAndLocalReplaceRisk() {
+        val restore = SyncMessages.restoreCloudConfirmBody("http://127.0.0.1:18080/")
+        val local = SyncMessages.localReplaceCloudConfirmBody(
+            target = "MH3G / Android Nemessix",
+            serverEndpoint = "http://127.0.0.1:18080/",
+            sessionActive = true,
+        )
+
+        assertTrue(SyncMessages.restoreCloudConfirmTitle().contains("云端版本恢复本地"))
+        assertTrue(restore.contains("先备份当前本地存档"))
+        assertTrue(restore.contains("继续使用本地"))
+        assertTrue(SyncMessages.localReplaceCloudConfirmTitle().contains("本地版本替换云端"))
+        assertTrue(local.contains("不会立刻上传"))
+        assertTrue(local.contains("云端旧版本会保留"))
+        assertTrue(local.contains("不会按时间静默覆盖"))
+    }
+
     @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(

@@ -46,6 +46,35 @@ object SyncMessages {
     fun cloudActionNeedsServer(): String =
         "云端同步未开始：还没有填写服务器地址。Mac 和 Android 必须填写同一个服务器地址后，上传、下载、恢复才会执行；当前没有同步到任何服务器。"
 
+    fun dashboardStateSummary(
+        authorized: Boolean,
+        gameEnabled: Boolean,
+        endpoint: String?,
+        sessionActive: Boolean,
+    ): String {
+        val server = serverLabel(endpoint)
+        return when {
+            !gameEnabled -> "MH3G 同步已关闭：不会自动上传、下载或恢复；历史版本仍保留。"
+            !authorized -> "还不能同步：尚未授权 Android Nemessix 存档目录，工具不会读取或覆盖本地存档。"
+            endpoint.orEmpty().trim().isBlank() -> "还没有同步到服务器：当前只显示本地状态。Mac 和 Android 必须填写同一个服务器地址。"
+            sessionActive -> "本地存档保护中：你正在玩 MH3G 时不会从云端覆盖本地；退出后才对账上传到 $server。"
+            else -> "已准备好：MH3G / Android Nemessix 会同步到 $server；先做启动前检查，再决定上传、下载或恢复。"
+        }
+    }
+
+    fun dashboardNextAction(
+        authorized: Boolean,
+        gameEnabled: Boolean,
+        endpoint: String?,
+        sessionActive: Boolean,
+    ): String = when {
+        !gameEnabled -> "打开「MH3G 同步开关」后，再授权目录并做启动前检查。"
+        !authorized -> "先点「选择 Android Nemessix 存档目录」，授权后再同步。"
+        endpoint.orEmpty().trim().isBlank() -> "填写和 Mac 一样的服务器地址；未填写前不会上传到任何地方。"
+        sessionActive -> "如果正在玩就继续；退出后点「我已退出 MH3G」开始对账上传。"
+        else -> "点「启动前检查」查看云端版本；需要替换前会先让你确认。"
+    }
+
     fun noServerPhase(): String =
         "需要服务器地址"
 
@@ -160,6 +189,28 @@ object SyncMessages {
 
     fun continueLocalNextAction(): String =
         "可以先玩；退出 MH3G 后再做对账补传，云端旧版本不会被静默覆盖。"
+
+    fun restoreCloudConfirmTitle(): String =
+        "确认用云端版本恢复本地？"
+
+    fun restoreCloudConfirmBody(serverEndpoint: String): String =
+        "这会从 ${serverLabel(serverEndpoint)} 取回云端版本，并在确认 Nemessix 已停止后恢复到 Android Nemessix 存档目录。执行前会先备份当前本地存档；如果你不确定，请选择继续使用本地。"
+
+    fun localReplaceCloudConfirmTitle(): String =
+        "确认用本地版本替换云端？"
+
+    fun localReplaceCloudConfirmBody(
+        target: String,
+        serverEndpoint: String,
+        sessionActive: Boolean,
+    ): String {
+        val timing = if (sessionActive) {
+            "当前正在玩 MH3G，不会立刻上传；退出并通过稳定校验后才会上传。"
+        } else {
+            "会先等待稳定校验，通过后才会上传。"
+        }
+        return "这会把 $target 作为新的云端版本上传到 ${serverLabel(serverEndpoint)}。$timing 云端旧版本会保留为历史/冲突分支，不会按时间静默覆盖。"
+    }
 
     fun restoreCloudHeadQueued(serverEndpoint: String): String =
         "已排队：云端覆盖本地。服务器=${serverLabel(serverEndpoint)}；执行前必须确认 Nemessix 已停止，并先备份当前本地存档。"

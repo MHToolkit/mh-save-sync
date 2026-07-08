@@ -124,6 +124,8 @@ class MainActivity : ComponentActivity() {
             )
         }
         var conflictVisible by remember { mutableStateOf(false) }
+        var restoreCloudConfirmVisible by remember { mutableStateOf(false) }
+        var localReplaceCloudConfirmVisible by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val folderPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree(),
@@ -172,9 +174,68 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        fun queueLocalReplaceCloud() {
+            val reason = "user-use-local"
+            SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+            persistSyncStatus(
+                reason = reason,
+                summary = SyncMessages.localReplaceCloudQueued(
+                    target = "MH3G / Android Nemessix",
+                    serverEndpoint = serverEndpoint,
+                    sessionActive = sessionActive,
+                ),
+                phase = SyncMessages.queuedPhase(reason),
+                action = SyncMessages.queuedNextAction(reason, sessionActive),
+            )
+        }
+
+        fun queueRestoreCloudHead() {
+            val reason = "restore-cloud-head"
+            SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+            persistSyncStatus(
+                reason = reason,
+                summary = SyncMessages.restoreCloudHeadQueued(serverEndpoint),
+                phase = SyncMessages.queuedPhase(reason),
+                action = SyncMessages.queuedNextAction(reason, sessionActive),
+            )
+        }
+
         if (conflictVisible) {
             ConflictDialog(
                 onDismiss = { conflictVisible = false },
+            )
+        }
+
+        if (restoreCloudConfirmVisible) {
+            RestoreCloudConfirmDialog(
+                serverEndpoint = serverEndpoint,
+                onDismiss = { restoreCloudConfirmVisible = false },
+                onConfirm = {
+                    restoreCloudConfirmVisible = false
+                    if (sessionActive) {
+                        persistSyncStatus(
+                            reason = "restore-blocked-running",
+                            summary = SyncMessages.restoreBlockedRunning(),
+                            phase = SyncMessages.completedPhase("restore-blocked-running"),
+                            action = SyncMessages.completedNextAction("restore-blocked-running", sessionActive),
+                            error = "Nemessix 仍在运行",
+                        )
+                    } else {
+                        queueRestoreCloudHead()
+                    }
+                },
+            )
+        }
+
+        if (localReplaceCloudConfirmVisible) {
+            LocalReplaceCloudConfirmDialog(
+                serverEndpoint = serverEndpoint,
+                sessionActive = sessionActive,
+                onDismiss = { localReplaceCloudConfirmVisible = false },
+                onConfirm = {
+                    localReplaceCloudConfirmVisible = false
+                    queueLocalReplaceCloud()
+                },
             )
         }
 
@@ -202,6 +263,27 @@ class MainActivity : ComponentActivity() {
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
+
+                CardSection("当前状态和下一步") {
+                    StatusLine(
+                        "当前状态",
+                        SyncMessages.dashboardStateSummary(
+                            authorized = authorized,
+                            gameEnabled = gameEnabled,
+                            endpoint = serverEndpoint,
+                            sessionActive = sessionActive,
+                        ),
+                    )
+                    StatusLine(
+                        "下一步",
+                        SyncMessages.dashboardNextAction(
+                            authorized = authorized,
+                            gameEnabled = gameEnabled,
+                            endpoint = serverEndpoint,
+                            sessionActive = sessionActive,
+                        ),
+                    )
+                }
 
                 CardSection("同步到哪里") {
                     OutlinedTextField(
@@ -369,34 +451,7 @@ class MainActivity : ComponentActivity() {
                         }
                         OutlinedButton(
                             enabled = authorized && gameEnabled && serverEndpoint.isNotBlank(),
-                            onClick = {
-                                if (sessionActive) {
-                                    lastSummary = SyncMessages.restoreBlockedRunning()
-                                    syncPhase = SyncMessages.completedPhase("restore-blocked-running")
-                                    nextAction = SyncMessages.completedNextAction("restore-blocked-running", sessionActive)
-                                    syncError = "Nemessix 仍在运行"
-                                    preferences.edit()
-                                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                        .putString(SyncScheduler.LAST_SYNC_REASON, "restore-blocked-running")
-                                        .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                        .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                        .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                        .apply()
-                                } else {
-                                    SyncScheduler.enqueueImmediate(this@MainActivity, "restore-cloud-head")
-                                    lastSummary = SyncMessages.restoreCloudHeadQueued(serverEndpoint)
-                                    syncPhase = SyncMessages.queuedPhase("restore-cloud-head")
-                                    nextAction = SyncMessages.queuedNextAction("restore-cloud-head", sessionActive)
-                                    syncError = ""
-                                    preferences.edit()
-                                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                        .putString(SyncScheduler.LAST_SYNC_REASON, "restore-cloud-head")
-                                        .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                        .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                        .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                        .apply()
-                                }
-                            },
+                            onClick = { restoreCloudConfirmVisible = true },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("云端覆盖本地（先备份，需停止 Nemessix）")
@@ -482,18 +537,7 @@ class MainActivity : ComponentActivity() {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("user-use-local-no-server", "本地替换云端")
                             } else {
-                                val reason = "user-use-local"
-                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.localReplaceCloudQueued(
-                                        target = "MH3G / Android Nemessix",
-                                        serverEndpoint = serverEndpoint,
-                                        sessionActive = sessionActive,
-                                    ),
-                                    phase = SyncMessages.queuedPhase(reason),
-                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
-                                )
+                                localReplaceCloudConfirmVisible = true
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -509,24 +553,8 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("restore-no-server", "云端覆盖本地")
-                            } else if (sessionActive) {
-                                val reason = "restore-blocked-running"
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.restoreBlockedRunning(),
-                                    phase = SyncMessages.completedPhase(reason),
-                                    action = SyncMessages.completedNextAction(reason, sessionActive),
-                                    error = "Nemessix 仍在运行",
-                                )
                             } else {
-                                val reason = "restore-cloud-head"
-                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.restoreCloudHeadQueued(serverEndpoint),
-                                    phase = SyncMessages.queuedPhase(reason),
-                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
-                                )
+                                restoreCloudConfirmVisible = true
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -647,6 +675,61 @@ class MainActivity : ComponentActivity() {
             confirmButton = {
                 TextButton(onClick = onDismiss) {
                     Text("知道了")
+                }
+            },
+        )
+    }
+
+    @Composable
+    private fun RestoreCloudConfirmDialog(
+        serverEndpoint: String,
+        onDismiss: () -> Unit,
+        onConfirm: () -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(SyncMessages.restoreCloudConfirmTitle()) },
+            text = { Text(SyncMessages.restoreCloudConfirmBody(serverEndpoint)) },
+            confirmButton = {
+                TextButton(onClick = onConfirm) {
+                    Text("确认云端覆盖本地")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("先继续使用本地")
+                }
+            },
+        )
+    }
+
+    @Composable
+    private fun LocalReplaceCloudConfirmDialog(
+        serverEndpoint: String,
+        sessionActive: Boolean,
+        onDismiss: () -> Unit,
+        onConfirm: () -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(SyncMessages.localReplaceCloudConfirmTitle()) },
+            text = {
+                Text(
+                    SyncMessages.localReplaceCloudConfirmBody(
+                        target = "MH3G / Android Nemessix",
+                        serverEndpoint = serverEndpoint,
+                        sessionActive = sessionActive,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirm) {
+                    Text("确认本地替换云端")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("暂不处理")
                 }
             },
         )
