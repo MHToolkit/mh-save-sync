@@ -19,6 +19,7 @@ object SyncScheduler {
     const val LAST_SYNC_TARGET = "last_sync_target"
     const val LAST_SYNC_REASON = "last_sync_reason"
     const val LAST_SYNC_UNIX_MS = "last_sync_unix_ms"
+    const val REMOTE_VERSION_LABEL = "remote_version_label"
     const val LAUNCH_GATE_SUMMARY = "launch_gate_summary"
     const val LAUNCH_GATE_REASON = "launch_gate_reason"
     const val SESSION_ACTIVE = "session_active"

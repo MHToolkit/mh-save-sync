@@ -241,6 +241,7 @@ class MainActivity : ComponentActivity() {
                                     .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, result.reason)
+                                    .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
                                     .apply()
                             }
                         },
@@ -265,7 +266,7 @@ class MainActivity : ComponentActivity() {
                                 launchGate = result.summary
                                 launchGateReason = result.reason
                                 lastSummary = if (result.remoteHead != null) {
-                                    "已发现云端版本=${result.remoteHead}。为避免覆盖风险，暂不自动打开 Nemessix；请先选择下载/恢复或继续本地。"
+                                    "已发现${result.remoteVersionLabel ?: "云端版本"}。为避免覆盖风险，暂不自动打开 Nemessix；请直接在启动前检查卡片里选择下载、恢复或继续本地。"
                                 } else if (!result.cloudReachable) {
                                     SyncMessages.launchPausedForCloudUnavailable()
                                 } else {
@@ -276,6 +277,7 @@ class MainActivity : ComponentActivity() {
                                     .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, "launch-nemessix")
+                                    .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
                                     .apply()
                             }
                         },
@@ -299,9 +301,52 @@ class MainActivity : ComponentActivity() {
                         "prelaunch-cloud-unavailable",
                         "prelaunch-remote-head",
                     )
+                    val canActOnRemoteAfterGate = launchGateReason == "prelaunch-remote-head"
+                    if (canActOnRemoteAfterGate) {
+                        Text(
+                            SyncMessages.prelaunchRemoteDecisionHint(),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        OutlinedButton(
+                            enabled = authorized && gameEnabled && serverEndpoint.isNotBlank(),
+                            onClick = {
+                                SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
+                                lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
+                                preferences.edit()
+                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                    .putString(SyncScheduler.LAST_SYNC_REASON, "download-cache-only")
+                                    .apply()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("先下载云端到本机缓存（不覆盖）")
+                        }
+                        OutlinedButton(
+                            enabled = authorized && gameEnabled && serverEndpoint.isNotBlank(),
+                            onClick = {
+                                if (sessionActive) {
+                                    lastSummary = SyncMessages.restoreBlockedRunning()
+                                    preferences.edit()
+                                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                        .putString(SyncScheduler.LAST_SYNC_REASON, "restore-blocked-running")
+                                        .apply()
+                                } else {
+                                    SyncScheduler.enqueueImmediate(this@MainActivity, "restore-cloud-head")
+                                    lastSummary = SyncMessages.restoreCloudHeadQueued(serverEndpoint)
+                                    preferences.edit()
+                                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                        .putString(SyncScheduler.LAST_SYNC_REASON, "restore-cloud-head")
+                                        .apply()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("云端覆盖本地（先备份，需停止 Nemessix）")
+                        }
+                    }
                     if (canContinueLocalAfterGate) {
                         Text(
-                            "你已看过启动前检查结果。若现在选择继续本地，后续云端也变更时会进入冲突分支，不会自动覆盖。",
+                            SyncMessages.continueLocalRiskHint(),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

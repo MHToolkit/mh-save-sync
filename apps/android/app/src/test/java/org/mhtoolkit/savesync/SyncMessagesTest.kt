@@ -180,6 +180,30 @@ class SyncMessagesTest {
     }
 
     @Test
+    fun remoteVersionLabelDoesNotExposeBareSnapshotId() {
+        val label = SyncServerProbe.userVisibleRemoteVersion(
+            "243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2",
+        )
+
+        assertTrue(label.contains("云端已有一个版本"))
+        assertTrue(label.contains("后 6 位"))
+        assertTrue(label.contains("a41d2"))
+        assertTrue(!label.contains("243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2"))
+    }
+
+    @Test
+    fun prelaunchDecisionCopyExplainsImmediateActionsAndLocalRisk() {
+        val decision = SyncMessages.prelaunchRemoteDecisionHint()
+        val risk = SyncMessages.continueLocalRiskHint()
+
+        assertTrue(decision.contains("只下载到本机缓存"))
+        assertTrue(decision.contains("云端覆盖本地"))
+        assertTrue(decision.contains("继续使用本地"))
+        assertTrue(risk.contains("先不恢复云端"))
+        assertTrue(risk.contains("冲突待处理"))
+    }
+
+    @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID

@@ -11,6 +11,7 @@ data class PrelaunchProbeResult(
     val reason: String,
     val cloudReachable: Boolean,
     val remoteHead: String?,
+    val remoteVersionLabel: String? = null,
 )
 
 object SyncServerProbe {
@@ -38,16 +39,18 @@ object SyncServerProbe {
             val head = get("$server/v1/heads/$MH3G_NEMESSIX_LOGICAL_SAVE_ID")
             when (head.status) {
                 in 200..299 -> {
-                    val snapshot = head.body.trim().trim('"').ifBlank { "unknown" }
+                    val snapshot = head.body.trim().trim('"')
+                    val versionLabel = userVisibleRemoteVersion(snapshot)
                     PrelaunchProbeResult(
                         summary = if (emulatorRunning) {
-                            "云端可用，且 MH3G 有云端版本=$snapshot。Nemessix 正在运行，当前只会下载到缓存；请退出游戏后再执行云端覆盖本地。服务器：$server。"
+                            "云端可用，且 $versionLabel。Nemessix 正在运行，当前只会下载到本机缓存；请退出游戏后再执行云端覆盖本地。服务器：$server。"
                         } else {
-                            "云端可用，且 MH3G 有云端版本=$snapshot。若本地不是同一版本，请先下载到缓存并确认后恢复；不会按最新时间自动覆盖。服务器：$server。"
+                            "云端可用，且 $versionLabel。若本地不是同一版本，请先下载到本机缓存并确认后恢复；不会按最新时间自动覆盖。服务器：$server。"
                         },
                         reason = "prelaunch-remote-head",
                         cloudReachable = true,
-                        remoteHead = snapshot,
+                        remoteHead = snapshot.ifBlank { null },
+                        remoteVersionLabel = versionLabel,
                     )
                 }
                 404 -> PrelaunchProbeResult(
@@ -67,6 +70,15 @@ object SyncServerProbe {
 
     fun normalizeServer(serverEndpoint: String): String =
         serverEndpoint.trim().trimEnd('/')
+
+    fun userVisibleRemoteVersion(rawSnapshot: String): String {
+        val trimmed = rawSnapshot.trim().trim('"')
+        if (trimmed.isBlank()) {
+            return "MH3G 云端已有一个版本，详情暂不可读"
+        }
+        val suffix = trimmed.takeLast(minOf(6, trimmed.length))
+        return "MH3G 云端已有一个版本（版本摘要后 6 位：$suffix）"
+    }
 
     private fun cloudUnavailable(server: String, detail: String): PrelaunchProbeResult =
         PrelaunchProbeResult(

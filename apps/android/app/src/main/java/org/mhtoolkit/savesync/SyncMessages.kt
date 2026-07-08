@@ -67,6 +67,12 @@ object SyncMessages {
     fun downloadCacheQueued(serverEndpoint: String): String =
         "已排队：只下载云端到本机缓存。同步方向是 ${serverLabel(serverEndpoint)} → 本机安全缓存；不会覆盖 Nemessix 原目录，真正恢复前会再次确认模拟器已停止并先备份本地存档。"
 
+    fun prelaunchRemoteDecisionHint(): String =
+        "发现云端版本后，请先选一个动作：只下载到本机缓存、云端覆盖本地，或继续使用本地并打开 Nemessix。"
+
+    fun continueLocalRiskHint(): String =
+        "继续使用本地表示这次先不恢复云端；如果另一台设备之后也修改，会进入冲突待处理，需要你选择保留哪一边。"
+
     fun continueLocalLaunchQueued(): String =
         "已选择继续使用本地存档。当前不会从云端覆盖本地，也不会把未验证中间态上传；退出 MH3G 后再对账补传。"
 
