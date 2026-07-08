@@ -25,7 +25,9 @@ scripts/server-sync-e2e.sh                                      PASS: upload/sta
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
 scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
 scripts/macos-install-e2e.sh                                    PASS: local .app install, bundled CLI, persisted server URL, save root, recovery secret file, manual/auto menu labels
-scripts/android-avd-generic-folder-e2e.sh                    PASS: headless AVD shared-storage public Alpha conflict/restore gate
+scripts/android-apk-smoke.sh                                    PASS: debug APK installs, launches MainActivity and has no launch crash on ADB emulator
+scripts/android-avd-generic-folder-e2e.sh                       PASS: headless AVD shared-storage public Alpha conflict/restore gate
+scripts/android-generic-folder-e2e.sh                           PASS: connected ADB shared-storage public Alpha conflict/restore gate
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
 scripts/compose-server-sync-e2e.sh                              PASS: postgres-s3 upload/status/restore and conflict branch
 scripts/compose-project-volume-test.sh                          PASS: backup/restore use isolated Compose project volumes
@@ -98,6 +100,67 @@ Boundary:
 
 - This is parser/UX evidence only. It does not upgrade any emulator adapter to
   `RuntimeVerified`, and it does not claim binary save semantic merge support.
+
+## Android APK install/launch smoke executed on 2026-07-08
+
+Command:
+
+```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+  ./apps/android/gradlew -p apps/android testDebugUnitTest lintDebug assembleDebug
+./scripts/android-apk-smoke.sh
+```
+
+Local ADB evidence from the current debug APK:
+
+```json
+{"android_apk_smoke":true,"apk_sha256":"bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1","device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","resumed_activity":"topResumedActivity=ActivityRecord{110934309 u0 org.mhtoolkit.savesync/.MainActivity t12}"}
+```
+
+Evidence scope:
+
+- The debug APK installs with `adb install -r`, launches via the Android
+  launcher intent, becomes the resumed activity, and does not emit an app crash
+  signature during launch.
+- The APK hash above matches the debug APK copied for manual installation under
+  `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/`.
+- This is an install/launch smoke only. It does not prove SAF authorization,
+  Android Nemessix sandbox access, or emulator-readable restore.
+
+## Android Generic Folder shared-storage gate executed on 2026-07-08
+
+Command:
+
+```bash
+MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
+  ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
+  ./scripts/android-generic-folder-e2e.sh
+```
+
+Current remote Alpha output:
+
+```json
+{"adb_device":"emulator-5554","android_conflict_snapshot":"26a80aa856b3d6f27592d0502af8c18cde9a8a8b0c972b8da3864ff885bd3700","android_generic_folder_e2e":true,"backend":"postgres-s3","cloud_head":"5d155c65f9bc6a54da99b0f038215a0f8932e41f20410a679692ffac919f050c","conflict_count":1,"history_count":2,"logical_save_id":"adb-generic-folder-1783512554083042000","restored_android_path":"/sdcard/MHSaveSyncE2E/restored-head/slot1/main.bin","restored_sha256":"d92bf81eb5f71918292b1c5515792135574123c8c98c52da0a242492e3703268","restored_snapshot_id":"5d155c65f9bc6a54da99b0f038215a0f8932e41f20410a679692ffac919f050c","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082","support_level":"Generic Folder Android shared-storage evidence only; does not upgrade emulator-specific adapters to RuntimeVerified"}
+```
+
+Evidence scope:
+
+- The public Alpha API was reachable and reported
+  `{"status":"ready","version":"0.1.0","backend":"postgres-s3"}` before the
+  test.
+- The test used a synthetic logical save ID and deterministic public device
+  fixture, uploaded a Mac-style head, pulled a divergent Android shared-storage
+  folder over ADB, uploaded it as a conflict branch, restored the cloud head,
+  pushed the restored bytes back to `/sdcard`, pulled them again, and byte-
+  compared the result.
+- Restore while the emulator state was `running` failed closed and wrote no
+  target directory.
+
+Boundary:
+
+- This is Runtime Verified only for the Generic Folder Android shared-storage
+  adapter path. It does not prove Android Nemessix, Azahar or Citra MMJ can read
+  the restored bytes as a real game save.
 
 ## Offline bundle recovery gate executed on 2026-07-07
 

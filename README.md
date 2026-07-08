@@ -215,6 +215,19 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug
 ```
 
+Install/launch smoke for the generated debug APK on exactly one connected ADB
+device or emulator:
+
+```bash
+./scripts/android-apk-smoke.sh
+```
+
+The smoke installs `apps/android/app/build/outputs/apk/debug/app-debug.apk`,
+launches `org.mhtoolkit.savesync/.MainActivity`, checks that it becomes the
+resumed activity and fails if launch logcat contains an app crash. It does not
+exercise SAF or real emulator save access; use it as the quick "can I install
+the APK before going home?" gate before the shared-folder sync E2E below.
+
 Android Generic Folder shared-storage smoke with a connected ADB device:
 
 ```bash
