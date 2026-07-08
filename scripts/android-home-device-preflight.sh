@@ -87,12 +87,13 @@ mkdir -p "$(dirname "$audit_out")"
 ADB="$adb" python3 scripts/runtime-evidence-audit.py --output "$audit_out" >/dev/null
 
 apk_sha256="$(shasum -a 256 "$apk" | awk '{print $1}')"
+repo_head="$(git rev-parse HEAD 2>/dev/null || true)"
 runtime_targets_available=false
 if [[ "${#matched_targets[@]}" -gt 0 ]]; then
   runtime_targets_available=true
 fi
 
-python3 - "$out" "$serial" "$apk" "$apk_sha256" "$resumed" "$server_url" "$server_ready" "$server_status" "$audit_out" "${matched_targets[*]-}" "${missing_targets[*]-}" <<'PY'
+python3 - "$out" "$serial" "$apk" "$apk_sha256" "$repo_head" "$resumed" "$server_url" "$server_ready" "$server_status" "$audit_out" "${matched_targets[*]-}" "${missing_targets[*]-}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -102,6 +103,7 @@ from pathlib import Path
     serial,
     apk,
     apk_sha256,
+    repo_head,
     resumed,
     server_url,
     server_ready,
@@ -109,7 +111,7 @@ from pathlib import Path
     audit_path,
     matched_raw,
     missing_raw,
-) = sys.argv[1:12]
+) = sys.argv[1:13]
 
 matched = [p for p in matched_raw.split() if p]
 missing = [p for p in missing_raw.split() if p]
@@ -129,6 +131,7 @@ report = {
     "device_serial": serial,
     "apk": apk,
     "apk_sha256": apk_sha256,
+    "repo_head": repo_head,
     "package": "org.mhtoolkit.savesync",
     "resumed_activity": resumed,
     "server_url_configured": bool(server_url),

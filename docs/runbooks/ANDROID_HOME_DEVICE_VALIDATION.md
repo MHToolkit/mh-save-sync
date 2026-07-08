@@ -5,9 +5,9 @@
 - Boundary: this runbook prepares evidence for Android phone validation. It
   does not by itself upgrade Nemessix, Azahar or Citra MMJ to Runtime Verified.
 
-## 1. Install the latest CI-green APK
+## 1. Pick an APK artifact
 
-Current local delivery artifact:
+Current local installable alpha APK on this Mac:
 
 ```bash
 adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.apk
@@ -19,9 +19,12 @@ Evidence file:
 /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.evidence.json
 ```
 
-The artifact is tied to PR head
-`72e1d4eae78a0d77f52ddd32abd781d61d4bb555` and CI run
-`https://github.com/MHToolkit/mh-save-sync/actions/runs/28944268168`.
+Use the APK evidence JSON, APK SHA256 and GitHub Actions run recorded next to
+the APK as the artifact authority. Do not infer the APK build commit from this
+runbook's Git commit: documentation or validation-script commits may happen
+after the Android APK is built. If Android app code changes, rebuild the APK,
+copy it to `~/Games/Backups/MHSaveSync/apk/`, regenerate its evidence JSON, and
+set `MH_SAVE_SYNC_APK` to that new file before real-device validation.
 
 ## 2. Run device preflight
 
@@ -43,7 +46,8 @@ The script:
 3. verifies the app becomes the resumed activity;
 4. checks server `/ready` when `MH_SAVE_SYNC_SERVER_URL` is set;
 5. checks whether Android Nemessix, Azahar or Citra MMJ packages are installed;
-6. writes `artifacts/runtime/android_home_device_preflight.json`.
+6. records the current repository HEAD separately from the APK SHA256;
+7. writes `artifacts/runtime/android_home_device_preflight.json`.
 
 Privacy boundary: it records package/activity/server facts only. It does not
 enumerate save directories, filenames, save bytes, character names, ROM paths,

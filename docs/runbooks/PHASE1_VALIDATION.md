@@ -270,6 +270,9 @@ Evidence scope:
   `org.mhtoolkit.savesync`, confirmed it became the resumed activity, checked
   the public Alpha `/ready` endpoint, and wrote package/activity/server evidence
   to `artifacts/runtime/android_home_device_preflight.json`.
+- The preflight JSON records the current repository HEAD separately from the APK
+  SHA256, so documentation-only commits do not silently change the meaning of
+  an already-built APK artifact.
 - It also wrote a stable runtime audit artifact at
   `artifacts/runtime/android_home_device_preflight.runtime_audit.json`.
 - The current AVD does not contain Android Nemessix, Azahar or Citra MMJ
