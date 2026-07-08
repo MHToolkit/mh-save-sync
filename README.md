@@ -25,33 +25,26 @@ actual target instead of pressing an opaque “sync” button:
    - macOS: run
      `swift run --package-path apps/macos MHSaveSyncMac --set-server-url <url>`
      once, or set `MH_SAVE_SYNC_SERVER_URL` for one-off CLI sessions.
-   - Android: enter the server address in the app.
+   - Android: enter the same server address in the app.
    - Current isolated Alpha test API: `http://8.130.112.207:39082`
      (server API only; MinIO/admin ports are not client endpoints).
 2. macOS Nemessix before launch: install the local menu-bar app once with
    `./scripts/install-macos-app.sh`, then open `/Applications/MH Save Sync.app`.
-   Use the menu item `设置服务器地址…` once, then `启动前检查` before MH3G. For
-   CI/debugging you can still run
-   `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
-   build the artifact-only bundle with `./scripts/build-macos-app-bundle.sh`.
-   The gate now performs a real server health check plus MH3G cloud-version
-   probe before the game starts. `继续本地并打开 Nemessix` is a separate explicit
-   action for cloud-unavailable or intentional local-only play; it never writes
-   remote data into the emulator directory.
-3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
-   keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android also
-   probes the configured server and the MH3G cloud version, shows
-   `云端覆盖本地（先备份，需停止 Nemessix）`, and refuses running restores with a
-   visible “没有覆盖本地存档” message. The first-run UI avoids internal
-   `CAS/HEAD/SAF/staging` jargon; `scripts/ux-copy-guard.py` enforces this in
-   CI.
-4. Conflicts list local vs cloud device/time/parent/size/hash and require an
-   explicit choice: `云端覆盖本地` or `本地替换云端`. Both histories are retained;
-   there is no mtime-based last-write-wins.
-5. If the server is unavailable, continue local play is explicit. Local queues
+   The app is a menu-bar utility: look for `MH 云存档` in the top-right menu bar,
+   not in the Dock. Use `设置服务器地址…` once, then `启动前检查` before MH3G.
+   `新手引导：办公室 Mac ↔ 回家 Android` explains the same flow inside the app.
+3. Android Nemessix before launch: authorize the Nemessix save folder, keep
+   `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android shows whether
+   it is uploading, downloading to the phone cache, waiting for you to exit MH3G,
+   or blocked because the server address is missing.
+4. If cloud and local versions differ, the app requires an explicit choice:
+   `云端覆盖本地（先备份，需停止 Nemessix）` or `本地替换云端（保留云端旧版本）`.
+   Both histories are retained; there is no newest-time auto overwrite.
+5. If the server is unavailable, continuing local play is explicit. Local queues
    remain intact and upload resumes after the server recovers.
 
-Detailed Chinese UX flows are maintained in `docs/ux/SYNC_USER_FLOWS.md`.
+Player-facing Chinese guide: `docs/ux/USER_GUIDE_ZH.md`.
+Engineering UX contract: `docs/ux/SYNC_USER_FLOWS.md`.
 
 ## Repository map
 

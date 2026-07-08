@@ -141,7 +141,7 @@ func printStatus(_ context: MacSyncContext) {
     模拟器：\(context.emulator)
     存档目录提示：\(context.saveRootHint)
     自动化边界：文件变化只提醒工具复查；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
-    本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；菜单里可直接设置服务器地址。
+    本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；屏幕右上角出现「MH 云存档」，菜单里可直接设置服务器地址。
     常用命令：--set-server-url <url> / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
 }
@@ -381,6 +381,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "对象：\(context.profile)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "设置服务器地址…", action: #selector(promptServerURL), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "新手引导：办公室 Mac ↔ 回家 Android", action: #selector(showQuickGuide), keyEquivalent: "g"))
         menu.addItem(NSMenuItem(title: "启动前检查", action: #selector(showPrelaunch), keyEquivalent: "p"))
         menu.addItem(NSMenuItem(title: "继续本地并打开 Nemessix", action: #selector(continueLocalAndOpenNemessix), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "查看冲突处理", action: #selector(showConflict), keyEquivalent: "c"))
@@ -390,6 +391,31 @@ final class MenuController: NSObject, NSApplicationDelegate {
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
+        showStartupGuideIfNeeded()
+    }
+
+    private func showStartupGuideIfNeeded() {
+        guard context.serverURL == nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.showQuickGuide()
+        }
+    }
+
+    @objc private func showQuickGuide() {
+        showAlert(
+            title: "MH 云存档已在菜单栏运行",
+            message: """
+            你现在用的是菜单栏 App，不会出现在 Dock。请看屏幕右上角的「MH 云存档」。
+
+            第一次使用：
+            1. 点「设置服务器地址…」，Mac 和 Android 填同一个地址。
+            2. 启动 MH3G 前点「启动前检查」。
+            3. 如果云端有新版本，先选择只查看/恢复云端，或继续使用本地。
+            4. 如果云端不可用，可以继续本地游玩；退出后再补传。
+
+            底线：运行中的 Nemessix 不会被云端覆盖；恢复前一定先备份当前本地存档。
+            """
+        )
     }
 
     @objc private func promptServerURL() {
@@ -496,7 +522,7 @@ do {
     } else if args.contains("--continue-local") {
         printContinueLocal()
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--prelaunch-check] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，菜单内可设置服务器地址、启动前检查、继续本地并打开 Nemessix，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
+        print("用法：MHSaveSyncMac [--status] [--set-server-url <url>] [--prelaunch-check] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档」，菜单内可设置服务器地址、查看新手引导、启动前检查、继续本地并打开 Nemessix，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
     } else {
         printStatus(context)
     }

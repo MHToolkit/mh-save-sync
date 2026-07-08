@@ -56,7 +56,8 @@ print(json.dumps({
     "macos_app_installed": True,
     "path": "$dest_app",
     "display_name": "MH 云存档",
-    "launch": "open -a '$dest_app'",
+    "launch": "open '$dest_app'",
+    "menu_bar_note": "打开后屏幕右上角显示 MH 云存档，Dock 不常驻",
     "config_command": "$exe --set-server-url <server-url>",
 }, ensure_ascii=False, sort_keys=True))
 PY
