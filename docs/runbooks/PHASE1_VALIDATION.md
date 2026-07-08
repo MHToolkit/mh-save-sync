@@ -247,6 +247,41 @@ Boundary:
 
 - This is availability evidence only. Runtime Verified still requires real emulator save, stable snapshot, controlled mutation/damage, stopped restore and emulator-readable relaunch proof.
 
+## Android home-device preflight gate executed on 2026-07-08
+
+Command:
+
+```bash
+MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-72e1d4e-debug.apk" \
+MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
+ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
+./scripts/android-home-device-preflight.sh
+```
+
+Local output summary:
+
+```json
+{"android_home_device_preflight":true,"device_serial":"emulator-5554","server_ready":true,"runtime_targets_available":false,"matched_runtime_target_packages":[],"missing_runtime_target_packages":["io.github.vincentadamnemessisx.nemessix","org.azahar_emu.azahar","org.citra.emu"]}
+```
+
+Evidence scope:
+
+- The script installed the latest CI-green debug APK, launched
+  `org.mhtoolkit.savesync`, confirmed it became the resumed activity, checked
+  the public Alpha `/ready` endpoint, and wrote package/activity/server evidence
+  to `artifacts/runtime/android_home_device_preflight.json`.
+- It also wrote a stable runtime audit artifact at
+  `artifacts/runtime/android_home_device_preflight.runtime_audit.json`.
+- The current AVD does not contain Android Nemessix, Azahar or Citra MMJ
+  packages, so emulator-specific Android Runtime Verified evidence remains
+  unavailable on this device.
+
+Boundary:
+
+- This is a handoff/preflight gate for the user's home Android phone. It records
+  package/activity/server facts only and does not enumerate save files or save
+  contents.
+
 ## Offline bundle recovery gate executed on 2026-07-07
 
 Command:
