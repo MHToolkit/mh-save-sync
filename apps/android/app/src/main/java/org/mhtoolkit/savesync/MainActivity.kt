@@ -38,6 +38,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -127,6 +130,8 @@ class MainActivity : ComponentActivity() {
         var restoreCloudConfirmVisible by remember { mutableStateOf(false) }
         var localReplaceCloudConfirmVisible by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
+        val serverEndpointFocusRequester = remember { FocusRequester() }
+        val keyboardController = LocalSoftwareKeyboardController.current
         val folderPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree(),
         ) { uri ->
@@ -200,6 +205,60 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        fun runPrelaunchCheck() {
+            launchGate = "正在检查 ${SyncMessages.serverLabel(serverEndpoint)} 是否可用，并查看 MH3G 是否有云端版本；不会修改本地存档。"
+            preferences.edit()
+                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                .putString(SyncScheduler.LAUNCH_GATE_REASON, "prelaunch-checking")
+                .putString(SyncScheduler.LAST_SYNC_REASON, "prelaunch-checking")
+                .apply()
+            scope.launch {
+                val result = SyncServerProbe.checkPrelaunch(
+                    serverEndpoint = serverEndpoint,
+                    emulatorRunning = sessionActive,
+                )
+                launchGate = result.summary
+                launchGateReason = result.reason
+                lastSummary = result.summary
+                preferences.edit()
+                    .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
+                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                    .putString(SyncScheduler.LAST_SYNC_REASON, result.reason)
+                    .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
+                    .apply()
+            }
+        }
+
+        fun toggleSessionProtection() {
+            if (sessionActive) {
+                stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
+                lastSummary = SyncMessages.sessionExitSummary()
+            } else {
+                ContextCompat.startForegroundService(
+                    this@MainActivity,
+                    Intent(this@MainActivity, ActiveSessionService::class.java),
+                )
+                lastSummary = SyncMessages.sessionStartSummary()
+            }
+            val oldSessionActive = sessionActive
+            syncPhase = if (oldSessionActive) SyncMessages.queuedPhase("session-exit") else "游戏运行保护中"
+            nextAction = if (oldSessionActive) SyncMessages.queuedNextAction("session-exit", false) else "游玩期间不会把云端覆盖到本地；退出后再对账上传。"
+            syncError = ""
+            sessionActive = !sessionActive
+            preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                .putString(
+                    SyncScheduler.LAST_SYNC_REASON,
+                    if (sessionActive) "session-start" else "session-exit",
+                )
+                .putBoolean(SyncScheduler.SESSION_ACTIVE, sessionActive)
+                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
+                .apply()
+        }
+
         if (conflictVisible) {
             ConflictDialog(
                 onDismiss = { conflictVisible = false },
@@ -253,16 +312,20 @@ class MainActivity : ComponentActivity() {
                     "一期中文 Alpha：办公室 Mac 和回家 Android 都把 MH3G 存档同步到同一个服务器；每个动作都会说明上传、下载还是恢复，不做静默覆盖。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                val syncTarget = preferences.getString(
+                    SyncScheduler.LAST_SYNC_TARGET,
+                    "MH3G / Android Nemessix",
+                ).orEmpty()
                 Text(
-                    SyncMessages.syncRoute(
-                        preferences.getString(
-                            SyncScheduler.LAST_SYNC_TARGET,
-                            "MH3G / Android Nemessix",
-                        ).orEmpty(),
-                        serverEndpoint,
-                    ),
+                    SyncMessages.syncRoute(syncTarget, serverEndpoint),
                     style = MaterialTheme.typography.bodySmall,
                 )
+
+                CardSection("办公室 Mac ↔ 回家 Android") {
+                    SyncMessages.officeHomeFlowSteps(serverEndpoint).forEach { step ->
+                        Text("• $step", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
 
                 CardSection("当前状态和下一步") {
                     StatusLine(
@@ -283,6 +346,51 @@ class MainActivity : ComponentActivity() {
                             sessionActive = sessionActive,
                         ),
                     )
+                    Button(
+                        onClick = {
+                            when {
+                                !gameEnabled -> {
+                                    gameEnabled = true
+                                    preferences.edit()
+                                        .putBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)
+                                        .apply()
+                                    persistSyncStatus(
+                                        reason = "enable-mh3g",
+                                        summary = "已打开 MH3G 同步开关。下一步请选择 Android Nemessix 存档目录并填写和 Mac 一样的服务器地址。",
+                                        phase = "MH3G 同步已开启",
+                                        action = "继续完成目录授权和服务器地址设置；未完成前不会上传到任何地方。",
+                                    )
+                                }
+                                !authorized -> folderPicker.launch(null)
+                                serverEndpoint.isBlank() -> {
+                                    serverEndpointFocusRequester.requestFocus()
+                                    keyboardController?.show()
+                                    persistNoServerStatus("dashboard-no-server", "启动前检查")
+                                }
+                                sessionActive -> toggleSessionProtection()
+                                else -> runPrelaunchCheck()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            SyncMessages.dashboardPrimaryActionLabel(
+                                authorized = authorized,
+                                gameEnabled = gameEnabled,
+                                endpoint = serverEndpoint,
+                                sessionActive = sessionActive,
+                            ),
+                        )
+                    }
+                    Text(
+                        SyncMessages.dashboardPrimaryActionHint(
+                            authorized = authorized,
+                            gameEnabled = gameEnabled,
+                            endpoint = serverEndpoint,
+                            sessionActive = sessionActive,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
 
                 CardSection("同步到哪里") {
@@ -300,7 +408,9 @@ class MainActivity : ComponentActivity() {
                             Text("Mac、Android 都填同一个地址；服务器只保存端到端加密后的快照。")
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(serverEndpointFocusRequester),
                     )
                     StatusLine(
                         "当前目标",
@@ -347,30 +457,7 @@ class MainActivity : ComponentActivity() {
                     StatusLine("检查结果", launchGate)
                     Button(
                         enabled = authorized && gameEnabled,
-                        onClick = {
-                            launchGate = "正在检查 ${SyncMessages.serverLabel(serverEndpoint)} 是否可用，并查看 MH3G 是否有云端版本；不会修改本地存档。"
-                            preferences.edit()
-                                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                                .putString(SyncScheduler.LAUNCH_GATE_REASON, "prelaunch-checking")
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "prelaunch-checking")
-                                .apply()
-                            scope.launch {
-                                val result = SyncServerProbe.checkPrelaunch(
-                                    serverEndpoint = serverEndpoint,
-                                    emulatorRunning = sessionActive,
-                                )
-                                launchGate = result.summary
-                                launchGateReason = result.reason
-                                lastSummary = result.summary
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, result.reason)
-                                    .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
-                                    .apply()
-                            }
-                        },
+                        onClick = { runPrelaunchCheck() },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("启动前检查")
@@ -488,6 +575,13 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("同步动作") {
+                    Text(
+                        SyncMessages.manualActionsIntro(
+                            target = syncTarget,
+                            endpoint = serverEndpoint,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     Button(
                         enabled = authorized && gameEnabled,
                         onClick = {
@@ -563,34 +657,7 @@ class MainActivity : ComponentActivity() {
                     }
                     OutlinedButton(
                         enabled = authorized && gameEnabled,
-                        onClick = {
-                            if (sessionActive) {
-                                stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
-                                lastSummary = SyncMessages.sessionExitSummary()
-                            } else {
-                                ContextCompat.startForegroundService(
-                                    this@MainActivity,
-                                    Intent(this@MainActivity, ActiveSessionService::class.java),
-                                )
-                                lastSummary = SyncMessages.sessionStartSummary()
-                            }
-                            val oldSessionActive = sessionActive
-                            syncPhase = if (oldSessionActive) SyncMessages.queuedPhase("session-exit") else "游戏运行保护中"
-                            nextAction = if (oldSessionActive) SyncMessages.queuedNextAction("session-exit", false) else "游玩期间不会把云端覆盖到本地；退出后再对账上传。"
-                            syncError = ""
-                            sessionActive = !sessionActive
-                            preferences.edit()
-                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                .putString(
-                                    SyncScheduler.LAST_SYNC_REASON,
-                                    if (sessionActive) "session-start" else "session-exit",
-                                )
-                                .putBoolean(SyncScheduler.SESSION_ACTIVE, sessionActive)
-                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                .apply()
-                        },
+                        onClick = { toggleSessionProtection() },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(SyncMessages.activeSessionToggleLabel(sessionActive))

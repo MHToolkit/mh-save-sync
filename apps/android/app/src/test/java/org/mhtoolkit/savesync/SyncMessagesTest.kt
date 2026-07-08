@@ -269,10 +269,56 @@ class SyncMessagesTest {
             sessionActive = true,
         )
 
+        val noAuthPrimary = SyncMessages.dashboardPrimaryActionLabel(
+            authorized = false,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = false,
+        )
+        val noServerPrimary = SyncMessages.dashboardPrimaryActionLabel(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "",
+            sessionActive = false,
+        )
+        val readyPrimary = SyncMessages.dashboardPrimaryActionLabel(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = false,
+        )
+        val playingPrimary = SyncMessages.dashboardPrimaryActionLabel(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = true,
+        )
+        val readyHint = SyncMessages.dashboardPrimaryActionHint(
+            authorized = true,
+            gameEnabled = true,
+            endpoint = "http://127.0.0.1:18080",
+            sessionActive = false,
+        )
+
         assertTrue(noServer.contains("还没有同步到服务器"))
         assertTrue(noServerNext.contains("未填写前不会上传到任何地方"))
         assertTrue(ready.contains("先做启动前检查"))
         assertTrue(playingNext.contains("我已退出 MH3G"))
+        assertTrue(noAuthPrimary == "选择 Android Nemessix 存档目录")
+        assertTrue(noServerPrimary == "到下方填写服务器地址")
+        assertTrue(readyPrimary == "启动前检查")
+        assertTrue(playingPrimary.contains("我已退出 MH3G"))
+        assertTrue(readyHint.contains("检查不会修改本地存档"))
+        listOf(noAuthPrimary, noServerPrimary, readyPrimary, playingPrimary, readyHint).forEach { message ->
+            assertTrue(!message.contains("锁定"))
+            assertTrue(!message.contains("标记会话"))
+            assertTrue(!message.contains("同步会话"))
+            assertTrue(!message.contains("SAF"))
+            assertTrue(!message.contains("CAS"))
+            assertTrue(!message.contains("HEAD"))
+            assertTrue(!message.contains("dirty"))
+            assertTrue(!message.contains("watcher"))
+        }
     }
 
     @Test
@@ -292,6 +338,41 @@ class SyncMessagesTest {
         assertTrue(local.contains("云端旧版本会保留"))
         assertTrue(local.contains("不会按时间静默覆盖"))
     }
+
+
+    @Test
+    fun officeHomeFlowCopyExplainsSharedServerAndNoSilentOverwrite() {
+        val steps = SyncMessages.officeHomeFlowSteps("http://127.0.0.1:18080/")
+        val joined = steps.joinToString("\n")
+
+        assertTrue(steps.size == 3)
+        assertTrue(joined.contains("办公室 Mac"))
+        assertTrue(joined.contains("回家 Android"))
+        assertTrue(joined.contains("http://127.0.0.1:18080"))
+        assertTrue(joined.contains("启动前检查"))
+        assertTrue(joined.contains("退出 MH3G 后"))
+        assertTrue(joined.contains("不会静默覆盖"))
+    }
+
+    @Test
+    fun manualActionsIntroExplainsWhereSyncGoesBeforeButtonTap() {
+        val configured = SyncMessages.manualActionsIntro(
+            target = "MH3G / Android Nemessix",
+            endpoint = "http://127.0.0.1:18080/",
+        )
+        val missing = SyncMessages.manualActionsIntro(
+            target = "MH3G / Android Nemessix",
+            endpoint = "",
+        )
+
+        assertTrue(configured.contains("MH3G / Android Nemessix → 本机安全缓存 → http://127.0.0.1:18080"))
+        assertTrue(configured.contains("只下载云端到本机缓存"))
+        assertTrue(configured.contains("云端覆盖本地前会二次确认"))
+        assertTrue(configured.contains("本地替换云端会保留云端旧版本"))
+        assertTrue(missing.contains("未配置服务器"))
+        assertTrue(missing.contains("点同步也不会离开这台手机"))
+    }
+
 
     @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {

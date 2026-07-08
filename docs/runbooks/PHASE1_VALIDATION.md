@@ -365,6 +365,36 @@ macOS local app executable:
 7eb3ae13c543b5171e22cddbf5acffd1891795f1ed7c078aa8ddb5c782f02e48  artifacts/macos/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac
 ```
 
+## Android state-first primary-action gate executed on 2026-07-08
+
+Commands:
+
+```text
+python3 scripts/ux-copy-guard.py                                PASS
+Android testDebugUnitTest lintDebug assembleDebug               PASS
+scripts/secret-scan.sh                                          PASS
+git diff --check                                                PASS
+```
+
+Scope:
+
+- Android first screen now surfaces one primary recommended action inside
+  `当前状态和下一步`, so the user does not need to understand internal queue,
+  storage or locking terms before acting.
+- The primary action changes by safe state: open MH3G sync, choose Android
+  Nemessix folder, fill the shared server address, mark `我已退出 MH3G`, or run
+  `启动前检查`.
+- The same card explains why the action is safe: no upload before server/folder
+  setup, folder selection does not immediately upload or overwrite, launch check
+  does not modify local saves, and running sessions still forbid cloud overwrite.
+- `SyncMessagesTest.dashboardSummaryExplainsCurrentStateAndNextAction` now
+  locks the Chinese first-screen CTA copy and rejects internal terms such as
+  `锁定`, `标记会话`, `同步会话`, `SAF`, `CAS`, `HEAD`, `dirty` and `watcher`.
+
+This is Android client UX evidence only. It does not upgrade any emulator
+descriptor to `RuntimeVerified`; real emulator-readable restore evidence remains
+tracked as an open phase gate below.
+
 ## Automation trigger policy gate executed on 2026-07-08
 
 Command:

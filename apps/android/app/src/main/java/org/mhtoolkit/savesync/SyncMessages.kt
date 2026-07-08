@@ -46,6 +46,24 @@ object SyncMessages {
     fun cloudActionNeedsServer(): String =
         "云端同步未开始：还没有填写服务器地址。Mac 和 Android 必须填写同一个服务器地址后，上传、下载、恢复才会执行；当前没有同步到任何服务器。"
 
+    fun officeHomeFlowSteps(endpoint: String?): List<String> {
+        val server = serverLabel(endpoint)
+        return listOf(
+            "办公室 Mac：退出 MH3G 后生成稳定快照并上传到 $server；上传失败也不会破坏 Mac 本地存档。",
+            "回家 Android：填写同一个服务器地址，点启动前检查；云端可用时先下载到本机缓存，恢复前会先备份本地。",
+            "两边都改过时：列为冲突分支，由你选择本地替换云端、云端覆盖本地或暂不处理，不会静默覆盖。",
+        )
+    }
+
+    fun manualActionsIntro(target: String, endpoint: String?): String {
+        val server = serverLabel(endpoint)
+        return if (endpoint.orEmpty().trim().isBlank()) {
+            "当前同步目的地：$target → 本机安全缓存 → $server。未配置服务器，点同步也不会离开这台手机；请先填写办公室 Mac 和回家 Android 共用的服务器地址。"
+        } else {
+            "当前同步目的地：$target → 本机安全缓存 → $server。同步到服务器会上传稳定快照；只下载云端到本机缓存不会覆盖；云端覆盖本地前会二次确认并先备份；本地替换云端会保留云端旧版本。"
+        }
+    }
+
     fun dashboardStateSummary(
         authorized: Boolean,
         gameEnabled: Boolean,
@@ -73,6 +91,32 @@ object SyncMessages {
         endpoint.orEmpty().trim().isBlank() -> "填写和 Mac 一样的服务器地址；未填写前不会上传到任何地方。"
         sessionActive -> "如果正在玩就继续；退出后点「我已退出 MH3G」开始对账上传。"
         else -> "点「启动前检查」查看云端版本；需要替换前会先让你确认。"
+    }
+
+    fun dashboardPrimaryActionLabel(
+        authorized: Boolean,
+        gameEnabled: Boolean,
+        endpoint: String?,
+        sessionActive: Boolean,
+    ): String = when {
+        !gameEnabled -> "打开 MH3G 同步"
+        !authorized -> "选择 Android Nemessix 存档目录"
+        endpoint.orEmpty().trim().isBlank() -> "到下方填写服务器地址"
+        sessionActive -> activeSessionToggleLabel(sessionActive)
+        else -> "启动前检查"
+    }
+
+    fun dashboardPrimaryActionHint(
+        authorized: Boolean,
+        gameEnabled: Boolean,
+        endpoint: String?,
+        sessionActive: Boolean,
+    ): String = when {
+        !gameEnabled -> "打开后仍需授权目录和服务器地址；未完成前不会同步。"
+        !authorized -> "只选择 Nemessix 存档根目录；不会立刻上传或覆盖。"
+        endpoint.orEmpty().trim().isBlank() -> "Mac 和 Android 填同一个服务器地址，例如自部署 API 地址；未填写前不会上传。"
+        sessionActive -> "结束游玩后点这里，对账上传稳定快照；运行中不从云端覆盖本地。"
+        else -> "先确认云端是否有新版本或冲突；检查不会修改本地存档。"
     }
 
     fun noServerPhase(): String =
