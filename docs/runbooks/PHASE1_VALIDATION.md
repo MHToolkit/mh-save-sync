@@ -143,15 +143,19 @@ Local ADB evidence from the current debug APK:
 {"android_apk_smoke":true,"apk_sha256":"bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1","device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","resumed_activity":"topResumedActivity=ActivityRecord{110934309 u0 org.mhtoolkit.savesync/.MainActivity t12}"}
 ```
 
-Current package evidence artifact:
+Current package evidence artifact at capture time:
 
 ```text
-APK: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk
+APK: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-0572033-debug.apk
 APK_SHA256: bffcf6c8ef2f0db87202eff4d7d6e511cd5577c32417e21b4776e556796346f1
-EVIDENCE: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.evidence.json
-EVIDENCE_SHA256: 0d2fd254599717fc73f7dbb0028773eb0e51e3685ef59e31e2166c21b9e8aa86
+EVIDENCE: /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-0572033-debug.evidence.json
+EVIDENCE_SHA256: 093e06d9509da5cf619bda7f72b15f7fc87b425dfc24084d85786a9847b65291
 SIGNER_CERT_SHA256: ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb
 ```
+
+Use `eval "$(./scripts/android-latest-alpha-apk.sh)"` before home-device
+validation to resolve the newest local handoff APK instead of copying this
+run-specific path.
 
 Evidence scope:
 
@@ -159,8 +163,8 @@ Evidence scope:
   launcher intent, becomes the resumed activity, and does not emit an app crash
   signature during launch.
 - The APK hash above matches both `apps/android/app/build/outputs/apk/debug/app-debug.apk` and the debug APK copied for manual installation under
-  `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk`.
-- `scripts/android-package-alpha.sh` is now the reproducible artifact authority: it runs Gradle unit/lint/assemble, verifies the APK v2 signature and badging, runs secret scan, optionally runs ADB install/UI smoke, then emits the APK, `.sha256` file and redacted `.evidence.json`.
+  `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-0572033-debug.apk`.
+- `scripts/android-package-alpha.sh` is now the reproducible artifact authority: it runs Gradle unit/lint/assemble, verifies the APK v2 signature and badging, runs secret scan, optionally runs ADB install/UI smoke, then emits the APK, `.sha256` file and redacted `.evidence.json`. `scripts/android-latest-alpha-apk.sh` resolves the newest local handoff artifact so runbooks do not drift when documentation-only commits advance the branch.
 - This is an install/launch smoke only. It does not prove SAF authorization,
   Android Nemessix sandbox access, or emulator-readable restore.
 
@@ -263,7 +267,7 @@ Boundary:
 Command:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-6e0f673-debug.apk" \
+eval "$(./scripts/android-latest-alpha-apk.sh)"
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-home-device-preflight.sh

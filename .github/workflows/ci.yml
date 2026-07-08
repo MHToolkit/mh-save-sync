@@ -76,6 +76,7 @@ jobs:
       - name: Verify Android handoff shell scripts parse
         run: |
           bash -n scripts/android-package-alpha.sh
+          bash -n scripts/android-latest-alpha-apk.sh
           bash -n scripts/android-home-device-preflight.sh
           bash -n scripts/android-runtime-evidence-bundle.sh
       - name: Verify compose persistent-sync runtime selection
@@ -145,6 +146,11 @@ jobs:
           MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha
           MH_SAVE_SYNC_RUN_ADB_SMOKE: "false"
         run: ./scripts/android-package-alpha.sh
+      - name: Verify Android latest Alpha resolver
+        env:
+          MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha
+          MH_SAVE_SYNC_APK_FORMAT: json
+        run: ./scripts/android-latest-alpha-apk.sh
       - name: Generate Android artifact checksums
         run: |
           mkdir -p artifacts/checksums

@@ -11,7 +11,17 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 adb="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
-apk="${MH_SAVE_SYNC_APK:-apps/android/app/build/outputs/apk/debug/app-debug.apk}"
+if [[ -n "${MH_SAVE_SYNC_APK:-}" ]]; then
+  apk="$MH_SAVE_SYNC_APK"
+else
+  latest_resolver="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/android-latest-alpha-apk.sh"
+  if apk="$(MH_SAVE_SYNC_APK_FORMAT=path "$latest_resolver" 2>/dev/null)"; then
+    :
+  else
+    apk="apps/android/app/build/outputs/apk/debug/app-debug.apk"
+  fi
+  [[ -n "$apk" ]] || apk="apps/android/app/build/outputs/apk/debug/app-debug.apk"
+fi
 server_url="${MH_SAVE_SYNC_SERVER_URL:-}"
 target_package="${MH_SAVE_SYNC_RUNTIME_TARGET_PACKAGE:-}"
 target_emulator="${MH_SAVE_SYNC_RUNTIME_TARGET_EMULATOR:-}"

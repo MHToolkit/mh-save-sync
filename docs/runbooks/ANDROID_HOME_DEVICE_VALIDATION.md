@@ -7,20 +7,7 @@
 
 ## 1. Pick an APK artifact
 
-Current local installable alpha APK on this Mac, from the last CI-green Android
-handoff build:
-
-```bash
-adb install -r /Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk
-```
-
-Evidence file:
-
-```text
-/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.evidence.json
-```
-
-Generate or refresh the APK with:
+Generate or refresh the local Alpha APK first:
 
 ```bash
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
@@ -28,21 +15,32 @@ MH_SAVE_SYNC_RUN_ADB_SMOKE=auto \
 ./scripts/android-package-alpha.sh
 ```
 
+Then resolve the newest local handoff artifact without hard-coding a commit
+suffix:
+
+```bash
+eval "$(./scripts/android-latest-alpha-apk.sh)"
+printf 'APK=%s\nAPK_SHA256=%s\nEVIDENCE=%s\nEVIDENCE_SHA256=%s\n' \
+  "$MH_SAVE_SYNC_APK" \
+  "$MH_SAVE_SYNC_APK_SHA256" \
+  "$MH_SAVE_SYNC_APK_EVIDENCE" \
+  "$MH_SAVE_SYNC_APK_EVIDENCE_SHA256"
+adb install -r "$MH_SAVE_SYNC_APK"
+```
+
 Use the APK evidence JSON, APK SHA256 and GitHub Actions run recorded next to
 the APK as the artifact authority. Do not infer the APK build commit from this
 runbook's Git commit: documentation or validation-script commits may happen
-after the Android APK is built. If Android app code changes, rebuild the APK,
-copy it to `~/Games/Backups/MHSaveSync/apk/`, regenerate its evidence JSON, and
-set `MH_SAVE_SYNC_APK` to that new file before real-device validation. If the
-script prints a newer `mh-save-sync-<commit>-debug.apk`, use that printed path
-instead of the example above.
+after the Android APK is built. If Android app code changes, rebuild the APK
+and rerun `./scripts/android-latest-alpha-apk.sh` before real-device
+validation.
 
 ## 2. Run device preflight
 
 From the repository root:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
+eval "$(./scripts/android-latest-alpha-apk.sh)"
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-home-device-preflight.sh
@@ -70,7 +68,7 @@ After installing the APK and completing the in-app setup steps, collect a
 metadata-only bundle:
 
 ```bash
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
+eval "$(./scripts/android-latest-alpha-apk.sh)"
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-runtime-evidence-bundle.sh
@@ -81,6 +79,7 @@ If multiple Android devices are attached, set `ANDROID_SERIAL=<serial>`.
 For a real emulator-specific acceptance pass, add redacted operator metadata:
 
 ```bash
+eval "$(./scripts/android-latest-alpha-apk.sh)"
 MH_SAVE_SYNC_RUNTIME_TARGET_PACKAGE="io.github.vincentadamnemessisx.nemessix" \
 MH_SAVE_SYNC_RUNTIME_TARGET_EMULATOR="android-nemessix" \
 MH_SAVE_SYNC_LOGICAL_SAVE_ID="<copy from app/CLI status; no plaintext paths>" \
@@ -92,7 +91,6 @@ MH_SAVE_SYNC_READBACK_CONFIRMED="true" \
 MH_SAVE_SYNC_CONFLICT_CONFIRMED="true" \
 MH_SAVE_SYNC_REDACTED_LOGS_REVIEWED="true" \
 MH_SAVE_SYNC_RUNTIME_NOTE="真实保存、退出后上传、停止状态恢复、重启后游戏可读；不含角色名/路径/密钥" \
-MH_SAVE_SYNC_APK="/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-01b6c76-debug.apk" \
 MH_SAVE_SYNC_SERVER_URL="http://8.130.112.207:39082" \
 ADB="$HOME/Library/Android/sdk/platform-tools/adb" \
 ./scripts/android-runtime-evidence-bundle.sh
