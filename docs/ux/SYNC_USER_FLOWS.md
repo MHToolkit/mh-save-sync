@@ -52,6 +52,13 @@
 | 本地替换云端 | 当前本地状态形成新的加密 snapshot 并尝试 CAS HEAD | 不删除云端旧版本；旧 HEAD 保留为历史/冲突分支 |
 | 暂不处理 | 保持 conflict 状态 | 不自动推进 HEAD；不按 mtime/最新时间覆盖 |
 
+## 游戏特定差异解析
+
+- 差异解析是“游戏 profile 能力”，不是通用二进制魔法。Phase 1 先提供 `mh3g-3ds` parser contract，只展示文件/字节级差异：变更文件、左右大小、左右校验摘要、最多若干个变更字节段。
+- 当前 `mh3g-3ds` 不声称能语义解析猎人名、装备、道具或任务进度；UI 必须用这条边界保护用户预期。
+- `server-status` 在客户端持有恢复密钥时会下载并解密当前 HEAD 与冲突分支 manifest，本地计算 `conflict_diffs`，服务端仍看不到路径明文或存档内容。
+- 后续若某个游戏要展示语义字段，必须先有 fixture、字段来源、误解析 fail-closed 规则和 ADR；不能把其他游戏 parser 复用到 MH3G/3U/4G/4U/XX/GU。
+
 ## 云端不可用
 
 - 用户可继续本地游玩。
@@ -66,4 +73,5 @@
 - Android Alpha 允许 `http://IP:port` 自部署地址；端到端加密保护存档内容，生产入口仍应使用 TLS 反向代理后再收紧 cleartext policy。
 - macOS 菜单栏 Alpha 已把同步入口前置到玩家可见动作：菜单栏标题会显示 `MH 云存档 · 设服务器/选目录/选密钥/就绪`，菜单顶部固定显示 `同步路线：MH3G / macOS Nemessix → 本机安全缓存 → 服务器地址` 和 `下一步：...`；常用动作包括 `打开同步向导（告诉我下一步）`、`设置服务器地址…`、`选择 Mac Nemessix 存档目录…`、`生成恢复密钥文件`、`选择恢复密钥文件…`、`立即上传 Mac 存档到服务器`、`我已退出 MH3G：立即对账上传`、`查看云端状态`、`云端覆盖本地（先备份，需停止 Nemessix）` 和 `自动同步：退出 Nemessix 后上传`。`./scripts/build-macos-app-bundle.sh` 会把共享 Rust CLI `mh-save` 一起打进 `.app`，因此双击安装后的 `/Applications/MH Save Sync.app` 不依赖用户在终端设置 `MH_SAVE_SYNC_CLI`。自动同步只监听 Nemessix 进程从运行到退出的 session boundary，不做高频全盘轮询，也不会在运行中 live overwrite。
 - CLI 已增加 `server-upload` / `server-status` / `server-restore`：用于真实 server API 的端到端上传、HEAD 查询、history/conflict 计数、云端 HEAD 下载恢复与中文结果说明；`scripts/server-sync-e2e.sh` 固化办公室/回家分叉不覆盖 HEAD、恢复云端 HEAD、运行中恢复 fail-closed 的可复现证据。
+- CLI 已增加 `save-diff --game-profile mh3g-3ds` 和 `server-status.conflict_diffs`，让冲突列表能展示游戏特定但保守的文件/字节级差异；当前不会假装语义合并二进制存档。
 - 真实 Runtime Verified 仍以 `docs/runbooks/PHASE1_VALIDATION.md` 为准；fixture 或 UI 示例不得升级为 Runtime Verified。

@@ -278,6 +278,8 @@ async fn cli_preserves_cloud_head_and_reports_conflict_branch() {
         server_url.clone(),
         "--secret-hex".into(),
         "4444444444444444444444444444444444444444444444444444444444444444".into(),
+        "--game-profile".into(),
+        "mh3g-3ds".into(),
     ])
     .await;
     assert!(status.status.success());
@@ -285,6 +287,24 @@ async fn cli_preserves_cloud_head_and_reports_conflict_branch() {
     assert_eq!(status_json["cloud_head"], office_json["snapshot_id"]);
     assert_eq!(status_json["history_count"], 2);
     assert_eq!(status_json["conflict_count"], 1);
+    assert_eq!(status_json["game_profile"], "mh3g-3ds");
+    assert_eq!(status_json["conflict_diffs"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        status_json["conflict_diffs"][0]["diff"]["game_profile"],
+        "mh3g-3ds"
+    );
+    assert_eq!(status_json["conflict_diffs"][0]["diff"]["changed_files"], 1);
+    assert_eq!(
+        status_json["conflict_diffs"][0]["diff"]["semantic_available"],
+        false
+    );
+    assert!(
+        status_json["conflict_diffs"][0]["message_zh"]
+            .as_str()
+            .unwrap()
+            .contains("文件/字节级差异"),
+        "conflict status must expose user-readable diff: {status_json}",
+    );
 
     let restored = tmp.path().join("restored-conflict-head");
     let restore = run_mh_save(&[

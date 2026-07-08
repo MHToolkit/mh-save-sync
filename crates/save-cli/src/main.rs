@@ -10,9 +10,10 @@ use save_domain::{
     stable_logical_save_id,
 };
 use save_engine::{
-    EmulatorState, EncryptedSnapshot, EngineError, SnapshotOptions,
-    create_snapshot_from_stable_folder, decrypt_manifest, export_encrypted_bundle,
-    import_encrypted_bundle, restore_snapshot_to_folder,
+    EmulatorState, EncryptedSnapshot, EngineError, GameSaveDiffReport, SnapshotOptions,
+    create_snapshot_from_stable_folder, decrypt_manifest, diff_folders_for_game,
+    diff_manifests_for_game, export_encrypted_bundle, import_encrypted_bundle,
+    restore_snapshot_to_folder,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -52,6 +53,14 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliEmulatorState::Stopped)]
         emulator_state: CliEmulatorState,
     },
+    SaveDiff {
+        #[arg(long)]
+        left: PathBuf,
+        #[arg(long)]
+        right: PathBuf,
+        #[arg(long, default_value = "mh3g-3ds")]
+        game_profile: String,
+    },
     ServerUpload {
         #[arg(long, env = "MH_SAVE_SYNC_SERVER_URL")]
         server_url: String,
@@ -77,6 +86,8 @@ enum Commands {
         secret_hex: String,
         #[arg(long)]
         logical_save_id: Option<String>,
+        #[arg(long, default_value = "mh3g-3ds")]
+        game_profile: String,
     },
     ServerRestore {
         #[arg(long, env = "MH_SAVE_SYNC_SERVER_URL")]
@@ -240,6 +251,15 @@ async fn run() -> anyhow::Result<()> {
                 })
             );
         }
+        Commands::SaveDiff {
+            left,
+            right,
+            game_profile,
+        } => {
+            let descriptor = descriptor_for_game_profile(&game_profile);
+            let report = diff_folders_for_game(&left, &right, &descriptor, &game_profile)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Commands::ServerUpload {
             server_url,
             root,
@@ -267,8 +287,10 @@ async fn run() -> anyhow::Result<()> {
             server_url,
             secret_hex,
             logical_save_id,
+            game_profile,
         } => {
-            let report = server_status(server_url, secret_hex, logical_save_id).await?;
+            let report =
+                server_status(server_url, secret_hex, logical_save_id, game_profile).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Commands::ServerRestore {
@@ -350,9 +372,19 @@ struct ServerStatusReport {
     sync_target: String,
     account_handle: String,
     logical_save_id: String,
+    game_profile: String,
     cloud_head: Option<SnapshotId>,
     history_count: usize,
     conflict_count: usize,
+    conflict_diffs: Vec<ConflictDiffReport>,
+    message_zh: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictDiffReport {
+    current_head: SnapshotId,
+    conflict_snapshot: SnapshotId,
+    diff: GameSaveDiffReport,
     message_zh: String,
 }
 
@@ -668,6 +700,7 @@ async fn server_status(
     server_url: String,
     secret_hex: String,
     logical_save_id: Option<String>,
+    game_profile: String,
 ) -> anyhow::Result<ServerStatusReport> {
     let server_url = normalize_server_url(&server_url);
     let secret = secret_from_hex(&secret_hex)?;
@@ -689,14 +722,35 @@ async fn server_status(
         &format!("{server_url}/v1/conflicts/{logical_save_id}"),
     )
     .await?;
+    let conflict_diffs = conflict_diff_reports(
+        &client,
+        &server_url,
+        &secret,
+        cloud_head.as_ref(),
+        &conflicts,
+        &game_profile,
+    )
+    .await?;
     let message_zh = match &cloud_head {
-        Some(head) => format!(
-            "云端当前 HEAD 是 {}，服务器 {} 上有 {} 个历史快照、{} 个冲突分支。",
-            head,
-            server_url,
-            history.len(),
-            conflicts.len()
-        ),
+        Some(head) => {
+            let parser_note = if conflict_diffs.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " 已按游戏档案 {} 用客户端恢复密钥解析 {} 个冲突分支的文件/字节级差异。",
+                    game_profile,
+                    conflict_diffs.len()
+                )
+            };
+            format!(
+                "云端当前 HEAD 是 {}，服务器 {} 上有 {} 个历史快照、{} 个冲突分支。{}",
+                head,
+                server_url,
+                history.len(),
+                conflicts.len(),
+                parser_note
+            )
+        }
         None => format!(
             "云端还没有 HEAD；当前逻辑存档 {} 尚未在服务器 {} 完成首次上传。",
             logical_save_id, server_url
@@ -707,9 +761,11 @@ async fn server_status(
         sync_target: format!("{server_url}/v1/heads/{logical_save_id}"),
         account_handle: computed_account_handle,
         logical_save_id,
+        game_profile,
         cloud_head,
         history_count: history.len(),
         conflict_count: conflicts.len(),
+        conflict_diffs,
         message_zh,
     })
 }
@@ -720,6 +776,19 @@ async fn remote_snapshot_fingerprint(
     secret: &[u8; 32],
     snapshot_id: &SnapshotId,
 ) -> anyhow::Result<Option<TreeFingerprint>> {
+    let Some(manifest) = remote_snapshot_manifest(client, server_url, secret, snapshot_id).await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(fingerprint_manifest_entries(&manifest)?))
+}
+
+async fn remote_snapshot_manifest(
+    client: &reqwest::Client,
+    server_url: &str,
+    secret: &[u8; 32],
+    snapshot_id: &SnapshotId,
+) -> anyhow::Result<Option<SnapshotManifest>> {
     let url = format!(
         "{server_url}/v1/snapshots/{}/encrypted-bundle",
         snapshot_id.0
@@ -740,8 +809,47 @@ async fn remote_snapshot_fingerprint(
             sha256: "remote-before-decrypt".into(),
         },
     };
-    let manifest = decrypt_manifest(secret, &snapshot)?;
-    Ok(Some(fingerprint_manifest_entries(&manifest)?))
+    Ok(Some(decrypt_manifest(secret, &snapshot)?))
+}
+
+async fn conflict_diff_reports(
+    client: &reqwest::Client,
+    server_url: &str,
+    secret: &[u8; 32],
+    cloud_head: Option<&SnapshotId>,
+    conflicts: &[SnapshotRowResponse],
+    game_profile: &str,
+) -> anyhow::Result<Vec<ConflictDiffReport>> {
+    let Some(current_head) = cloud_head else {
+        return Ok(Vec::new());
+    };
+    if conflicts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(head_manifest) =
+        remote_snapshot_manifest(client, server_url, secret, current_head).await?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut reports = Vec::new();
+    for row in conflicts.iter().take(20) {
+        if let Some(conflict_manifest) =
+            remote_snapshot_manifest(client, server_url, secret, &row.snapshot_id).await?
+        {
+            let diff = diff_manifests_for_game(&head_manifest, &conflict_manifest, game_profile)?;
+            let message_zh = format!(
+                "冲突分支 {} 相对当前云端 HEAD {}（游戏档案 {}）：{}",
+                row.snapshot_id, current_head, game_profile, diff.summary_zh
+            );
+            reports.push(ConflictDiffReport {
+                current_head: current_head.clone(),
+                conflict_snapshot: row.snapshot_id.clone(),
+                diff,
+                message_zh,
+            });
+        }
+    }
+    Ok(reports)
 }
 
 fn fingerprint_manifest_entries(manifest: &SnapshotManifest) -> anyhow::Result<TreeFingerprint> {
@@ -954,6 +1062,13 @@ fn decode_downloaded_blob(object: &SnapshotObjectDownload) -> anyhow::Result<Enc
 
 fn normalize_server_url(input: &str) -> String {
     input.trim().trim_end_matches('/').to_string()
+}
+
+fn descriptor_for_game_profile(game_profile: &str) -> save_domain::AdapterDescriptor {
+    match game_profile {
+        "mh3g-3ds" => save_adapters::nemessix_macos(),
+        _ => save_adapters::generic_folder_macos(),
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -6,7 +6,7 @@ use save_domain::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -40,6 +40,57 @@ pub struct EncryptedSnapshot {
     pub encrypted_manifest: EncryptedBlob,
     pub chunks: BTreeMap<String, EncryptedBlob>,
     pub fingerprint: TreeFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SaveDiffChange {
+    Added,
+    Removed,
+    Modified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteRangeDiff {
+    pub offset: u64,
+    pub len: u64,
+    pub left_sha256: Option<String>,
+    pub right_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveDiffEntry {
+    pub path: String,
+    pub change: SaveDiffChange,
+    pub left_size: Option<u64>,
+    pub right_size: Option<u64>,
+    pub left_sha256: Option<String>,
+    pub right_sha256: Option<String>,
+    pub byte_ranges: Vec<ByteRangeDiff>,
+    pub notes_zh: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameSaveDiffReport {
+    pub game_profile: String,
+    pub parser_id: String,
+    pub parser_support: String,
+    pub semantic_available: bool,
+    pub summary_zh: String,
+    pub changed_files: usize,
+    pub added_files: usize,
+    pub removed_files: usize,
+    pub modified_files: usize,
+    pub total_left_bytes: u64,
+    pub total_right_bytes: u64,
+    pub entries: Vec<SaveDiffEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct FileSummary {
+    path: String,
+    size: u64,
+    sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,6 +431,302 @@ pub fn restore_snapshot_to_folder(
     }
     fs::rename(stage.path(), target)?;
     Ok(backup)
+}
+
+pub fn diff_manifests_for_game(
+    left: &SnapshotManifest,
+    right: &SnapshotManifest,
+    game_profile: &str,
+) -> Result<GameSaveDiffReport, EngineError> {
+    let left_files = manifest_file_summaries(left)?;
+    let right_files = manifest_file_summaries(right)?;
+    Ok(build_diff_report(
+        game_profile,
+        &left_files,
+        &right_files,
+        BTreeMap::new(),
+    ))
+}
+
+pub fn diff_folders_for_game(
+    left_root: &Path,
+    right_root: &Path,
+    descriptor: &AdapterDescriptor,
+    game_profile: &str,
+) -> Result<GameSaveDiffReport, EngineError> {
+    let left_files = folder_file_summaries(left_root, &descriptor.exclude_globs)?;
+    let right_files = folder_file_summaries(right_root, &descriptor.exclude_globs)?;
+    let byte_ranges = diff_folder_byte_ranges(left_root, right_root, &left_files, &right_files)?;
+    Ok(build_diff_report(
+        game_profile,
+        &left_files,
+        &right_files,
+        byte_ranges,
+    ))
+}
+
+fn manifest_file_summaries(
+    manifest: &SnapshotManifest,
+) -> Result<BTreeMap<String, FileSummary>, EngineError> {
+    validate_manifest_entries(&manifest.entries, 10_000, 128 * 1024 * 1024)?;
+    let mut out = BTreeMap::new();
+    for entry in &manifest.entries {
+        if entry.kind == FileKind::Tombstone {
+            continue;
+        }
+        out.insert(
+            entry.path.clone(),
+            FileSummary {
+                path: entry.path.clone(),
+                size: entry.size,
+                sha256: entry.plaintext_sha256.clone(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn folder_file_summaries(
+    root: &Path,
+    exclude_prefixes: &[String],
+) -> Result<BTreeMap<String, FileSummary>, EngineError> {
+    let mut out = BTreeMap::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry?;
+        if entry.path() == root {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if exclude_prefixes
+            .iter()
+            .any(|p| rel == *p || rel.starts_with(&format!("{}/", p.trim_end_matches('/'))))
+        {
+            continue;
+        }
+        let ty = entry.file_type();
+        if ty.is_symlink() {
+            return Err(EngineError::RejectedFile(rel));
+        }
+        if ty.is_file() {
+            let bytes = fs::read(entry.path())?;
+            out.insert(
+                rel.clone(),
+                FileSummary {
+                    path: rel,
+                    size: bytes.len() as u64,
+                    sha256: hex::encode(Sha256::digest(bytes)),
+                },
+            );
+        } else if !ty.is_dir() {
+            return Err(EngineError::RejectedFile(rel));
+        }
+    }
+    Ok(out)
+}
+
+fn diff_folder_byte_ranges(
+    left_root: &Path,
+    right_root: &Path,
+    left_files: &BTreeMap<String, FileSummary>,
+    right_files: &BTreeMap<String, FileSummary>,
+) -> Result<BTreeMap<String, Vec<ByteRangeDiff>>, EngineError> {
+    let mut out = BTreeMap::new();
+    for path in left_files.keys().filter(|p| right_files.contains_key(*p)) {
+        let left = left_files.get(path).unwrap();
+        let right = right_files.get(path).unwrap();
+        if left.sha256 == right.sha256 && left.size == right.size {
+            continue;
+        }
+        let left_bytes = fs::read(left_root.join(path))?;
+        let right_bytes = fs::read(right_root.join(path))?;
+        out.insert(
+            path.clone(),
+            byte_ranges_for_changed_content(&left_bytes, &right_bytes),
+        );
+    }
+    Ok(out)
+}
+
+fn byte_ranges_for_changed_content(left: &[u8], right: &[u8]) -> Vec<ByteRangeDiff> {
+    const MAX_RANGES: usize = 8;
+    let min_len = left.len().min(right.len());
+    let mut ranges = Vec::new();
+    let mut i = 0usize;
+    while i < min_len && ranges.len() < MAX_RANGES {
+        if left[i] == right[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < min_len && left[i] != right[i] {
+            i += 1;
+        }
+        ranges.push(ByteRangeDiff {
+            offset: start as u64,
+            len: (i - start) as u64,
+            left_sha256: Some(hex::encode(Sha256::digest(&left[start..i]))),
+            right_sha256: Some(hex::encode(Sha256::digest(&right[start..i]))),
+        });
+    }
+    if left.len() != right.len() && ranges.len() < MAX_RANGES {
+        let offset = min_len as u64;
+        let left_tail = if left.len() > min_len {
+            &left[min_len..]
+        } else {
+            &[]
+        };
+        let right_tail = if right.len() > min_len {
+            &right[min_len..]
+        } else {
+            &[]
+        };
+        ranges.push(ByteRangeDiff {
+            offset,
+            len: left_tail.len().max(right_tail.len()) as u64,
+            left_sha256: (!left_tail.is_empty()).then(|| hex::encode(Sha256::digest(left_tail))),
+            right_sha256: (!right_tail.is_empty()).then(|| hex::encode(Sha256::digest(right_tail))),
+        });
+    }
+    ranges
+}
+
+fn build_diff_report(
+    game_profile: &str,
+    left_files: &BTreeMap<String, FileSummary>,
+    right_files: &BTreeMap<String, FileSummary>,
+    byte_ranges: BTreeMap<String, Vec<ByteRangeDiff>>,
+) -> GameSaveDiffReport {
+    let mut all_paths = BTreeSet::new();
+    all_paths.extend(left_files.keys().cloned());
+    all_paths.extend(right_files.keys().cloned());
+    let mut entries = Vec::new();
+    for path in all_paths {
+        match (left_files.get(&path), right_files.get(&path)) {
+            (Some(left), Some(right)) if left.sha256 == right.sha256 && left.size == right.size => {
+            }
+            (Some(left), Some(right)) => entries.push(SaveDiffEntry {
+                path: path.clone(),
+                change: SaveDiffChange::Modified,
+                left_size: Some(left.size),
+                right_size: Some(right.size),
+                left_sha256: Some(left.sha256.clone()),
+                right_sha256: Some(right.sha256.clone()),
+                byte_ranges: byte_ranges.get(&path).cloned().unwrap_or_default(),
+                notes_zh: game_specific_notes(game_profile, &path),
+            }),
+            (None, Some(right)) => entries.push(SaveDiffEntry {
+                path: path.clone(),
+                change: SaveDiffChange::Added,
+                left_size: None,
+                right_size: Some(right.size),
+                left_sha256: None,
+                right_sha256: Some(right.sha256.clone()),
+                byte_ranges: Vec::new(),
+                notes_zh: game_specific_notes(game_profile, &path),
+            }),
+            (Some(left), None) => entries.push(SaveDiffEntry {
+                path: left.path.clone(),
+                change: SaveDiffChange::Removed,
+                left_size: Some(left.size),
+                right_size: None,
+                left_sha256: Some(left.sha256.clone()),
+                right_sha256: None,
+                byte_ranges: Vec::new(),
+                notes_zh: game_specific_notes(game_profile, &path),
+            }),
+            (None, None) => {}
+        }
+    }
+    let added_files = entries
+        .iter()
+        .filter(|e| e.change == SaveDiffChange::Added)
+        .count();
+    let removed_files = entries
+        .iter()
+        .filter(|e| e.change == SaveDiffChange::Removed)
+        .count();
+    let modified_files = entries
+        .iter()
+        .filter(|e| e.change == SaveDiffChange::Modified)
+        .count();
+    let total_left_bytes = left_files.values().map(|f| f.size).sum();
+    let total_right_bytes = right_files.values().map(|f| f.size).sum();
+    let (parser_id, parser_support, semantic_available) = parser_capability(game_profile);
+    let summary_zh = if entries.is_empty() {
+        format!(
+            "{} 没有发现存档文件差异。",
+            parser_display_name(game_profile)
+        )
+    } else if semantic_available {
+        format!(
+            "{} 发现 {} 个文件有差异：新增 {}、删除 {}、修改 {}。可展示语义摘要与文件差异，恢复前仍会保留两边版本。",
+            parser_display_name(game_profile),
+            entries.len(),
+            added_files,
+            removed_files,
+            modified_files
+        )
+    } else {
+        format!(
+            "{} 发现 {} 个文件有差异：新增 {}、删除 {}、修改 {}。当前解析器只做文件/字节级差异，不解读猎人名、装备或道具语义；选择覆盖前会保留两边快照。",
+            parser_display_name(game_profile),
+            entries.len(),
+            added_files,
+            removed_files,
+            modified_files
+        )
+    };
+    GameSaveDiffReport {
+        game_profile: game_profile.to_string(),
+        parser_id,
+        parser_support,
+        semantic_available,
+        summary_zh,
+        changed_files: entries.len(),
+        added_files,
+        removed_files,
+        modified_files,
+        total_left_bytes,
+        total_right_bytes,
+        entries,
+    }
+}
+
+fn parser_capability(game_profile: &str) -> (String, String, bool) {
+    match game_profile {
+        "mh3g-3ds" => (
+            "mh3g-3ds-binary-v0".into(),
+            "game-specific-file-and-byte-diff-only".into(),
+            false,
+        ),
+        _ => (
+            "generic-binary-v0".into(),
+            "file-and-byte-diff-only".into(),
+            false,
+        ),
+    }
+}
+
+fn parser_display_name(game_profile: &str) -> &'static str {
+    match game_profile {
+        "mh3g-3ds" => "MH3G/3U 3DS 存档解析器",
+        _ => "通用存档解析器",
+    }
+}
+
+fn game_specific_notes(game_profile: &str, path: &str) -> Vec<String> {
+    match game_profile {
+        "mh3g-3ds" => vec![format!(
+            "{} 是 MH3G 3DS 逻辑存档内的二进制文件；当前版本只展示文件大小、hash 和变更字节段，不声称能语义解析猎人/装备/道具。",
+            path
+        )],
+        _ => vec!["通用二进制差异：只能说明文件内容不同，不能解释游戏语义。".into()],
+    }
 }
 
 pub fn should_upload_from_watcher_event() -> bool {
@@ -750,5 +1097,69 @@ mod tests {
         let imported = import_encrypted_bundle(&bundle).unwrap();
         restore_snapshot_to_folder(&secret, &imported, dir.path(), EmulatorState::Stopped).unwrap();
         assert_eq!(fs::read(dir.path().join("save.bin")).unwrap(), b"portable");
+    }
+
+    #[test]
+    fn mh3g_diff_parser_reports_file_and_byte_differences_without_semantic_claims() {
+        let left = tempfile::tempdir().unwrap();
+        let right = tempfile::tempdir().unwrap();
+        fs::create_dir_all(left.path().join("slot1")).unwrap();
+        fs::create_dir_all(right.path().join("slot1")).unwrap();
+        fs::write(left.path().join("slot1/main.bin"), b"hunter-rank-001").unwrap();
+        fs::write(right.path().join("slot1/main.bin"), b"hunter-rank-002").unwrap();
+        fs::write(right.path().join("slot1/extra.bin"), b"new").unwrap();
+        let report =
+            diff_folders_for_game(left.path(), right.path(), &descriptor(), "mh3g-3ds").unwrap();
+        assert_eq!(report.game_profile, "mh3g-3ds");
+        assert_eq!(report.parser_id, "mh3g-3ds-binary-v0");
+        assert!(!report.semantic_available);
+        assert_eq!(report.changed_files, 2);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.added_files, 1);
+        assert!(report.summary_zh.contains("文件/字节级差异"));
+        assert!(report.summary_zh.contains("不解读猎人名"));
+        let changed = report
+            .entries
+            .iter()
+            .find(|e| e.path == "slot1/main.bin")
+            .unwrap();
+        assert_eq!(changed.change, SaveDiffChange::Modified);
+        assert!(!changed.byte_ranges.is_empty());
+        assert!(
+            changed
+                .notes_zh
+                .iter()
+                .any(|n| n.contains("不声称能语义解析"))
+        );
+    }
+
+    #[test]
+    fn manifest_diff_reports_conflict_ready_file_summary() {
+        let mut left = SnapshotManifest {
+            format_version: save_domain::SNAPSHOT_FORMAT_VERSION,
+            game_key: GameKey::new("monster-hunter", "0004000000048100", "jp-3g", "slot1"),
+            logical_save_id: save_domain::LogicalSaveId("mh3g".into()),
+            device_id: save_domain::DeviceId("mac".into()),
+            parents: vec![],
+            entries: vec![ManifestEntry {
+                path: "system".into(),
+                kind: FileKind::Regular,
+                size: 4,
+                plaintext_sha256: hex::encode(Sha256::digest(b"aaaa")),
+                chunks: vec![],
+            }],
+            created_unix_ms: 1,
+        };
+        let mut right = left.clone();
+        right.device_id = save_domain::DeviceId("android".into());
+        right.entries[0].plaintext_sha256 = hex::encode(Sha256::digest(b"bbbb"));
+        let report = diff_manifests_for_game(&left, &right, "mh3g-3ds").unwrap();
+        assert_eq!(report.changed_files, 1);
+        assert_eq!(report.entries[0].path, "system");
+        assert!(report.entries[0].byte_ranges.is_empty());
+        assert!(report.summary_zh.contains("选择覆盖前会保留两边快照"));
+        left.entries[0].plaintext_sha256 = right.entries[0].plaintext_sha256.clone();
+        let no_diff = diff_manifests_for_game(&left, &right, "mh3g-3ds").unwrap();
+        assert_eq!(no_diff.changed_files, 0);
     }
 }

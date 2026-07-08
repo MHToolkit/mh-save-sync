@@ -220,10 +220,13 @@ object SyncMessages {
         "已排队：只下载云端到本机缓存。同步方向是 ${serverLabel(serverEndpoint)} → 本机安全缓存；不会覆盖 Nemessix 原目录，真正恢复前会再次确认模拟器已停止并先备份本地存档。"
 
     fun prelaunchRemoteDecisionHint(): String =
-        "发现云端版本后，请先选一个动作：只下载到本机缓存、云端覆盖本地，或继续使用本地并打开 Nemessix。"
+        "发现云端版本后，请先选一个动作：只下载到本机缓存、云端覆盖本地，或继续使用本地并打开 Nemessix。若有冲突，工具会先展示文件/字节级差异；能否解析猎人名、装备、道具取决于具体游戏解析器。"
 
     fun continueLocalRiskHint(): String =
         "继续使用本地表示这次先不恢复云端；如果另一台设备之后也修改，会进入冲突待处理，需要你选择保留哪一边。"
+
+    fun conflictDiffBoundary(): String =
+        "当前 Alpha 已有 MH3G/3U 3DS 专用差异解析入口：先列出两边不同的文件、大小、校验摘要和变更字节段；暂不声称能语义解析猎人名、装备、道具或任务进度。后续每个游戏会独立增加解析器，不能通用猜。"
 
     fun continueLocalLaunchQueued(): String =
         "已选择继续使用本地存档。当前不会从云端覆盖本地，也不会把未验证中间态上传；退出 MH3G 后再对账补传。"

@@ -16,6 +16,14 @@ The UI compares device, recorded time, parents, size and hashes without claiming
 semantic merging of binary saves. A user may select one branch as the next HEAD
 or copy it to a new logical slot; neither action deletes the other history.
 
+Phase 1 also defines a game-specific diff parser contract. Diff parsing runs on
+the client after decrypting manifests or local folders, never on the server. The
+initial `mh3g-3ds` parser reports conservative file/byte-level differences
+(changed files, sizes, hashes and byte ranges) and explicitly does not claim to
+understand hunter names, equipment, items or quest progress. Semantic fields are
+allowed only after a game-specific parser has fixtures, evidence, fail-closed
+rules and an ADR; no parser may silently convert between 3G/3U, 4G/4U or XX/GU.
+
 Restore sequence:
 
 1. decrypt and verify the chosen snapshot into isolated staging;

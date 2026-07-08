@@ -174,10 +174,27 @@ cargo run -p save-cli --bin mh-save -- server-status \\
 
 `server-upload` prints Chinese `message_zh`, `server_url`, `sync_target`,
 `logical_save_id`, `cloud_head_before`, `cloud_head`, `outcome` and
-`conflict_snapshot`, so a manual sync is never a black box. The reproducible
-gate is `./scripts/server-sync-e2e.sh`: it uploads an office snapshot, uploads
-a home/Android-style divergent branch without a base head, and verifies the
-cloud HEAD is preserved while the conflict branch is retained.
+`conflict_snapshot`, so a manual sync is never a black box. `server-status`
+also includes `conflict_diffs` when the client can decrypt the current HEAD and
+conflict branches with the recovery secret. Phase 1 exposes an explicit
+game-specific parser contract: `mh3g-3ds` currently reports file/byte-level
+differences for MH3G/3U 3DS saves and deliberately does **not** claim hunter,
+equipment, item or quest semantic merges until a game-specific parser proves
+those fields.
+
+Local save-diff smoke:
+
+```bash
+cargo run -p save-cli --bin mh-save -- save-diff \\
+  --left /tmp/mh-save-left \\
+  --right /tmp/mh-save-right \\
+  --game-profile mh3g-3ds
+```
+
+The reproducible gate is `./scripts/server-sync-e2e.sh`: it uploads an office
+snapshot, uploads a home/Android-style divergent branch without a base head,
+and verifies the cloud HEAD is preserved while the conflict branch is retained
+and user-readable file/byte diff metadata is returned.
 
 Automation policy gate:
 

@@ -18,6 +18,8 @@ scripts/supply-chain-gate.sh                                    PASS: cargo-deny
 cargo run -p save-cli --bin mh-save -- crypto-device-fixture    PASS: matches tests/fixtures/device-identity-public.json
 cargo test -p save-cli --test bundle_cli                       PASS: 2 tests / 1 suite
 cargo test -p save-cli --test server_sync_cli                  PASS: 2 tests / 1 suite
+cargo test -p save-engine diff -- --nocapture                  PASS: game-specific file/byte diff parser
+cargo test -p save-cli --test save_diff_cli -- --nocapture     PASS: CLI save-diff user-readable MH3G parser boundary
 scripts/offline-bundle-e2e.sh                                   PASS: export bundle, restore, running fail-closed
 scripts/server-sync-e2e.sh                                      PASS: upload/status/restore, conflict branch retained
 scripts/macos-shell-e2e.sh                                      PASS: macOS shell upload/status/restore visible
@@ -66,6 +68,36 @@ Evidence scope:
 - The app bundle includes `Contents/MacOS/mh-save`; installed menu actions therefore use the same Rust CLI pipeline without requiring an external `MH_SAVE_SYNC_CLI` environment variable.
 - Config E2E verifies persisted server URL, save-root path, recovery-secret file path under `~/Documents/Secrets`, and `auto_upload_on_exit=false`; the recovery secret contents are never written into config, logs, docs or GitHub output.
 - Automation remains session-boundary based: the menu bar checks Nemessix process exit every 15 seconds and only then triggers stable snapshot upload; file changes do not upload directly, and restore stays blocked while Nemessix is running.
+
+## Game-specific conflict diff parser gate executed on 2026-07-08
+
+Commands:
+
+```bash
+cargo test -p save-engine diff -- --nocapture
+cargo test -p save-cli --test save_diff_cli -- --nocapture
+cargo test -p save-cli --test server_sync_cli -- --nocapture
+```
+
+Evidence scope:
+
+- `save-engine` now has a client-side parser contract producing
+  `GameSaveDiffReport` with changed file counts, added/removed/modified counts,
+  left/right sizes, left/right plaintext hashes and byte ranges.
+- `mh3g-3ds-binary-v0` is deliberately conservative: it reports MH3G/3U 3DS
+  file/byte-level differences and explicitly says it does not semantically parse
+  hunter names, equipment, items or quests.
+- `mh-save save-diff --game-profile mh3g-3ds` prints the diff JSON for two local
+  folders.
+- `mh-save server-status` now includes `conflict_diffs` when the client can
+  decrypt both current HEAD and conflict branch manifests with the recovery
+  secret. This strengthens the conflict UI evidence while keeping the server
+  blind to plaintext save paths and contents.
+
+Boundary:
+
+- This is parser/UX evidence only. It does not upgrade any emulator adapter to
+  `RuntimeVerified`, and it does not claim binary save semantic merge support.
 
 ## Offline bundle recovery gate executed on 2026-07-07
 

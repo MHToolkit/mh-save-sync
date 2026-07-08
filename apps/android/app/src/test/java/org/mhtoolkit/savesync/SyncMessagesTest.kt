@@ -199,8 +199,20 @@ class SyncMessagesTest {
         assertTrue(decision.contains("只下载到本机缓存"))
         assertTrue(decision.contains("云端覆盖本地"))
         assertTrue(decision.contains("继续使用本地"))
+        assertTrue(decision.contains("文件/字节级差异"))
         assertTrue(risk.contains("先不恢复云端"))
         assertTrue(risk.contains("冲突待处理"))
+    }
+
+    @Test
+    fun conflictDiffBoundaryExplainsGameSpecificParserLimit() {
+        val copy = SyncMessages.conflictDiffBoundary()
+
+        assertTrue(copy.contains("MH3G/3U 3DS"))
+        assertTrue(copy.contains("文件、大小、校验摘要"))
+        assertTrue(copy.contains("变更字节段"))
+        assertTrue(copy.contains("暂不声称能语义解析"))
+        assertTrue(copy.contains("每个游戏会独立增加解析器"))
     }
 
     @Test
