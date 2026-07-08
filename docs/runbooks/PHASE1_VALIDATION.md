@@ -26,6 +26,7 @@ scripts/macos-shell-e2e.sh                                      PASS: macOS shel
 scripts/automation-policy-e2e.sh                                PASS: watcher dirty-only, session-boundary snapshot candidates, running restore blocked
 scripts/macos-install-e2e.sh                                    PASS: local .app install, bundled CLI, persisted server URL, save root, recovery secret file, manual/auto menu labels
 scripts/android-apk-smoke.sh                                    PASS: debug APK installs, launches MainActivity and has no launch crash on ADB emulator
+scripts/android-ui-copy-smoke.sh                                PASS: actual Android UI dump exposes Chinese sync route, next action and pre-launch check copy
 scripts/android-avd-generic-folder-e2e.sh                       PASS: headless AVD shared-storage public Alpha conflict/restore gate
 scripts/android-generic-folder-e2e.sh                           PASS: connected ADB shared-storage public Alpha conflict/restore gate
 scripts/compose-server-sync-e2e-runtime-test.sh                 PASS: Docker daemon failure falls back to Podman
@@ -126,6 +127,38 @@ Evidence scope:
   `/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/`.
 - This is an install/launch smoke only. It does not prove SAF authorization,
   Android Nemessix sandbox access, or emulator-readable restore.
+
+## Android UI copy smoke executed on 2026-07-08
+
+Command:
+
+```bash
+./scripts/android-ui-copy-smoke.sh
+```
+
+Local ADB evidence:
+
+```json
+{"android_ui_copy_smoke":true,"device_serial":"emulator-5554","package":"org.mhtoolkit.savesync","required_copy_count":10,"visible_text_sha256":"fd00dc7c086edf5e9ac0d37e814a1276d97918c4ca096803cb029d9ccf2d697a"}
+```
+
+Evidence scope:
+
+- The script installs and launches the current debug APK through
+  `scripts/android-apk-smoke.sh`, then uses Android `uiautomator dump` on the
+  real view hierarchy instead of static string inspection.
+- The gate fails unless the visible UI contains Chinese copy for `MH 云存档同步`,
+  office Mac ↔ home Android, the Android Nemessix sync route, no silent
+  overwrite, current status/next action, folder authorization, server target,
+  MH3G sync toggle and pre-launch check.
+- This directly guards the Alpha usability problem where a user can install the
+  Android app but cannot tell what it syncs, where it syncs to, or what to press
+  before launching MH3G.
+
+Boundary:
+
+- This is UI copy/launch evidence only. It does not prove SAF restore into a
+  real Android Nemessix save directory or game-readable restore.
 
 ## Android Generic Folder shared-storage gate executed on 2026-07-08
 

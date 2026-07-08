@@ -228,6 +228,17 @@ resumed activity and fails if launch logcat contains an app crash. It does not
 exercise SAF or real emulator save access; use it as the quick "can I install
 the APK before going home?" gate before the shared-folder sync E2E below.
 
+Android UI copy smoke for the same launched APK:
+
+```bash
+./scripts/android-ui-copy-smoke.sh
+```
+
+This dumps the actual Android view hierarchy and fails unless the visible app
+copy explains `MH 云存档同步`, office Mac ↔ home Android, sync route, no silent
+overwrite, server target, Android Nemessix folder authorization, MH3G toggle and
+pre-launch check in Chinese.
+
 Android Generic Folder shared-storage smoke with a connected ADB device:
 
 ```bash
