@@ -70,6 +70,11 @@ class SyncMessagesTest {
         )
         val download = SyncMessages.downloadCacheQueued("http://127.0.0.1:18080/")
         val localLaunch = SyncMessages.continueLocalLaunchQueued()
+        val replaceCloud = SyncMessages.localReplaceCloudQueued(
+            target = "MH3G / Android Nemessix",
+            serverEndpoint = "http://127.0.0.1:18080/",
+            sessionActive = false,
+        )
 
         assertTrue(upload.contains("同步到服务器"))
         assertTrue(upload.contains("MH3G / Android Nemessix → 本机安全缓存 → http://127.0.0.1:18080"))
@@ -78,6 +83,46 @@ class SyncMessagesTest {
         assertTrue(download.contains("不会覆盖 Nemessix 原目录"))
         assertTrue(localLaunch.contains("继续使用本地存档"))
         assertTrue(localLaunch.contains("不会从云端覆盖本地"))
+        assertTrue(replaceCloud.contains("本地替换云端"))
+        assertTrue(replaceCloud.contains("MH3G / Android Nemessix → 本机安全缓存 → http://127.0.0.1:18080"))
+        assertTrue(replaceCloud.contains("云端旧版本会保留为历史/冲突分支"))
+    }
+
+    @Test
+    fun localReplaceCloudExplainsConflictRetentionAndActiveSessionSafety() {
+        val queuedWhilePlaying = SyncMessages.localReplaceCloudQueued(
+            target = "MH3G / Android Nemessix",
+            serverEndpoint = "http://127.0.0.1:18080/",
+            sessionActive = true,
+        )
+        val processedWhilePlaying = SyncMessages.reconcileSummary(
+            reason = "user-use-local",
+            target = "MH3G / Android Nemessix",
+            endpoint = "http://127.0.0.1:18080/",
+            sessionActive = true,
+        )
+        val processedStopped = SyncMessages.reconcileSummary(
+            reason = "user-use-local",
+            target = "MH3G / Android Nemessix",
+            endpoint = "http://127.0.0.1:18080/",
+            sessionActive = false,
+        )
+
+        assertTrue(queuedWhilePlaying.contains("退出后上传"))
+        assertTrue(queuedWhilePlaying.contains("不会上传正在写入的中间态"))
+        assertTrue(queuedWhilePlaying.contains("云端旧版本会保留为历史/冲突分支"))
+        assertTrue(processedWhilePlaying.contains("没有上传正在写入的中间态"))
+        assertTrue(processedStopped.contains("已处理冲突选择"))
+        assertTrue(processedStopped.contains("云端旧版本保留为历史/冲突分支"))
+
+        listOf(queuedWhilePlaying, processedWhilePlaying, processedStopped).forEach { message ->
+            assertTrue(!message.contains("锁定"))
+            assertTrue(!message.contains("标记会话"))
+            assertTrue(!message.contains("同步会话"))
+            assertTrue(!message.contains("CAS"))
+            assertTrue(!message.contains("HEAD"))
+            assertTrue(!message.contains("SAF"))
+        }
     }
 
     @Test

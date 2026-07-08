@@ -564,7 +564,7 @@ gh api orgs/MHToolkit/actions/runners --paginate \
   --jq '.runners[] | {name,os,status,busy,labels:[.labels[].name]}'
 ```
 
-Evidence:
+Evidence rechecked on 2026-07-08:
 
 ```json
 {"busy":false,"labels":["self-hosted","Linux","X64","ecs","ci-general","linux-x64","cn-hangzhou","2c4g","mhtoolkit"],"name":"ecs-cn-hangzhou-mhtoolkit-01","os":"Linux","status":"online"}
@@ -576,8 +576,17 @@ Adopted CI policy:
   the self-hosted host;
 - serialize heavyweight jobs by making Android depend on Rust, because the
   organization currently has one 2c4g `ci-general` runner;
+- skip the heavy PR workflow for documentation-only updates via `paths-ignore`
+  in `.github/workflows/ci.yml`; use `workflow_dispatch` or a code/config touch
+  if a docs-only change explicitly needs a full integration rerun;
+- keep `ci-canary.yml` weekly only (`17 4 * * 1`) as a low-frequency runner
+  health check instead of frequent polling;
 - avoid high-frequency status watching during development; use single
   `gh pr checks` / `gh run list` snapshots after pushes and wait between checks.
+
+Capacity note for the MHToolkit hub: raising concurrency above 1 is not useful
+while the org exposes a single 2c4g `ci-general` runner. Add a second runner or
+upgrade the host before removing the Rust→Android serialization.
 
 ## Artifact hashes
 

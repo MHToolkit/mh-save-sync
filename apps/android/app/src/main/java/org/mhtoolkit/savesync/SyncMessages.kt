@@ -19,12 +19,17 @@ object SyncMessages {
     fun launchPausedForCloudUnavailable(): String =
         "云端不可用或未配置，已暂停自动打开 Nemessix。你可以点「继续使用本地并打开 Nemessix」继续使用本地存档；本地队列会在云端恢复后再补传。"
 
-    fun reconcileSummary(reason: String, target: String, endpoint: String?): String {
+    fun reconcileSummary(
+        reason: String,
+        target: String,
+        endpoint: String?,
+        sessionActive: Boolean = false,
+    ): String {
         val server = serverLabel(endpoint)
         return when (reason) {
             "manual-upload" -> "已处理同步到服务器：$target 会先等待存档稳定、复制到本机安全缓存并校验，再上传到 $server。同步方向是本地存档 → 本机安全缓存 → 服务器。"
             "session-exit" -> "已处理退出后对账：Nemessix 停止后才允许恢复；若有稳定本地快照，会加密排队上传。"
-            "user-use-local" -> "已处理冲突选择：本地版本作为新的当前快照上传；云端旧版本保留为历史/冲突分支。"
+            "user-use-local" -> localReplaceCloudProcessed(target, server, sessionActive)
             "download-cache-only" -> "已处理只下载：云端版本只进入本机安全缓存，不会覆盖正在运行的 Nemessix 存档目录。"
             "restore-cloud-head" -> "已处理恢复云端版本：目标=$target，服务器=$server。恢复只会在确认 Nemessix 已停止后执行，且会先备份当前本地存档，再从本机安全缓存恢复到原目录。"
             "restore-blocked-running" -> "已拒绝恢复：Nemessix 仍在运行，没有覆盖本地存档。请先退出游戏/模拟器，再执行云端覆盖本地。"
@@ -44,6 +49,30 @@ object SyncMessages {
 
     fun restoreCloudHeadQueued(serverEndpoint: String): String =
         "已排队：云端覆盖本地。服务器=${serverLabel(serverEndpoint)}；执行前必须确认 Nemessix 已停止，并先备份当前本地存档。"
+
+    fun localReplaceCloudQueued(
+        target: String,
+        serverEndpoint: String,
+        sessionActive: Boolean,
+    ): String {
+        val server = serverLabel(serverEndpoint)
+        return if (sessionActive) {
+            "已排队：本地替换云端（退出后上传）。MH3G 正在玩，不会上传正在写入的中间态；退出并通过稳定校验后，才会把 $target 上传到 $server。云端旧版本会保留为历史/冲突分支。"
+        } else {
+            "已排队：本地替换云端。同步方向是 $target → 本机安全缓存 → $server；只有稳定快照通过校验后才会上传，云端旧版本会保留为历史/冲突分支。"
+        }
+    }
+
+    private fun localReplaceCloudProcessed(
+        target: String,
+        server: String,
+        sessionActive: Boolean,
+    ): String =
+        if (sessionActive) {
+            "已记录冲突选择：本地替换云端。MH3G 仍在运行，没有上传正在写入的中间态；退出并通过稳定校验后，才会把 $target 上传到 $server。云端旧版本会保留为历史/冲突分支。"
+        } else {
+            "已处理冲突选择：本地替换云端。$target 的稳定快照会上传到 $server；云端旧版本保留为历史/冲突分支。"
+        }
 
     fun restoreBlockedRunning(): String =
         "已拒绝恢复：Nemessix 仍在运行，没有覆盖本地存档。请先点击“我已退出 MH3G”或退出模拟器，再执行云端覆盖本地。"

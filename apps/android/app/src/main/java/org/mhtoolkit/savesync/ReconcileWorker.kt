@@ -46,7 +46,13 @@ class ReconcileWorker(
             SyncScheduler.LAST_SYNC_TARGET,
             "MH3G / Android Nemessix",
         ) ?: "MH3G / Android Nemessix"
-        val summary = SyncMessages.reconcileSummary(reason, target, endpoint)
+        val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
+        val summary = SyncMessages.reconcileSummary(
+            reason = reason,
+            target = target,
+            endpoint = endpoint,
+            sessionActive = sessionActive,
+        )
         // The platform shell records user-visible state. Shared Rust performs the
         // stable-copy/hash/validate/encrypt/upload pipeline once JNI is loaded.
         preferences.edit()

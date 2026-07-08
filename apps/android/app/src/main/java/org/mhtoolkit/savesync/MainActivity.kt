@@ -370,6 +370,32 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 lastSummary = SyncMessages.cloudActionNeedsServer()
+                            } else {
+                                SyncScheduler.enqueueImmediate(this@MainActivity, "user-use-local")
+                                lastSummary = SyncMessages.localReplaceCloudQueued(
+                                    target = "MH3G / Android Nemessix",
+                                    serverEndpoint = serverEndpoint,
+                                    sessionActive = sessionActive,
+                                )
+                            }
+                            preferences.edit()
+                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                .putString(SyncScheduler.LAST_SYNC_REASON, "user-use-local")
+                                .apply()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("本地替换云端（保留云端旧版本）")
+                    }
+                    Text(
+                        "发生冲突时：点「本地替换云端」表示用本机稳定快照作为新的云端版本；点「云端覆盖本地」表示先下载云端、确认 Nemessix 停止、备份本地后再恢复。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedButton(
+                        enabled = authorized && gameEnabled,
+                        onClick = {
+                            if (serverEndpoint.isBlank()) {
+                                lastSummary = SyncMessages.cloudActionNeedsServer()
                                 preferences.edit()
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, "restore-no-server")
@@ -488,7 +514,7 @@ class MainActivity : ComponentActivity() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("这是说明页，不会执行覆盖或上传。真正发生冲突时，App 会列出本地与云端的设备、时间、上一个版本、大小和校验摘要。")
-                    Text("不会按最新时间自动覆盖。你可以选择云端覆盖本地、本地替换云端，或暂不处理；另一边会保留为历史/冲突分支。")
+                    Text("不会按最新时间自动覆盖。你可以回到「同步动作」选择云端覆盖本地、本地替换云端，或暂不处理；另一边会保留为历史/冲突分支。")
                     Text("二进制游戏存档不做语义合并；只能选择一方或复制为分支。")
                 }
             },
