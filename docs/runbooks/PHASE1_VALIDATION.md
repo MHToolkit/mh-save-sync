@@ -102,6 +102,31 @@ Boundary:
 - This is parser/UX evidence only. It does not upgrade any emulator adapter to
   `RuntimeVerified`, and it does not claim binary save semantic merge support.
 
+
+## UI/UX official source verification gate executed on 2026-07-08
+
+Command:
+
+```bash
+python3 scripts/ux-research-link-check.py --timeout 25
+```
+
+Local output summary:
+
+```json
+{"ui_ux_research_link_check":true,"source_count":10,"ok_count":10,"failed_count":0}
+```
+
+Evidence scope:
+
+- The script parses `docs/research/UI_UX_PATTERNS.md` and verifies the Android Developers Material/Compose/background-work links, Apple HIG menu/feedback/alert links, Dropbox sync-state help and Google Drive desktop help.
+- It records only URL metadata, HTTP status, final URL and page title when available under `artifacts/research/ui_ux_link_check.json`; page bodies are not committed or archived.
+- The current host can HEAD the Android Developers URLs but receives Google 429 for browser-style GET, while Apple/Dropbox/Google Help GET pages return titles. The research therefore treats Android docs as source-reachable, not as locally archived evidence.
+
+Boundary:
+
+- This proves official/help source reachability for the UX direction. It does not prove final visual polish; Android UI copy and macOS menu-bar discoverability are still guarded by their own runtime/UI smoke gates.
+
 ## Android APK install/launch smoke executed on 2026-07-08
 
 Command:

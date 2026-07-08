@@ -21,7 +21,15 @@
 
 ## Link verification
 
-On 2026-07-08, a local verification script fetched every URL above with HTTP 200 and recorded page titles for Android Developers, Apple Developer Documentation, Dropbox Help and Google Drive Help.
+Command:
+
+```bash
+python3 scripts/ux-research-link-check.py --timeout 25
+```
+
+Latest local run: 2026-07-08T12:47:11Z. The script parsed the source table above, checked all 10 official/help URLs, wrote lightweight metadata to `artifacts/research/ui_ux_link_check.json`, and reported `ui_ux_research_link_check=true` with `ok_count=10` and `failed_count=0`.
+
+Verification boundary: Apple Developer Documentation, Dropbox Help and Google Drive Help returned browser-readable GET 200 pages and titles. Android Developers links returned HEAD 204 but browser-style GET was rate-limited by Google with 429 on this host; they are recorded as reachable via HEAD rather than title-captured. This is acceptable as reachability evidence only and must not be represented as full-page archival or visual review.
 
 ## Competitive / ecosystem takeaways
 
