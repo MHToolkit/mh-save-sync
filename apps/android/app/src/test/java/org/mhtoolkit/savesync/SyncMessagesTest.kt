@@ -12,7 +12,7 @@ class SyncMessagesTest {
             endpoint = "http://127.0.0.1:18080",
         )
 
-        assertTrue(message.contains("恢复云端 HEAD"))
+        assertTrue(message.contains("恢复云端版本"))
         assertTrue(message.contains("Nemessix 已停止"))
         assertTrue(message.contains("先备份当前本地存档"))
         assertTrue(message.contains("http://127.0.0.1:18080"))
@@ -39,8 +39,8 @@ class SyncMessagesTest {
         )
 
         assertTrue(message.contains("MH3G / Android Nemessix"))
-        assertTrue(message.contains("staging/CAS"))
-        assertTrue(message.contains("http://127.0.0.1:18080/"))
+        assertTrue(message.contains("本机安全缓存"))
+        assertTrue(message.contains("http://127.0.0.1:18080"))
         assertTrue(message.contains("端到端加密快照"))
     }
 
@@ -50,6 +50,7 @@ class SyncMessagesTest {
 
         assertTrue(message.contains("云端同步未开始"))
         assertTrue(message.contains("Mac 和 Android 必须填写同一个服务器地址"))
+        assertTrue(message.contains("当前没有同步到任何服务器"))
     }
 
     @Test
@@ -57,8 +58,26 @@ class SyncMessagesTest {
         val message = SyncMessages.launchPausedForCloudUnavailable()
 
         assertTrue(message.contains("已暂停自动打开 Nemessix"))
-        assertTrue(message.contains("手动打开 Nemessix 继续使用本地存档"))
+        assertTrue(message.contains("继续使用本地并打开 Nemessix"))
         assertTrue(message.contains("云端恢复后再补传"))
+    }
+
+    @Test
+    fun manualActionMessagesExposeDirectionAndNoOverwriteSemantics() {
+        val upload = SyncMessages.manualUploadQueued(
+            target = "MH3G / Android Nemessix",
+            serverEndpoint = "http://127.0.0.1:18080/",
+        )
+        val download = SyncMessages.downloadCacheQueued("http://127.0.0.1:18080/")
+        val localLaunch = SyncMessages.continueLocalLaunchQueued()
+
+        assertTrue(upload.contains("同步到服务器"))
+        assertTrue(upload.contains("MH3G / Android Nemessix → 本机安全缓存 → http://127.0.0.1:18080"))
+        assertTrue(upload.contains("端到端加密上传"))
+        assertTrue(download.contains("http://127.0.0.1:18080 → 本机安全缓存"))
+        assertTrue(download.contains("不会覆盖 Nemessix 原目录"))
+        assertTrue(localLaunch.contains("继续使用本地存档"))
+        assertTrue(localLaunch.contains("不会从云端覆盖本地"))
     }
 
     @Test

@@ -18,6 +18,7 @@ mkdir -p artifacts/checksums
 ./scripts/offline-bundle-e2e.sh
 ./scripts/server-sync-e2e.sh
 ./scripts/automation-policy-e2e.sh
+python3 scripts/ux-copy-guard.py
 ./scripts/macos-shell-e2e.sh
 ./scripts/macos-config-e2e.sh
 ./scripts/build-macos-app-bundle.sh

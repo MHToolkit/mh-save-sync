@@ -76,7 +76,9 @@ class MainActivity : ComponentActivity() {
         var wifiOnly by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.WIFI_ONLY, true))
         }
-        var sessionActive by remember { mutableStateOf(false) }
+        var sessionActive by remember {
+            mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true))
+        }
         var gameEnabled by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true))
         }
@@ -96,6 +98,14 @@ class MainActivity : ComponentActivity() {
                 preferences.getString(
                     SyncScheduler.LAUNCH_GATE_SUMMARY,
                     "未检查。启动 MH3G 前点「启动前检查」。",
+                ).orEmpty()
+            )
+        }
+        var launchGateReason by remember {
+            mutableStateOf(
+                preferences.getString(
+                    SyncScheduler.LAUNCH_GATE_REASON,
+                    "not-checked",
                 ).orEmpty()
             )
         }
@@ -121,27 +131,6 @@ class MainActivity : ComponentActivity() {
         if (conflictVisible) {
             ConflictDialog(
                 onDismiss = { conflictVisible = false },
-                onUseRemote = {
-                    conflictVisible = false
-                    launchGate = "已选择：云端覆盖本地。实际恢复会先下载到本地缓存，确认 Nemessix 已停止，再备份当前本地存档，然后替换。"
-                    preferences.edit()
-                        .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, launchGate)
-                        .putString(SyncScheduler.LAST_SYNC_REASON, "user-use-remote")
-                        .apply()
-                    lastSummary = launchGate
-                },
-                onUseLocal = {
-                    conflictVisible = false
-                    SyncScheduler.enqueueImmediate(this@MainActivity, "user-use-local")
-                    launchGate = "已选择：本地替换云端。当前本地存档会形成新的加密快照；云端旧版本保留在历史/冲突分支中。"
-                    preferences.edit()
-                        .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                        .putString(SyncScheduler.LAST_SYNC_SUMMARY, launchGate)
-                        .putString(SyncScheduler.LAST_SYNC_REASON, "user-use-local")
-                        .apply()
-                    lastSummary = launchGate
-                },
             )
         }
 
@@ -156,7 +145,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text("MH 云存档同步", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "一期中文 Alpha：办公室 Mac 和回家 Android 都把 MH3G 存档同步到同一个服务器；不做静默覆盖。",
+                    "一期中文 Alpha：办公室 Mac 和回家 Android 都把 MH3G 存档同步到同一个服务器；每个动作都会说明上传、下载还是恢复，不做静默覆盖。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
@@ -215,7 +204,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("Android Nemessix 存档目录") {
-                    StatusLine("目录权限", if (authorized) "已授权 SAF 目录" else "未授权，无法读取/恢复存档")
+                    StatusLine("目录权限", if (authorized) "已授权存档目录" else "未授权，无法读取/恢复存档")
                     Button(
                         onClick = { folderPicker.launch(null) },
                         modifier = Modifier.fillMaxWidth(),
@@ -233,9 +222,10 @@ class MainActivity : ComponentActivity() {
                     Button(
                         enabled = authorized && gameEnabled,
                         onClick = {
-                            launchGate = "正在检查 ${SyncMessages.serverLabel(serverEndpoint)} 的 /ready 与 MH3G 云端 HEAD；不会修改本地存档。"
+                            launchGate = "正在检查 ${SyncMessages.serverLabel(serverEndpoint)} 是否可用，并查看 MH3G 是否有云端版本；不会修改本地存档。"
                             preferences.edit()
                                 .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                .putString(SyncScheduler.LAUNCH_GATE_REASON, "prelaunch-checking")
                                 .putString(SyncScheduler.LAST_SYNC_REASON, "prelaunch-checking")
                                 .apply()
                             scope.launch {
@@ -244,9 +234,11 @@ class MainActivity : ComponentActivity() {
                                     emulatorRunning = sessionActive,
                                 )
                                 launchGate = result.summary
+                                launchGateReason = result.reason
                                 lastSummary = result.summary
                                 preferences.edit()
                                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, result.reason)
                                     .apply()
@@ -262,6 +254,7 @@ class MainActivity : ComponentActivity() {
                             launchGate = "正在启动前检查；检查完成前不会打开 Nemessix，也不会修改本地存档。"
                             preferences.edit()
                                 .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                .putString(SyncScheduler.LAUNCH_GATE_REASON, "launch-precheck")
                                 .putString(SyncScheduler.LAST_SYNC_REASON, "launch-precheck")
                                 .apply()
                             scope.launch {
@@ -270,8 +263,9 @@ class MainActivity : ComponentActivity() {
                                     emulatorRunning = sessionActive,
                                 )
                                 launchGate = result.summary
+                                launchGateReason = result.reason
                                 lastSummary = if (result.remoteHead != null) {
-                                    "已发现云端 HEAD=${result.remoteHead}。为避免覆盖风险，暂不自动打开 Nemessix；请先选择下载/恢复或继续本地。"
+                                    "已发现云端版本=${result.remoteHead}。为避免覆盖风险，暂不自动打开 Nemessix；请先选择下载/恢复或继续本地。"
                                 } else if (!result.cloudReachable) {
                                     SyncMessages.launchPausedForCloudUnavailable()
                                 } else {
@@ -279,6 +273,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 preferences.edit()
                                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                                     .putString(SyncScheduler.LAST_SYNC_REASON, "launch-nemessix")
                                     .apply()
@@ -293,12 +288,41 @@ class MainActivity : ComponentActivity() {
                         onClick = { conflictVisible = true },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("查看冲突处理示例")
+                        Text("查看冲突处理说明")
                     }
                     Text(
-                        "云端较新时会提示先下载/恢复；云端不可用时会明确提示是否继续使用本地，之后再补传。",
+                        "云端较新时会提示先下载/恢复；云端不可用时先暂停自动打开，由你选择是否继续使用本地，之后再补传。",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    val canContinueLocalAfterGate = launchGateReason in setOf(
+                        "prelaunch-no-server",
+                        "prelaunch-cloud-unavailable",
+                        "prelaunch-remote-head",
+                    )
+                    if (canContinueLocalAfterGate) {
+                        Text(
+                            "你已看过启动前检查结果。若现在选择继续本地，后续云端也变更时会进入冲突分支，不会自动覆盖。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    OutlinedButton(
+                        enabled = authorized && gameEnabled && canContinueLocalAfterGate,
+                        onClick = {
+                            lastSummary = SyncMessages.continueLocalLaunchQueued()
+                            val launchResult = launchNemessixOrExplain()
+                            launchGate = "$lastSummary\n$launchResult"
+                            launchGateReason = "continue-local-launch"
+                            preferences.edit()
+                                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
+                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                .putString(SyncScheduler.LAST_SYNC_REASON, "continue-local-launch")
+                                .apply()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("继续使用本地并打开 Nemessix")
+                    }
                 }
 
                 CardSection("同步动作") {
@@ -309,7 +333,10 @@ class MainActivity : ComponentActivity() {
                                 lastSummary = SyncMessages.cloudActionNeedsServer()
                             } else {
                                 SyncScheduler.enqueueImmediate(this@MainActivity, "manual-upload")
-                                lastSummary = "已排队：立即上传本地存档。后台会先等待稳定窗口、只读复制到 staging、校验 manifest/hash，再加密上传到 ${SyncMessages.serverLabel(serverEndpoint)}。"
+                                lastSummary = SyncMessages.manualUploadQueued(
+                                    "MH3G / Android Nemessix",
+                                    serverEndpoint,
+                                )
                             }
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
@@ -318,7 +345,7 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("立即上传本地存档")
+                        Text("同步到服务器（上传本地稳定快照）")
                     }
                     OutlinedButton(
                         enabled = authorized && gameEnabled,
@@ -327,7 +354,7 @@ class MainActivity : ComponentActivity() {
                                 lastSummary = SyncMessages.cloudActionNeedsServer()
                             } else {
                                 SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
-                                lastSummary = "已排队：只从 ${SyncMessages.serverLabel(serverEndpoint)} 下载云端到本地缓存。不会在 Nemessix 运行时覆盖原目录；恢复前会先备份当前本地存档。"
+                                lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
                             }
                             preferences.edit()
                                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
@@ -336,7 +363,7 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("只下载云端到本地缓存")
+                        Text("同步到本机缓存（只下载，不覆盖）")
                     }
                     OutlinedButton(
                         enabled = authorized && gameEnabled,
@@ -364,7 +391,7 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("恢复云端到本地（需停止 Nemessix）")
+                        Text("云端覆盖本地（先备份，需停止 Nemessix）")
                     }
                     OutlinedButton(
                         enabled = authorized && gameEnabled,
@@ -386,6 +413,7 @@ class MainActivity : ComponentActivity() {
                                     SyncScheduler.LAST_SYNC_REASON,
                                     if (sessionActive) "session-start" else "session-exit",
                                 )
+                                .putBoolean(SyncScheduler.SESSION_ACTIVE, sessionActive)
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -453,28 +481,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ConflictDialog(
         onDismiss: () -> Unit,
-        onUseRemote: () -> Unit,
-        onUseLocal: () -> Unit,
     ) {
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("发现本地与云端冲突") },
+            title = { Text("冲突处理说明") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("不会按最新时间自动覆盖。请选择保留哪一边作为当前版本，另一边保留为历史/冲突分支。")
-                    Text("本地：Android Nemessix · 今天 21:18 · 47 KB · parent=mac-上一版")
-                    Text("云端：Mac Nemessix · 今天 18:02 · 53 KB · parent=mac-上一版")
+                    Text("这是说明页，不会执行覆盖或上传。真正发生冲突时，App 会列出本地与云端的设备、时间、上一个版本、大小和校验摘要。")
+                    Text("不会按最新时间自动覆盖。你可以选择云端覆盖本地、本地替换云端，或暂不处理；另一边会保留为历史/冲突分支。")
                     Text("二进制游戏存档不做语义合并；只能选择一方或复制为分支。")
                 }
             },
             confirmButton = {
-                TextButton(onClick = onUseRemote) {
-                    Text("云端覆盖本地")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onUseLocal) {
-                    Text("本地替换云端")
+                TextButton(onClick = onDismiss) {
+                    Text("知道了")
                 }
             },
         )

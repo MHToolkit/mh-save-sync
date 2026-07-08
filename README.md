@@ -34,13 +34,17 @@ actual target instead of pressing an opaque “sync” button:
    CI/debugging you can still run
    `swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check` or
    build the artifact-only bundle with `./scripts/build-macos-app-bundle.sh`.
-   The gate explains remote-newer, conflict and cloud-unavailable choices before
-   the game starts.
+   The gate now performs a real server health check plus MH3G cloud-version
+   probe before the game starts. `继续本地并打开 Nemessix` is a separate explicit
+   action for cloud-unavailable or intentional local-only play; it never writes
+   remote data into the emulator directory.
 3. Android Nemessix before launch: authorize the Nemessix SAF save directory,
    keep `MH3G / Android Nemessix` enabled, then tap `启动前检查`. Android also
-   probes the configured server `/ready` plus the MH3G cloud HEAD, shows
-   `恢复云端到本地（需停止 Nemessix）`, and refuses running restores with a visible
-   “没有覆盖本地存档” message.
+   probes the configured server and the MH3G cloud version, shows
+   `云端覆盖本地（先备份，需停止 Nemessix）`, and refuses running restores with a
+   visible “没有覆盖本地存档” message. The first-run UI avoids internal
+   `CAS/HEAD/SAF/staging` jargon; `scripts/ux-copy-guard.py` enforces this in
+   CI.
 4. Conflicts list local vs cloud device/time/parent/size/hash and require an
    explicit choice: `云端覆盖本地` or `本地替换云端`. Both histories are retained;
    there is no mtime-based last-write-wins.
@@ -77,7 +81,8 @@ Phase 1 feature branch currently contains:
   self-hosted-compatible PR path currently runs Rust and Android automatically.
   MHToolkit presently exposes one 2c4g `ci-general` runner, so CI cancels stale
   pushes and serializes heavy Rust → Android jobs instead of contending for the
-  same host; macOS and Compose evidence remains recorded in
+  same host. A separate weekly `ci-canary` runs only lightweight runner/script/
+  UX-copy health checks; macOS and Compose evidence remains recorded in
   `docs/runbooks/PHASE1_VALIDATION.md`.
 
 Still not stable: real macOS↔Android↔second-emulator round trips, polished

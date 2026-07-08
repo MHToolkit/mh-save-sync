@@ -20,6 +20,8 @@ object SyncScheduler {
     const val LAST_SYNC_REASON = "last_sync_reason"
     const val LAST_SYNC_UNIX_MS = "last_sync_unix_ms"
     const val LAUNCH_GATE_SUMMARY = "launch_gate_summary"
+    const val LAUNCH_GATE_REASON = "launch_gate_reason"
+    const val SESSION_ACTIVE = "session_active"
     const val GAME_MH3G_ENABLED = "game_mh3g_enabled"
     const val NEMESSIX_PACKAGE = "io.github.vincentadamnemessisx.nemessix"
     private const val PERIODIC_NAME = "save-reconcile-periodic"
@@ -29,6 +31,7 @@ object SyncScheduler {
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
+                .putBoolean(SESSION_ACTIVE, true)
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
                 .putString(
                     LAST_SYNC_SUMMARY,
@@ -38,6 +41,7 @@ object SyncScheduler {
                     LAUNCH_GATE_SUMMARY,
                     "未检查。启动 MH3G 前点「启动前检查」。",
                 )
+                .putString(LAUNCH_GATE_REASON, "not-checked")
                 .apply()
         }
     }

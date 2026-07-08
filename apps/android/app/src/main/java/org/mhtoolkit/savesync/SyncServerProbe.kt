@@ -41,9 +41,9 @@ object SyncServerProbe {
                     val snapshot = head.body.trim().trim('"').ifBlank { "unknown" }
                     PrelaunchProbeResult(
                         summary = if (emulatorRunning) {
-                            "云端可用，且 MH3G 有云端 HEAD=$snapshot。Nemessix 正在运行，当前只会下载到缓存；请退出游戏后再执行云端覆盖本地。服务器：$server。"
+                            "云端可用，且 MH3G 有云端版本=$snapshot。Nemessix 正在运行，当前只会下载到缓存；请退出游戏后再执行云端覆盖本地。服务器：$server。"
                         } else {
-                            "云端可用，且 MH3G 有云端 HEAD=$snapshot。若本地不是同一 HEAD，请先下载到缓存并确认后恢复；不会按最新时间自动覆盖。服务器：$server。"
+                            "云端可用，且 MH3G 有云端版本=$snapshot。若本地不是同一版本，请先下载到缓存并确认后恢复；不会按最新时间自动覆盖。服务器：$server。"
                         },
                         reason = "prelaunch-remote-head",
                         cloudReachable = true,
@@ -51,7 +51,7 @@ object SyncServerProbe {
                     )
                 }
                 404 -> PrelaunchProbeResult(
-                    summary = "云端可用，但还没有 MH3G 云端 HEAD。可以启动本地游戏；退出后本地稳定快照会上传到 $server。",
+                    summary = "云端可用，但还没有 MH3G 云端版本。可以启动本地游戏；退出后本地稳定快照会上传到 $server。",
                     reason = "prelaunch-no-remote-head",
                     cloudReachable = true,
                     remoteHead = null,

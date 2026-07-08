@@ -21,7 +21,7 @@ class ReconcileWorker(
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(
                     SyncScheduler.LAST_SYNC_SUMMARY,
-                    "同步未执行：还没有授权 Android Nemessix 存档目录。请选择 SAF 目录后再试。",
+                    "同步未执行：还没有授权 Android Nemessix 存档目录。请选择存档目录后再试。",
                 )
                 .apply()
             return Result.failure()

@@ -60,6 +60,8 @@ jobs:
         run: ./scripts/server-sync-e2e.sh
       - name: Verify dirty-only automation policy
         run: ./scripts/automation-policy-e2e.sh
+      - name: Verify Chinese-first UX copy does not expose internal sync jargon
+        run: python3 scripts/ux-copy-guard.py
       - name: Verify compose persistent-sync runtime selection
         run: ./scripts/compose-server-sync-e2e-runtime-test.sh
       - name: Verify compose project-aware backup volumes
