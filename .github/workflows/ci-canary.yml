@@ -29,6 +29,7 @@ jobs:
         run: |
           bash -n scripts/secret-scan.sh
           bash -n scripts/automation-policy-e2e.sh
+          bash -n scripts/macos-nemessix-stopped-snapshot-e2e.sh
           cargo metadata --no-deps --format-version 1 >/dev/null
       - name: UX copy guard
         run: python3 scripts/ux-copy-guard.py

@@ -683,10 +683,27 @@ Additional runtime boundary check on 2026-07-08:
   attempted from that live directory because phase1 policy forbids live
   overwrite and forbids treating a dirty/path observation as a stable snapshot
   boundary.
+- A later stopped-state macOS Nemessix pass used
+  `scripts/macos-nemessix-stopped-snapshot-e2e.sh`. The script refused live
+  Nemessix processes, constrained the root under the Nemessix application
+  support directory, rejected symlinks, compared two aggregate fingerprints
+  across a 2-second stability window and then built an encrypted snapshot
+  candidate without printing filenames, full paths or file contents. Evidence:
+
+```json
+{"adapter":"Nemessix 3DS","chunk_count":3,"emulator_stopped":true,"fingerprint":{"file_count":3,"total_bytes":53764,"tree_sha256":"45e36514d87ca30dc6c42db0c3b1a5dc773f24bcbe6ef9694f59f0a3183a4d1d"},"macos_nemessix_stopped_snapshot_e2e":true,"manifest_entries":3,"platform":"macOS","snapshot_file_count":3,"snapshot_id":"e57a7f7b08a45bf31539f2af41570a853d4b9423c551edd89017d17f81710b13","snapshot_total_bytes":53764,"stability_window_seconds":2,"support_level":"Stopped stable snapshot evidence only; not RuntimeVerified until restore is read back by the emulator after relaunch.","title_id":"00048100"}
+```
+
+  The encrypted snapshot id is run-specific because snapshot encryption uses random nonces; the stable reproducible evidence is the stopped-process precondition, 2-second matching tree fingerprint, file count and byte count.
+
+  This closes the stopped stable-snapshot proof for macOS Nemessix path
+  handling, but still does **not** upgrade macOS Nemessix to `Runtime Verified`
+  because no emulator-readable restore/relaunch round trip was performed.
 
 Open Phase 1D gates:
 
-- real macOS Nemessix save-complete IPC and automatic stable snapshot proof;
+- real macOS Nemessix save-complete IPC and emulator-readable restore/relaunch
+  proof; stopped stable snapshot proof exists for the observed local save root;
 - Android Nemessix restore proof against a real authorized save root;
 - Android Azahar or Citra MMJ modification producing a macOS conflict branch;
 - exported `.mhsavebundle` restore in a real emulator-readable no-server
