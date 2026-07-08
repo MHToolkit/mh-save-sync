@@ -257,6 +257,39 @@ Evidence:
 {"backend":"postgres-s3","cloud_head":"8054a06dc92c245703130b320539e34f13dfce04a9e0ca8dcc76311187426d30","conflict_count":1,"evidence":"persistent postgres-s3 server-upload/status/server-restore preserved conflict branch and restored byte-identical cloud HEAD","history_count":2,"logical_save_id":"compose-cli-1783424652296908000","restored_snapshot_id":"8054a06dc92c245703130b320539e34f13dfce04a9e0ca8dcc76311187426d30","running_restore_fail_closed":true,"server_url":"http://8.130.112.207:39082"}
 ```
 
+Follow-up deployment gate on 2026-07-08:
+
+- RCA: real macOS `--configured-upload` initially succeeded once, then repeated
+  upload returned HTTP 409 `device certificate mismatch or revoked`. The first
+  fix made the CLI register an account/device automatically, but it reissued a
+  certificate for the same deterministic device. The production server also
+  compared the full certificate bytes, so re-registration was not idempotent.
+- Fix: `29824a3 fix: make device registration idempotent` makes the CLI
+  certificate deterministic and makes the server treat same account handle +
+  same device public key + not revoked as an idempotent registration. Revoked or
+  different-device registrations still return conflict.
+- Remote deployment scope: only the isolated `mh-save-sync-aliyun` server image
+  was rebuilt and `mh-save-sync-aliyun-server-1` was force-recreated. PostgreSQL,
+  MinIO, volumes and unrelated projects such as `nemessix-room` were not stopped
+  or recreated.
+- Remote image changed from
+  `sha256:37c3efd737ddd737238efcb348cb71cd4da6bc992f53a5dad4d3b5d3bbc5ebaa`
+  to `sha256:5c8a1b5d8f81bdaa9eabc429d20c8148e3e206f8db3f344fcf12f991edd9c25e`.
+- Post-deploy ready check:
+  `{"status":"ready","version":"0.1.0","backend":"postgres-s3"}`.
+- Real macOS configured upload was then executed twice against the public Alpha
+  API. Both calls reached the server and returned safe `conflict` outcomes, not
+  409, preserving the prior cloud HEAD and retaining local snapshots as conflict
+  branches. Evidence summary with no recovery secret or local path printed:
+
+```json
+{"server_url":"http://8.130.112.207:39082","logical_save_id":"243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2","cloud_head":"f53f69905375bacd9c8040635db477a23813693a1b3faec64e5cd9bc138e5595","history_count":3,"conflict_count":2,"evidence":"two repeated macOS configured uploads returned conflict branches instead of device-certificate 409 after remote idempotent-registration deployment"}
+```
+
+- PR CI for head `29824a3b2b39e9d2c135049d237d473cde61bb5e` completed green:
+  `rust=SUCCESS`, `android=SUCCESS`; `dependency-review`, `macos-smoke` and
+  `compose-e2e` were skipped by workflow conditions for this PR run.
+
 Known deployment boundary:
 
 - Direct public `http://8.130.112.207:18082/ready` currently times out from the
