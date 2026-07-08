@@ -802,6 +802,16 @@ Additional runtime boundary check on 2026-07-08:
 
   The encrypted snapshot id is run-specific because snapshot encryption uses random nonces; the stable reproducible evidence is the stopped-process precondition, 2-second matching tree fingerprint, file count and byte count.
 
+- The installed macOS menu-bar app was rebuilt with the bundled Rust CLI and the configured upload path was exercised against the isolated Alpha API. Evidence from the real configured flow, with no recovery secret or local file paths printed:
+
+```json
+{"server_url":"http://8.130.112.207:39082","logical_save_id":"243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2","device_id":"macos-nemessix","cloud_head_before":null,"cloud_head":"f53f69905375bacd9c8040635db477a23813693a1b3faec64e5cd9bc138e5595","conflict_snapshot":null,"outcome":"first-snapshot","missing_chunks_uploaded":3,"chunk_count":3,"manifest_uploaded":true,"file_count":3,"total_bytes":53764}
+```
+
+  This proves the configured macOS app can create a stable encrypted snapshot, bootstrap/register the client identity on the server, upload missing chunks plus manifest, and commit the first cloud HEAD. It still remains stopped stable-snapshot evidence rather than `Runtime Verified` until an emulator-readable restore/relaunch round trip is completed.
+
+- macOS config E2E now also verifies `--generate-recovery-secret-file`: it creates `~/Documents/Secrets/mh-save-sync-recovery.hex`, validates the file is 64 lowercase hex characters, enforces mode `0600`, and checks menu/help copy exposes `生成恢复密钥文件`. The same E2E forces a closed-port upload failure and asserts `--secret-hex <redacted>` appears while the literal secret does not, closing the regression that previously leaked command arguments in error text.
+
   This closes the stopped stable-snapshot proof for macOS Nemessix path
   handling, but still does **not** upgrade macOS Nemessix to `Runtime Verified`
   because no emulator-readable restore/relaunch round trip was performed.

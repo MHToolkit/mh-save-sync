@@ -139,6 +139,35 @@ func isPathUnder(_ path: String, root: URL) -> Bool {
     return value == rootPath || value.hasPrefix(rootPath + "/")
 }
 
+func defaultRecoverySecretFileURL() -> URL {
+    documentsSecretsDirectory().appendingPathComponent("mh-save-sync-recovery.hex")
+}
+
+func randomRecoverySecretHex() throws -> String {
+    var bytes = [UInt8](repeating: 0, count: 32)
+    let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    guard status == errSecSuccess else {
+        throw CommandFailure(command: ["MHSaveSyncMac", "--generate-recovery-secret-file"], status: 2, stderr: "无法生成安全随机恢复密钥（SecRandomCopyBytes=\(status)）。\n")
+    }
+    return bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+func generateRecoverySecretFile(overwrite: Bool = false) throws -> String {
+    let dir = documentsSecretsDirectory()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+    let url = defaultRecoverySecretFileURL()
+    if FileManager.default.fileExists(atPath: url.path), !overwrite {
+        _ = try persistRecoverySecretFile(url.path)
+        return url.path
+    }
+    let secret = try randomRecoverySecretHex()
+    try (secret + "\n").write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    _ = try persistRecoverySecretFile(url.path)
+    return url.path
+}
+
 func httpGet(_ url: URL, timeout: TimeInterval = 2.5) -> HttpProbeResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
@@ -251,10 +280,10 @@ func persistRecoverySecretFile(_ raw: String) throws -> String {
     }
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
-        throw CommandFailure(command: ["MHSaveSyncMac", "--set-recovery-secret-file"], status: 2, stderr: "恢复密钥文件不存在或不是文件。请把 64 位 hex 恢复密钥放在 ~/Documents/Secrets 下。\n")
+        throw CommandFailure(command: ["MHSaveSyncMac", "--set-recovery-secret-file"], status: 2, stderr: "恢复密钥文件不存在或不是文件。请把 64 位 hex 恢复密钥放在 ~/Documents/Secrets 下；也可以点「生成恢复密钥文件」自动创建。\n")
     }
     guard isPathUnder(path, root: documentsSecretsDirectory()) else {
-        throw CommandFailure(command: ["MHSaveSyncMac", "--set-recovery-secret-file"], status: 2, stderr: "恢复密钥文件必须放在 ~/Documents/Secrets 下；配置文件只保存文件路径，不保存密钥内容。\n")
+        throw CommandFailure(command: ["MHSaveSyncMac", "--set-recovery-secret-file"], status: 2, stderr: "恢复密钥文件必须放在 ~/Documents/Secrets 下；配置文件只保存文件路径，不保存密钥内容。也可以点「生成恢复密钥文件」自动创建。\n")
     }
     var config = loadConfig()
     config.recoverySecretFile = path
@@ -288,6 +317,12 @@ func saveRecoverySecretFile(_ raw: String) throws {
     print("配置文件只保存路径，不保存恢复密钥内容；菜单动作执行时才读取该文件。")
 }
 
+func createRecoverySecretFile(overwrite: Bool = false) throws {
+    let path = try generateRecoverySecretFile(overwrite: overwrite)
+    print("已生成并配置恢复密钥文件：\(path)")
+    print("文件格式：64 位 hex；权限：0600；配置文件只保存路径，不保存密钥内容。")
+}
+
 func saveAutoUploadOnExit(_ raw: String) throws {
     let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let enabled: Bool
@@ -317,7 +352,7 @@ func printStatus(_ context: MacSyncContext) {
     菜单栏可点动作：启动前检查 / 立即上传 Mac 存档到服务器 / 查看云端状态 / 云端覆盖本地（先备份，需停止 Nemessix） / 我已退出 MH3G：立即对账上传。
     自动化边界：菜单栏只监听 Nemessix 进程退出并触发稳定快照；文件变化只提醒工具复查；运行中禁止云端覆盖本地。
     本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；屏幕右上角出现「MH 云存档」。
-    常用命令：--set-server-url <url> / --set-save-root <path> / --set-recovery-secret-file <path> / --auto-upload-on-exit on|off / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
+    常用命令：--set-server-url <url> / --set-save-root <path> / --set-recovery-secret-file <path> / --generate-recovery-secret-file / --auto-upload-on-exit on|off / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
 }
 
@@ -329,7 +364,7 @@ func nextActionText(_ context: MacSyncContext) -> String {
         return "选择 Mac Nemessix 存档目录；通常是 MH3G 的 data/00000001 目录。"
     }
     if !context.hasRecoverySecretFile {
-        return "选择恢复密钥文件；必须在 ~/Documents/Secrets 下，配置只保存路径。"
+        return "选择或生成恢复密钥文件；必须在 ~/Documents/Secrets 下，配置只保存路径。"
     }
     return "启动 MH3G 前点「启动前检查」；退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步。"
 }
@@ -337,7 +372,7 @@ func nextActionText(_ context: MacSyncContext) -> String {
 func onboardingChecklistText(_ context: MacSyncContext) -> String {
     let server = context.hasServerURL ? "✅ 服务器：\(context.serverLabel)" : "⬜ 服务器：点「设置服务器地址…」"
     let saveRoot = context.hasSaveRoot ? "✅ Mac 存档目录：\(context.saveRootLabel)" : "⬜ Mac 存档目录：点「选择 Mac Nemessix 存档目录…」"
-    let secret = context.hasRecoverySecretFile ? "✅ 恢复密钥文件：已配置文件" : "⬜ 恢复密钥文件：点「选择恢复密钥文件…」"
+    let secret = context.hasRecoverySecretFile ? "✅ 恢复密钥文件：已配置文件" : "⬜ 恢复密钥文件：点「生成恢复密钥文件」或「选择恢复密钥文件…」"
     return """
     当前配置进度：
     \(server)
@@ -361,7 +396,7 @@ func quickGuideText(_ context: MacSyncContext) -> String {
     第一次使用：
     1. 点「设置服务器地址…」，Mac 和 Android 填同一个地址。
     2. 点「选择 Mac Nemessix 存档目录…」。
-    3. 点「选择恢复密钥文件…」，文件必须放在 ~/Documents/Secrets；配置只保存路径，不保存密钥内容。
+    3. 点「生成恢复密钥文件」自动创建可用密钥，或点「选择恢复密钥文件…」选择已有文件；文件必须放在 ~/Documents/Secrets，配置只保存路径，不保存密钥内容。
     4. 启动 MH3G 前点「启动前检查」。退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步让菜单栏检测 Nemessix 退出后上传。
 
     手动同步：点「立即上传 Mac 存档到服务器」。
@@ -386,6 +421,7 @@ func menuPreviewText(_ context: MacSyncContext) -> String {
 
     常用动作：
     - 打开同步向导（告诉我下一步）
+    - 生成恢复密钥文件
     - 启动前检查
     - 立即上传 Mac 存档到服务器
     - 我已退出 MH3G：立即对账上传
@@ -503,8 +539,25 @@ struct CommandFailure: Error, CustomStringConvertible {
     let stderr: String
 
     var description: String {
-        "命令执行失败（exit=\(status)）：\(command.joined(separator: " "))\n\(stderr)"
+        "命令执行失败（exit=\(status)）：\(redactedCommand(command).joined(separator: " "))\n\(stderr)"
     }
+}
+
+func redactedCommand(_ command: [String]) -> [String] {
+    var result: [String] = []
+    var redactNext = false
+    for part in command {
+        if redactNext {
+            result.append("<redacted>")
+            redactNext = false
+            continue
+        }
+        result.append(part)
+        if part == "--secret-hex" {
+            redactNext = true
+        }
+    }
+    return result
 }
 
 func optionValue(_ name: String, in args: [String]) -> String? {
@@ -757,6 +810,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "打开同步向导（告诉我下一步）", action: #selector(showQuickGuide), keyEquivalent: "g"))
         menu.addItem(NSMenuItem(title: "设置服务器地址…", action: #selector(promptServerURL), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "选择 Mac Nemessix 存档目录…", action: #selector(promptSaveRoot), keyEquivalent: "r"))
+        menu.addItem(NSMenuItem(title: "生成恢复密钥文件", action: #selector(generateRecoverySecretFromMenu), keyEquivalent: "n"))
         menu.addItem(NSMenuItem(title: "选择恢复密钥文件…", action: #selector(promptRecoverySecretFile), keyEquivalent: "k"))
         menu.addItem(NSMenuItem(title: "自动同步：退出 Nemessix 后上传", action: #selector(toggleAutoUploadOnExit), keyEquivalent: "a"))
         menu.addItem(NSMenuItem.separator())
@@ -908,10 +962,30 @@ final class MenuController: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func generateRecoverySecretFromMenu() {
+        do {
+            let path = try generateRecoverySecretFile(overwrite: false)
+            refreshContext()
+            showAlert(
+                title: "恢复密钥文件已生成",
+                message: """
+                文件：\(path)
+                已生成 64 位 hex 恢复密钥并设置文件权限 0600。配置文件只保存路径，不保存密钥内容。
+
+                如果这个文件已存在，本次不会覆盖，避免导致已注册设备身份变化。
+
+                \(onboardingChecklistText(context))
+                """
+            )
+        } catch {
+            showAlert(title: "生成恢复密钥失败", message: "\(error)")
+        }
+    }
+
     @objc private func promptRecoverySecretFile() {
         let panel = NSOpenPanel()
         panel.title = "选择恢复密钥文件"
-        panel.message = "请选择 ~/Documents/Secrets 下的 64 位 hex 恢复密钥文件。配置只保存路径，不保存密钥内容。"
+        panel.message = "请选择 ~/Documents/Secrets 下的 64 位 hex 恢复密钥文件。若没有可用文件，请用菜单里的「生成恢复密钥文件」。"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -1052,6 +1126,8 @@ do {
         try saveRootPath(try requireOption("--set-save-root", in: args))
     } else if args.contains("--set-recovery-secret-file") {
         try saveRecoverySecretFile(try requireOption("--set-recovery-secret-file", in: args))
+    } else if args.contains("--generate-recovery-secret-file") {
+        try createRecoverySecretFile(overwrite: args.contains("--overwrite-recovery-secret-file"))
     } else if args.contains("--auto-upload-on-exit") {
         try saveAutoUploadOnExit(try requireOption("--auto-upload-on-exit", in: args))
     } else if args.contains("--app") || launchedFromAppBundle {
@@ -1079,7 +1155,7 @@ do {
     } else if args.contains("--configured-restore") {
         print(try configuredServerRestore(context: context), terminator: "")
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档 · 就绪/设服务器/选目录/选密钥」。菜单顶部会显示「同步路线」和「下一步」，配置后也会继续提示还缺什么；菜单内可点：打开同步向导（告诉我下一步）、设置服务器地址…、选择 Mac Nemessix 存档目录…、选择恢复密钥文件…、启动前检查、立即上传 Mac 存档到服务器、我已退出 MH3G：立即对账上传、查看云端状态、云端覆盖本地（先备份，需停止 Nemessix）、自动同步：退出 Nemessix 后上传，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
+        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--generate-recovery-secret-file] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档 · 就绪/设服务器/选目录/选密钥」。菜单顶部会显示「同步路线」和「下一步」，配置后也会继续提示还缺什么；菜单内可点：打开同步向导（告诉我下一步）、设置服务器地址…、选择 Mac Nemessix 存档目录…、生成恢复密钥文件、选择恢复密钥文件…、启动前检查、立即上传 Mac 存档到服务器、我已退出 MH3G：立即对账上传、查看云端状态、云端覆盖本地（先备份，需停止 Nemessix）、自动同步：退出 Nemessix 后上传，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
     } else {
         printStatus(context)
     }

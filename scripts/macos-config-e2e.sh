@@ -49,6 +49,19 @@ grep -q "已保存服务器地址：$server_url" "$tmp/set.txt"
 
 
 mkdir -p "$HOME/Documents/Secrets" "$tmp/save-root/slot1"
+swift run --package-path apps/macos MHSaveSyncMac --generate-recovery-secret-file \
+  > "$tmp/generate-secret-file.txt"
+grep -q "已生成并配置恢复密钥文件" "$tmp/generate-secret-file.txt"
+python3 - "$HOME/Documents/Secrets/mh-save-sync-recovery.hex" <<'PY_SECRET'
+import os
+import re
+import stat
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read().strip()
+assert re.fullmatch(r"[0-9a-f]{64}", text), text
+assert stat.S_IMODE(os.stat(path).st_mode) == 0o600, oct(stat.S_IMODE(os.stat(path).st_mode))
+PY_SECRET
 printf "6666666666666666666666666666666666666666666666666666666666666666" > "$HOME/Documents/Secrets/mh-save-sync-test-secret.hex"
 
 swift run --package-path apps/macos MHSaveSyncMac --set-save-root "$tmp/save-root" \
@@ -73,6 +86,7 @@ swift run --package-path apps/macos MHSaveSyncMac --menu-preview > "$tmp/menu-pr
 grep -q "菜单栏预览：MH 云存档 · 就绪" "$tmp/menu-preview.txt"
 grep -q "同步路线：MH3G / macOS Nemessix → 本机安全缓存 → $server_url" "$tmp/menu-preview.txt"
 grep -q "打开同步向导（告诉我下一步）" "$tmp/menu-preview.txt"
+grep -q "生成恢复密钥文件" "$tmp/menu-preview.txt"
 grep -q "立即上传 Mac 存档到服务器" "$tmp/menu-preview.txt"
 grep -q "自动同步：已关闭：只手动同步" "$tmp/menu-preview.txt"
 
@@ -86,6 +100,19 @@ swift run --package-path apps/macos MHSaveSyncMac --continue-local \
   > "$tmp/continue-local.txt"
 grep -q "已选择继续使用本地存档" "$tmp/continue-local.txt"
 grep -q "不会从云端覆盖本地" "$tmp/continue-local.txt"
+
+swift run --package-path apps/macos MHSaveSyncMac --set-server-url http://127.0.0.1:1 >/dev/null
+if swift run --package-path apps/macos MHSaveSyncMac --configured-upload \
+  > "$tmp/redacted-upload.out" 2> "$tmp/redacted-upload.err"; then
+  echo "configured upload unexpectedly succeeded against closed port" >&2
+  exit 1
+fi
+grep -q -- "--secret-hex <redacted>" "$tmp/redacted-upload.err"
+if grep -q "6666666666666666666666666666666666666666666666666666666666666666" "$tmp/redacted-upload.err"; then
+  echo "configured upload error leaked recovery secret" >&2
+  exit 1
+fi
+swift run --package-path apps/macos MHSaveSyncMac --set-server-url "$server_url" >/dev/null
 
 config_file="$HOME/Library/Application Support/MH Save Sync/config.json"
 test -f "$config_file"

@@ -380,6 +380,25 @@ struct BeginSnapshotRequest<'a> {
     chunk_ids: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct AccountBootstrapRequest {
+    account_handle: String,
+    root_public_key_b64: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DeviceRegisterRequest {
+    account_handle: String,
+    cert_id: String,
+    device_public_key_b64: String,
+    certificate_b64: String,
+}
+
+struct ClientDeviceIdentity {
+    account_handle: String,
+    device_cert_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct BeginSnapshotResponse {
     upload_id: String,
@@ -454,6 +473,17 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
     options.created_unix_ms = unix_millis();
     let snapshot = create_snapshot_from_stable_folder(&input.root, &descriptor, &secret, options)?;
     let client = reqwest::Client::new();
+    let default_identity =
+        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
+            .await?;
+    let request_account_handle = input
+        .account_handle
+        .clone()
+        .unwrap_or_else(|| default_identity.account_handle.clone());
+    let request_device_cert_id = input
+        .device_cert_id
+        .clone()
+        .unwrap_or_else(|| default_identity.device_cert_id.clone());
     let cloud_head_before = get_head(&client, &server_url, &logical_save_id).await?;
     let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest)?;
     let manifest_id = sha256_hex(&manifest_bytes);
@@ -463,8 +493,8 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         &client,
         &format!("{server_url}/v1/snapshots/begin"),
         &BeginSnapshotRequest {
-            account_handle: input.account_handle.as_deref(),
-            device_cert_id: input.device_cert_id.as_deref(),
+            account_handle: Some(&request_account_handle),
+            device_cert_id: Some(&request_device_cert_id),
             logical_save_id: &logical_save_id,
             base_head,
             parents,
@@ -527,6 +557,74 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         total_bytes: snapshot.fingerprint.total_bytes,
         message_zh,
     })
+}
+
+async fn ensure_account_device_registered(
+    client: &reqwest::Client,
+    server_url: &str,
+    keys: &save_crypto::AccountKeys,
+    computed_account_handle: &str,
+) -> anyhow::Result<ClientDeviceIdentity> {
+    let root = account_root_signing_key(keys);
+    let device = deterministic_cli_device_key(keys);
+    let cert_id = deterministic_cli_device_cert_id(&device);
+    let cert_id_hex = hex::encode(cert_id);
+    let issued_at = unix_seconds().saturating_sub(60);
+    let certificate = issue_device_certificate_with_id(
+        &root,
+        &device.verifying_key(),
+        cert_id,
+        issued_at,
+        4_102_444_800,
+        1,
+    )?;
+
+    post_no_content(
+        client,
+        &format!("{server_url}/v1/accounts/bootstrap"),
+        &AccountBootstrapRequest {
+            account_handle: computed_account_handle.to_owned(),
+            root_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(root.verifying_key().to_bytes()),
+        },
+    )
+    .await?;
+    post_no_content(
+        client,
+        &format!("{server_url}/v1/devices/register"),
+        &DeviceRegisterRequest {
+            account_handle: computed_account_handle.to_owned(),
+            cert_id: cert_id_hex.clone(),
+            device_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(device.verifying_key().to_bytes()),
+            certificate_b64: base64::engine::general_purpose::STANDARD
+                .encode(deterministic_cbor(&certificate)?),
+        },
+    )
+    .await?;
+
+    Ok(ClientDeviceIdentity {
+        account_handle: computed_account_handle.to_owned(),
+        device_cert_id: cert_id_hex,
+    })
+}
+
+fn deterministic_cli_device_key(keys: &save_crypto::AccountKeys) -> SigningKey {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"mh-save-sync/cli-device-signing-seed/v1");
+    hasher.update(keys.auth);
+    let seed: [u8; 32] = hasher.finalize().into();
+    SigningKey::from_bytes(&seed)
+}
+
+fn deterministic_cli_device_cert_id(device: &SigningKey) -> [u8; 16] {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"mh-save-sync/cli-device-cert-id/v1");
+    hasher.update(device.verifying_key().to_bytes());
+    let digest = hasher.finalize();
+    let mut cert_id = [0u8; 16];
+    cert_id.copy_from_slice(&digest[..16]);
+    cert_id
 }
 
 async fn server_status(
@@ -776,4 +874,11 @@ fn unix_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
