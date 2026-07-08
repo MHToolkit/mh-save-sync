@@ -290,6 +290,24 @@ Follow-up deployment gate on 2026-07-08:
   `rust=SUCCESS`, `android=SUCCESS`; `dependency-review`, `macos-smoke` and
   `compose-e2e` were skipped by workflow conditions for this PR run.
 
+Same-content repeat-upload guard added after the remote 409 fix:
+
+- RCA: once the 409 was fixed, repeated clicks on `立即上传` could still create
+  extra conflict branches because snapshot IDs include random encryption nonces.
+  That was technically safe but poor UX and polluted history.
+- Fix: before uploading, the CLI now downloads the current cloud HEAD manifest,
+  decrypts it locally, recomputes the same plaintext tree fingerprint used for
+  the local staging copy, and returns `outcome=up-to-date` when the cloud HEAD and
+  local files are identical. The server still cannot read paths or plaintext.
+- Real macOS evidence against `http://8.130.112.207:39082`: two consecutive
+  configured uploads returned `up-to-date`, `missing_chunks_uploaded=0`,
+  `manifest_uploaded=false`, `conflict_snapshot=null`; status stayed
+  `history_count=3`, `conflict_count=2`, proving no new conflict branch was
+  created for identical local bytes.
+- Automated regression: `crates/save-cli/tests/server_sync_cli.rs` now asserts a
+  repeated same-content upload returns `up-to-date`, keeps the same cloud HEAD,
+  uploads no chunks/manifest and shows Chinese copy containing `没有重复上传`.
+
 Known deployment boundary:
 
 - Direct public `http://8.130.112.207:18082/ready` currently times out from the

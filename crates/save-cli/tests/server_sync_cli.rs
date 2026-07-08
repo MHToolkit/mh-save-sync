@@ -85,6 +85,39 @@ async fn cli_uploads_snapshot_to_server_and_prints_visible_sync_target() {
         "Chinese UX must explain where sync went: {first_json}",
     );
 
+    let repeated_same_content = run_mh_save(&[
+        "server-upload".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--root".into(),
+        source.to_string_lossy().into_owned(),
+        "--secret-hex".into(),
+        "3333333333333333333333333333333333333333333333333333333333333333".into(),
+        "--device-id".into(),
+        "office-mac".into(),
+    ])
+    .await;
+    assert!(
+        repeated_same_content.status.success(),
+        "same-content upload should be a no-op, not a conflict: status={:?}\nstdout={}\nstderr={}",
+        repeated_same_content.status.code(),
+        String::from_utf8_lossy(&repeated_same_content.stdout),
+        String::from_utf8_lossy(&repeated_same_content.stderr),
+    );
+    let repeated_json: Value = serde_json::from_slice(&repeated_same_content.stdout).unwrap();
+    assert_eq!(repeated_json["outcome"], "up-to-date");
+    assert_eq!(repeated_json["cloud_head"], first_json["cloud_head"]);
+    assert_eq!(repeated_json["conflict_snapshot"], Value::Null);
+    assert_eq!(repeated_json["missing_chunks_uploaded"], 0);
+    assert_eq!(repeated_json["manifest_uploaded"], false);
+    assert!(
+        repeated_json["message_zh"]
+            .as_str()
+            .unwrap()
+            .contains("没有重复上传"),
+        "same-content no-op must be visible in Chinese: {repeated_json}",
+    );
+
     fs::write(source.join("slot1/main.bin"), b"server-visible-save-v2").unwrap();
     let second = run_mh_save(&[
         "server-upload".into(),

@@ -6,7 +6,8 @@ use save_crypto::{
     deterministic_cbor, issue_device_certificate_with_id, recovery_phrase_from_secret,
 };
 use save_domain::{
-    DeviceId, FileKind, GameKey, LogicalSaveId, SnapshotId, TreeFingerprint, stable_logical_save_id,
+    DeviceId, FileKind, GameKey, LogicalSaveId, SnapshotId, SnapshotManifest, TreeFingerprint,
+    stable_logical_save_id,
 };
 use save_engine::{
     EmulatorState, EncryptedSnapshot, EngineError, SnapshotOptions,
@@ -485,6 +486,34 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         .clone()
         .unwrap_or_else(|| default_identity.device_cert_id.clone());
     let cloud_head_before = get_head(&client, &server_url, &logical_save_id).await?;
+    if let Some(current_head) = &cloud_head_before
+        && let Some(remote_fingerprint) =
+            remote_snapshot_fingerprint(&client, &server_url, &secret, current_head).await?
+        && remote_fingerprint == snapshot.fingerprint
+    {
+        let message_zh = format!(
+            "云端已经是同一份稳定存档：服务器 {} 的逻辑存档 {} 当前 HEAD {} 与本地文件指纹一致；没有重复上传，也没有新增冲突分支。",
+            server_url, logical_save_id, current_head
+        );
+        return Ok(ServerUploadReport {
+            server_url: server_url.clone(),
+            sync_target: format!("{server_url}/v1/heads/{logical_save_id}"),
+            account_handle: computed_account_handle,
+            logical_save_id,
+            device_id: input.device_id,
+            snapshot_id: current_head.clone(),
+            cloud_head_before: Some(current_head.clone()),
+            cloud_head: current_head.clone(),
+            conflict_snapshot: None,
+            outcome: "up-to-date".into(),
+            missing_chunks_uploaded: 0,
+            chunk_count: snapshot.chunks.len(),
+            manifest_uploaded: false,
+            file_count: snapshot.fingerprint.file_count,
+            total_bytes: snapshot.fingerprint.total_bytes,
+            message_zh,
+        });
+    }
     let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest)?;
     let manifest_id = sha256_hex(&manifest_bytes);
     let mut chunk_ids = snapshot.chunks.keys().cloned().collect::<Vec<_>>();
@@ -682,6 +711,60 @@ async fn server_status(
         history_count: history.len(),
         conflict_count: conflicts.len(),
         message_zh,
+    })
+}
+
+async fn remote_snapshot_fingerprint(
+    client: &reqwest::Client,
+    server_url: &str,
+    secret: &[u8; 32],
+    snapshot_id: &SnapshotId,
+) -> anyhow::Result<Option<TreeFingerprint>> {
+    let url = format!(
+        "{server_url}/v1/snapshots/{}/encrypted-bundle",
+        snapshot_id.0
+    );
+    let resp = client.get(&url).send().await?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let bundle: SnapshotDownloadResponse = ensure_success(resp).await?.json().await?;
+    let encrypted_manifest = decode_downloaded_blob(&bundle.encrypted_manifest)?;
+    let snapshot = EncryptedSnapshot {
+        snapshot_id: bundle.snapshot_id,
+        encrypted_manifest,
+        chunks: BTreeMap::new(),
+        fingerprint: TreeFingerprint {
+            file_count: 0,
+            total_bytes: 0,
+            sha256: "remote-before-decrypt".into(),
+        },
+    };
+    let manifest = decrypt_manifest(secret, &snapshot)?;
+    Ok(Some(fingerprint_manifest_entries(&manifest)?))
+}
+
+fn fingerprint_manifest_entries(manifest: &SnapshotManifest) -> anyhow::Result<TreeFingerprint> {
+    let mut files = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind != FileKind::Tombstone)
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut h = sha2::Sha256::new();
+    let mut total = 0u64;
+    for entry in &files {
+        total += entry.size;
+        h.update(entry.path.as_bytes());
+        h.update([0]);
+        h.update(entry.size.to_be_bytes());
+        h.update([0]);
+        h.update(hex::decode(&entry.plaintext_sha256)?);
+    }
+    Ok(TreeFingerprint {
+        file_count: files.len() as u64,
+        total_bytes: total,
+        sha256: hex::encode(h.finalize()),
     })
 }
 
@@ -887,6 +970,24 @@ fn unix_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_fingerprint_matches_tree_fingerprint_for_same_plaintext() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("slot1")).unwrap();
+        std::fs::write(tmp.path().join("slot1/main.bin"), b"same-save").unwrap();
+        let descriptor = save_adapters::generic_folder_macos();
+        let tree = save_engine::fingerprint_tree(tmp.path(), &descriptor.exclude_globs).unwrap();
+        let mut options =
+            SnapshotOptions::fixture(GameKey::new("generic", "fixture", "none", "slot1"));
+        options.created_unix_ms = 1;
+        let snapshot =
+            create_snapshot_from_stable_folder(tmp.path(), &descriptor, &[0x33; 32], options)
+                .unwrap();
+        let manifest = decrypt_manifest(&[0x33; 32], &snapshot).unwrap();
+        let manifest_fingerprint = fingerprint_manifest_entries(&manifest).unwrap();
+        assert_eq!(tree, manifest_fingerprint);
+    }
 
     #[test]
     fn deterministic_cli_certificate_is_idempotent_for_repeated_registration() {
