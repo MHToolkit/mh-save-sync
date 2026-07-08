@@ -22,6 +22,12 @@ FORBIDDEN = [
     "SAF",
     "staging",
     "manifest/hash",
+    "hash",
+    "parent",
+    "DAG",
+    "fast-forward",
+    "conflict",
+    "device",
     "/ready",
     "查看冲突处理示例",
     "今天 21:18",
@@ -31,11 +37,13 @@ FORBIDDEN = [
     "同步会话",
 ]
 
-STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"', re.S)
+STRING_LITERAL_RE = re.compile(r'"""(?:.|\n)*?"""|"(?:\\.|[^"\\])*"', re.S)
 HAS_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 def decode_literal(raw: str) -> str:
+    if raw.startswith('"""') and raw.endswith('"""'):
+        return raw[3:-3]
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -52,8 +60,9 @@ for path in FILES:
         value = decode_literal(match.group(0))
         if not HAS_CJK_RE.search(value):
             continue
+        searchable = value.replace("--conflict-demo", "")
         for term in FORBIDDEN:
-            if term in value:
+            if term in searchable:
                 line_no = 1 + sum(start <= match.start() for start in line_starts)
                 violations.append((str(path.relative_to(ROOT)), line_no, term, value))
 

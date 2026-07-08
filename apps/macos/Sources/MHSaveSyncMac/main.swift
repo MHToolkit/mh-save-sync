@@ -200,7 +200,7 @@ func prelaunchCheckText(_ context: MacSyncContext) -> String {
     report += """
 
     - 若云端较新：先下载到本机安全缓存，展示版本信息，用户确认后才恢复。
-    - 若本地/云端冲突：列出 device、时间、parent、大小/hash；用户选择「本地替换云端」或「云端覆盖本地」。
+    - 若本地/云端冲突：列出设备、时间、上一版、大小和校验摘要；用户选择「本地替换云端」或「云端覆盖本地」。
     - 若云端不可用：明确提示，可继续本地游玩，退出后排队补传。
     - 恢复前置：Nemessix 必须停止，且先快照当前本地状态。
     """
@@ -214,12 +214,12 @@ func printPrelaunchCheck(_ context: MacSyncContext) {
 func printConflictDemo() {
     print("""
     冲突示例（不会静默 last-write-wins）
-    本地：Mac Nemessix · 时间=本机快照时间 · 上一版=snap-a · 53 KB · hash=63ae25d28d41
-    云端：Android Nemessix · 时间=云端快照时间 · 上一版=snap-a · 47 KB · hash=dd93905a1a8e
+    本地：Mac Nemessix · 时间=本机快照时间 · 上一版=snap-a · 53 KB · 校验摘要=63ae25d28d41
+    云端：Android Nemessix · 时间=云端快照时间 · 上一版=snap-a · 47 KB · 校验摘要=dd93905a1a8e
     可选动作：
     1. 本地替换云端：上传 Mac 当前快照为新的云端版本，云端旧版本保留为冲突分支。
     2. 云端覆盖本地：先下载到缓存，确认 Nemessix 已停止，备份当前本地，再 atomic replace。
-    3. 暂不处理：继续本地游玩，但状态保持 conflict，不会自动覆盖任何一边。
+    3. 暂不处理：继续本地游玩，但状态保持冲突待处理，不会自动覆盖任何一边。
     """)
 }
 
@@ -228,7 +228,7 @@ func printCloudUnavailable() {
     云端不可用策略
     - 本地原始存档永远不因远端故障被破坏。
     - 可以继续使用本地存档；后台保留待上传队列。
-    - 恢复网络后执行退出对账/手动同步，按 DAG parent 判断 fast-forward 或 conflict。
+    - 恢复网络后执行退出对账/手动同步，按版本父子关系判断可直接推进或需要用户处理冲突。
     """)
 }
 
@@ -237,7 +237,7 @@ func printContinueLocal() {
     已选择继续使用本地存档
     - 当前不会从云端覆盖本地，也不会把未验证中间态上传。
     - 如果需要打开 Nemessix，请先确认你接受本次离线/本地分支；退出后再执行对账补传。
-    - 后续如果云端也发生修改，会进入 conflict branch，不会按最新时间静默覆盖。
+    - 后续如果云端也发生修改，会进入冲突分支，不会按最新时间静默覆盖。
     """)
 }
 
