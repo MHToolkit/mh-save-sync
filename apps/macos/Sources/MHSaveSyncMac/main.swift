@@ -140,7 +140,7 @@ func printStatus(_ context: MacSyncContext) {
     当前同步对象：\(context.profile)
     模拟器：\(context.emulator)
     存档目录提示：\(context.saveRootHint)
-    自动化边界：FSEvents 只标记 dirty；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
+    自动化边界：文件变化只提醒工具复查；退出/稳定窗口后才快照上传；运行中禁止云端覆盖本地。
     本机 App：运行 ./scripts/install-macos-app.sh 后打开 /Applications/MH Save Sync.app；菜单里可直接设置服务器地址。
     常用命令：--set-server-url <url> / --prelaunch-check / --server-upload / --server-status / --server-restore / --app
     """)
@@ -184,7 +184,7 @@ func prelaunchCheckText(_ context: MacSyncContext) -> String {
         let snapshot = trimSnapshotBody(head.body)
         report += """
 
-        - 云端已有 MH3G 版本：\(snapshot.isEmpty ? "unknown" : snapshot)。不会自动打开 Nemessix；请先选择恢复云端、本地继续或保留冲突分支。
+        - 云端已有 MH3G 版本：\(snapshot.isEmpty ? "版本信息暂不可读" : snapshot)。不会自动打开 Nemessix；请先选择恢复云端、本地继续或保留冲突分支。
         """
     } else if head.statusCode == 404 {
         report += """
@@ -218,7 +218,7 @@ func printConflictDemo() {
     云端：Android Nemessix · 时间=云端快照时间 · 上一版=snap-a · 47 KB · 校验摘要=dd93905a1a8e
     可选动作：
     1. 本地替换云端：上传 Mac 当前快照为新的云端版本，云端旧版本保留为冲突分支。
-    2. 云端覆盖本地：先下载到缓存，确认 Nemessix 已停止，备份当前本地，再 atomic replace。
+    2. 云端覆盖本地：先下载到缓存，确认 Nemessix 已停止，备份当前本地，再安全替换。
     3. 暂不处理：继续本地游玩，但状态保持冲突待处理，不会自动覆盖任何一边。
     """)
 }

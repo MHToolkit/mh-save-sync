@@ -56,7 +56,7 @@ object SyncMessages {
             "download-cache-only" -> "已处理只下载：云端版本只进入本机安全缓存，不会覆盖正在运行的 Nemessix 存档目录。"
             "restore-cloud-head" -> "已处理恢复云端版本：目标=$target，服务器=$server。恢复只会在确认 Nemessix 已停止后执行，且会先备份当前本地存档，再从本机安全缓存恢复到原目录。"
             "restore-blocked-running" -> "已拒绝恢复：Nemessix 仍在运行，没有覆盖本地存档。请先退出游戏/模拟器，再执行云端覆盖本地。"
-            "periodic" -> "已执行 15 分钟级兜底对账：无变化不会全量读取；发现 dirty 也必须等稳定快照后再上传。"
+            "periodic" -> "已执行 15 分钟级兜底对账：无变化不会全量读取；发现变化也必须等稳定快照后再上传。"
             else -> "已执行对账：原因=$reason；同步目标=$target；不会静默覆盖本地或云端。"
         }
     }

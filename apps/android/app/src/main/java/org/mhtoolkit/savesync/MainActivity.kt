@@ -474,7 +474,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Text(
-                    "底线：文件变化只标记 dirty；watcher 不直接上传。恢复只在模拟器停止后执行，且恢复前一定先快照当前状态。",
+                    "底线：文件变化只会提醒工具复查，不会立刻上传。恢复只在模拟器停止后执行，且恢复前一定先备份当前状态。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
