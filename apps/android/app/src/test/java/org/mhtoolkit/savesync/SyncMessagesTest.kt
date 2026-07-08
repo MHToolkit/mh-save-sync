@@ -216,6 +216,32 @@ class SyncMessagesTest {
     }
 
     @Test
+    fun noServerStatusCopyExplainsSharedServerBeforeActions() {
+        val summary = SyncMessages.cloudActionNeedsServer()
+        val phase = SyncMessages.noServerPhase()
+        val next = SyncMessages.noServerNextAction("同步到服务器")
+        val error = SyncMessages.noServerError()
+
+        assertTrue(summary.contains("Mac 和 Android 必须填写同一个服务器地址"))
+        assertTrue(phase.contains("服务器地址"))
+        assertTrue(next.contains("Mac 和 Android 共用的服务器地址"))
+        assertTrue(next.contains("同步到服务器"))
+        assertTrue(error.contains("未配置服务器"))
+    }
+
+    @Test
+    fun continueLocalStatusCopyExplainsLaterReconciliation() {
+        val summary = SyncMessages.continueLocalLaunchQueued()
+        val phase = SyncMessages.continueLocalPhase()
+        val next = SyncMessages.continueLocalNextAction()
+
+        assertTrue(summary.contains("继续使用本地存档"))
+        assertTrue(phase.contains("继续使用本地"))
+        assertTrue(next.contains("退出 MH3G 后"))
+        assertTrue(next.contains("不会被静默覆盖"))
+    }
+
+    @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID

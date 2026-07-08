@@ -46,6 +46,15 @@ object SyncMessages {
     fun cloudActionNeedsServer(): String =
         "云端同步未开始：还没有填写服务器地址。Mac 和 Android 必须填写同一个服务器地址后，上传、下载、恢复才会执行；当前没有同步到任何服务器。"
 
+    fun noServerPhase(): String =
+        "需要服务器地址"
+
+    fun noServerNextAction(actionLabel: String): String =
+        "请先填写 Mac 和 Android 共用的服务器地址，再执行$actionLabel。"
+
+    fun noServerError(): String =
+        "未配置服务器"
+
     fun launchNemessixStarted(): String =
         "已完成启动前检查并尝试打开 Nemessix。若云端较新或存在冲突，请先回到本工具处理；云端不可用时可继续使用本地存档，退出后再补传。"
 
@@ -145,6 +154,12 @@ object SyncMessages {
 
     fun continueLocalLaunchQueued(): String =
         "已选择继续使用本地存档。当前不会从云端覆盖本地，也不会把未验证中间态上传；退出 MH3G 后再对账补传。"
+
+    fun continueLocalPhase(): String =
+        "继续使用本地存档"
+
+    fun continueLocalNextAction(): String =
+        "可以先玩；退出 MH3G 后再做对账补传，云端旧版本不会被静默覆盖。"
 
     fun restoreCloudHeadQueued(serverEndpoint: String): String =
         "已排队：云端覆盖本地。服务器=${serverLabel(serverEndpoint)}；执行前必须确认 Nemessix 已停止，并先备份当前本地存档。"

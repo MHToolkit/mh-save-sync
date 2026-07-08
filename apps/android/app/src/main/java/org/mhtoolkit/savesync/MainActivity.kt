@@ -142,6 +142,36 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        fun persistSyncStatus(
+            reason: String,
+            summary: String,
+            phase: String,
+            action: String,
+            error: String = "",
+        ) {
+            lastSummary = summary
+            syncPhase = phase
+            nextAction = action
+            syncError = error
+            preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
+                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
+                .apply()
+        }
+
+        fun persistNoServerStatus(reason: String, actionLabel: String) {
+            persistSyncStatus(
+                reason = reason,
+                summary = SyncMessages.cloudActionNeedsServer(),
+                phase = SyncMessages.noServerPhase(),
+                action = SyncMessages.noServerNextAction(actionLabel),
+                error = SyncMessages.noServerError(),
+            )
+        }
+
         if (conflictVisible) {
             ConflictDialog(
                 onDismiss = { conflictVisible = false },
@@ -324,15 +354,14 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(
                             enabled = authorized && gameEnabled && serverEndpoint.isNotBlank(),
                             onClick = {
-                                SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
-                                lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
-                                syncPhase = SyncMessages.queuedPhase("download-cache-only")
-                                nextAction = SyncMessages.queuedNextAction("download-cache-only", sessionActive)
-                                syncError = ""
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, "download-cache-only")
-                                    .apply()
+                                val reason = "download-cache-only"
+                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.downloadCacheQueued(serverEndpoint),
+                                    phase = SyncMessages.queuedPhase(reason),
+                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
+                                )
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -382,15 +411,19 @@ class MainActivity : ComponentActivity() {
                     OutlinedButton(
                         enabled = authorized && gameEnabled && canContinueLocalAfterGate,
                         onClick = {
-                            lastSummary = SyncMessages.continueLocalLaunchQueued()
+                            val summary = SyncMessages.continueLocalLaunchQueued()
                             val launchResult = launchNemessixOrExplain()
-                            launchGate = "$lastSummary\n$launchResult"
+                            launchGate = "$summary\n$launchResult"
                             launchGateReason = "continue-local-launch"
+                            persistSyncStatus(
+                                reason = "continue-local-launch",
+                                summary = summary,
+                                phase = SyncMessages.continueLocalPhase(),
+                                action = SyncMessages.continueLocalNextAction(),
+                            )
                             preferences.edit()
                                 .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
                                 .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
-                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "continue-local-launch")
                                 .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -404,24 +437,20 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                lastSummary = SyncMessages.cloudActionNeedsServer()
+                                persistNoServerStatus("manual-upload-no-server", "同步到服务器")
                             } else {
-                                SyncScheduler.enqueueImmediate(this@MainActivity, "manual-upload")
-                                lastSummary = SyncMessages.manualUploadQueued(
-                                    "MH3G / Android Nemessix",
-                                    serverEndpoint,
+                                val reason = "manual-upload"
+                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.manualUploadQueued(
+                                        "MH3G / Android Nemessix",
+                                        serverEndpoint,
+                                    ),
+                                    phase = SyncMessages.queuedPhase(reason),
+                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
                                 )
-                                syncPhase = SyncMessages.queuedPhase("manual-upload")
-                                nextAction = SyncMessages.queuedNextAction("manual-upload", sessionActive)
-                                syncError = ""
                             }
-                            preferences.edit()
-                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "manual-upload")
-                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -431,21 +460,17 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                lastSummary = SyncMessages.cloudActionNeedsServer()
+                                persistNoServerStatus("download-cache-no-server", "同步到本机缓存")
                             } else {
-                                SyncScheduler.enqueueImmediate(this@MainActivity, "download-cache-only")
-                                lastSummary = SyncMessages.downloadCacheQueued(serverEndpoint)
-                                syncPhase = SyncMessages.queuedPhase("download-cache-only")
-                                nextAction = SyncMessages.queuedNextAction("download-cache-only", sessionActive)
-                                syncError = ""
+                                val reason = "download-cache-only"
+                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.downloadCacheQueued(serverEndpoint),
+                                    phase = SyncMessages.queuedPhase(reason),
+                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
+                                )
                             }
-                            preferences.edit()
-                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "download-cache-only")
-                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -455,25 +480,21 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                lastSummary = SyncMessages.cloudActionNeedsServer()
+                                persistNoServerStatus("user-use-local-no-server", "本地替换云端")
                             } else {
-                                SyncScheduler.enqueueImmediate(this@MainActivity, "user-use-local")
-                                lastSummary = SyncMessages.localReplaceCloudQueued(
-                                    target = "MH3G / Android Nemessix",
-                                    serverEndpoint = serverEndpoint,
-                                    sessionActive = sessionActive,
+                                val reason = "user-use-local"
+                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.localReplaceCloudQueued(
+                                        target = "MH3G / Android Nemessix",
+                                        serverEndpoint = serverEndpoint,
+                                        sessionActive = sessionActive,
+                                    ),
+                                    phase = SyncMessages.queuedPhase(reason),
+                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
                                 )
-                                syncPhase = SyncMessages.queuedPhase("user-use-local")
-                                nextAction = SyncMessages.queuedNextAction("user-use-local", sessionActive)
-                                syncError = ""
                             }
-                            preferences.edit()
-                                .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "user-use-local")
-                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                .apply()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -487,30 +508,25 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                lastSummary = SyncMessages.cloudActionNeedsServer()
-                                syncPhase = "需要服务器地址"
-                                nextAction = "请先填写服务器地址，再执行云端覆盖本地。"
-                                syncError = "未配置服务器"
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, "restore-no-server")
-                                    .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
-                                    .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-                                    .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                                    .apply()
+                                persistNoServerStatus("restore-no-server", "云端覆盖本地")
                             } else if (sessionActive) {
-                                lastSummary = SyncMessages.restoreBlockedRunning()
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, "restore-blocked-running")
-                                    .apply()
+                                val reason = "restore-blocked-running"
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.restoreBlockedRunning(),
+                                    phase = SyncMessages.completedPhase(reason),
+                                    action = SyncMessages.completedNextAction(reason, sessionActive),
+                                    error = "Nemessix 仍在运行",
+                                )
                             } else {
-                                SyncScheduler.enqueueImmediate(this@MainActivity, "restore-cloud-head")
-                                lastSummary = SyncMessages.restoreCloudHeadQueued(serverEndpoint)
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, "restore-cloud-head")
-                                    .apply()
+                                val reason = "restore-cloud-head"
+                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+                                persistSyncStatus(
+                                    reason = reason,
+                                    summary = SyncMessages.restoreCloudHeadQueued(serverEndpoint),
+                                    phase = SyncMessages.queuedPhase(reason),
+                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
+                                )
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
