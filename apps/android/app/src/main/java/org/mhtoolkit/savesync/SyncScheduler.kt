@@ -28,20 +28,35 @@ object SyncScheduler {
 
     fun ensureDefaults(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val defaultLastSyncSummary =
+            "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。"
+        val defaultLaunchGateSummary =
+            "未检查。启动 MH3G 前点「启动前检查」。"
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
                 .putBoolean(SESSION_ACTIVE, true)
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
-                .putString(
-                    LAST_SYNC_SUMMARY,
-                    "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。",
-                )
-                .putString(
-                    LAUNCH_GATE_SUMMARY,
-                    "未检查。启动 MH3G 前点「启动前检查」。",
-                )
+                .putString(LAST_SYNC_SUMMARY, defaultLastSyncSummary)
+                .putString(LAUNCH_GATE_SUMMARY, defaultLaunchGateSummary)
                 .putString(LAUNCH_GATE_REASON, "not-checked")
+                .apply()
+        }
+        val cleanLastSyncSummary = SyncMessages.sanitizeLegacyUserCopy(
+            preferences.getString(LAST_SYNC_SUMMARY, null),
+            defaultLastSyncSummary,
+        )
+        val cleanLaunchGateSummary = SyncMessages.sanitizeLegacyUserCopy(
+            preferences.getString(LAUNCH_GATE_SUMMARY, null),
+            defaultLaunchGateSummary,
+        )
+        if (
+            cleanLastSyncSummary != preferences.getString(LAST_SYNC_SUMMARY, null) ||
+            cleanLaunchGateSummary != preferences.getString(LAUNCH_GATE_SUMMARY, null)
+        ) {
+            preferences.edit()
+                .putString(LAST_SYNC_SUMMARY, cleanLastSyncSummary)
+                .putString(LAUNCH_GATE_SUMMARY, cleanLaunchGateSummary)
                 .apply()
         }
     }

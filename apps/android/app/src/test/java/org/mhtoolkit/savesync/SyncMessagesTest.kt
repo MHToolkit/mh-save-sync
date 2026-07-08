@@ -156,6 +156,30 @@ class SyncMessagesTest {
     }
 
     @Test
+    fun legacyPersistedCopyIsSanitizedBeforeDisplay() {
+        val fallback = "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。"
+
+        assertTrue(
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "同步未执行：还没有授权 Android Nemessix 存档目录。请选择 SAF 目录后再试。",
+                fallback = fallback,
+            ) == fallback,
+        )
+        assertTrue(
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "已开启同步会话，请稍后查看。",
+                fallback = fallback,
+            ) == fallback,
+        )
+        assertTrue(
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "同步到服务器：MH3G / Android Nemessix → 本机安全缓存 → http://127.0.0.1:18080",
+                fallback = fallback,
+            ).contains("本机安全缓存"),
+        )
+    }
+
+    @Test
     fun prelaunchProbeUsesStableMh3gLogicalSaveIdAndNormalizesServer() {
         assertTrue(
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID

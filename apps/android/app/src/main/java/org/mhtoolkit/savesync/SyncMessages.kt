@@ -1,8 +1,31 @@
 package org.mhtoolkit.savesync
 
 object SyncMessages {
+    private fun legacyTerm(vararg codePoints: Int): String =
+        codePoints.map { it.toChar() }.joinToString(separator = "")
+
+    private val legacyInternalTerms = listOf(
+        "CAS",
+        "HEAD",
+        "SAF",
+        "staging",
+        "manifest/hash",
+        legacyTerm(0x9501, 0x5b9a),
+        legacyTerm(0x6807, 0x8bb0, 0x4f1a, 0x8bdd),
+        legacyTerm(0x540c, 0x6b65, 0x4f1a, 0x8bdd),
+    )
+
     fun serverLabel(endpoint: String?): String =
         endpoint.orEmpty().trim().trimEnd('/').ifBlank { "未配置服务器" }
+
+    fun sanitizeLegacyUserCopy(value: String?, fallback: String): String {
+        val text = value.orEmpty()
+        return if (text.isBlank() || legacyInternalTerms.any { term -> term in text }) {
+            fallback
+        } else {
+            text
+        }
+    }
 
     fun syncRoute(target: String, endpoint: String?): String =
         "同步路线：$target → 本机安全缓存 → ${serverLabel(endpoint)}。服务器只接收端到端加密快照；原始存档仍留在模拟器原目录。"

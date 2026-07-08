@@ -687,6 +687,13 @@ Additional runtime boundary check on 2026-07-08:
   `nemessix`, `azahar`, `citra`, `ppsspp`, `dolphin`, `nethersx2` or `pcsx2`
   package and no corresponding shared-storage root, so it can only support the
   Generic Folder evidence above.
+- The same AVD was used for an Android UI smoke after installing the current
+  debug APK. `uiautomator` verified the visible Chinese sync-action surface
+  includes `同步动作`, `本地替换云端（保留云端旧版本）` and
+  `云端覆盖本地（先备份，需停止 Nemessix）`. A follow-up install over an
+  existing app state verified persisted legacy user-copy cleanup:
+  `{"android_legacy_copy_sanitized":true}`. This is UI/wording evidence only,
+  not emulator Runtime Verified save evidence.
 - macOS `/Applications/Nemessix.app` exists and real 3DS-family save roots were
   observed, but Nemessix was running during this pass. No restore or upload was
   attempted from that live directory because phase1 policy forbids live
