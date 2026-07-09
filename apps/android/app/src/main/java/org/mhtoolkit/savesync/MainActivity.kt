@@ -32,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -132,6 +133,60 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val serverEndpointFocusRequester = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
+
+        fun refreshDashboardStateFromPreferences() {
+            authorized = preferences.contains(SyncScheduler.SAF_ROOT)
+            wifiOnly = preferences.getBoolean(SyncScheduler.WIFI_ONLY, true)
+            sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
+            gameEnabled = preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)
+            serverEndpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
+            lastSummary = preferences.getString(
+                SyncScheduler.LAST_SYNC_SUMMARY,
+                "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。",
+            ).orEmpty()
+            syncPhase = preferences.getString(SyncScheduler.LAST_SYNC_PHASE, "暂无后台任务").orEmpty()
+            nextAction = preferences.getString(
+                SyncScheduler.LAST_SYNC_NEXT_ACTION,
+                "先填写服务器地址并授权存档目录，然后做启动前检查。",
+            ).orEmpty()
+            syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
+            launchGate = preferences.getString(
+                SyncScheduler.LAUNCH_GATE_SUMMARY,
+                "未检查。启动 MH3G 前点「启动前检查」。",
+            ).orEmpty()
+            launchGateReason = preferences.getString(
+                SyncScheduler.LAUNCH_GATE_REASON,
+                "not-checked",
+            ).orEmpty()
+        }
+
+        DisposableEffect(preferences) {
+            val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (
+                    key in setOf(
+                        SyncScheduler.SAF_ROOT,
+                        SyncScheduler.WIFI_ONLY,
+                        SyncScheduler.SERVER_ENDPOINT,
+                        SyncScheduler.LAST_SYNC_SUMMARY,
+                        SyncScheduler.LAST_SYNC_PHASE,
+                        SyncScheduler.LAST_SYNC_NEXT_ACTION,
+                        SyncScheduler.LAST_SYNC_ERROR,
+                        SyncScheduler.LAUNCH_GATE_SUMMARY,
+                        SyncScheduler.LAUNCH_GATE_REASON,
+                        SyncScheduler.SESSION_ACTIVE,
+                        SyncScheduler.GAME_MH3G_ENABLED,
+                    )
+                ) {
+                    refreshDashboardStateFromPreferences()
+                }
+            }
+            preferences.registerOnSharedPreferenceChangeListener(listener)
+            refreshDashboardStateFromPreferences()
+            onDispose {
+                preferences.unregisterOnSharedPreferenceChangeListener(listener)
+            }
+        }
+
         val folderPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree(),
         ) { uri ->
