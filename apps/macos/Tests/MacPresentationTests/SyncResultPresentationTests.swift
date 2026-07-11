@@ -37,6 +37,7 @@ import Testing
 
 @Test func sessionLedgerKeepsTheHeadObservedBeforePlay() throws {
     var ledger = SaveSessionLedger()
+    ledger.recordEstablishedHead(logicalSaveID: "mh3g", head: "before-play")
     ledger.beginSession(logicalSaveID: "mh3g", observedCloudHead: "before-play")
     #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == "before-play")
 
@@ -49,6 +50,16 @@ import Testing
         from: JSONEncoder().encode(ledger)
     )
     #expect(roundTrip.baseHeadForUpload(logicalSaveID: "mh3g") == "before-play")
+}
+
+@Test func observingRemoteHeadNeverClaimsStaleLocalSaveDescendsFromIt() {
+    var ledger = SaveSessionLedger()
+    ledger.beginSession(logicalSaveID: "mh3g", observedCloudHead: "phone-updated-cloud")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == nil)
+
+    ledger.recordEstablishedHead(logicalSaveID: "mh3g", head: "previously-restored")
+    ledger.beginSession(logicalSaveID: "mh3g", observedCloudHead: "phone-updated-again")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == "previously-restored")
 }
 
 @Test func missingLaunchObservationStaysUnknownAndSuccessfulSyncEstablishesHead() {

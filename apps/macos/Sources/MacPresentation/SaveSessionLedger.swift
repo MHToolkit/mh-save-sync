@@ -23,22 +23,19 @@ public struct SaveSessionLedger: Codable, Equatable, Sendable {
         self.saves = saves
     }
 
-    /// Freezes the cloud HEAD seen before gameplay. A failed observation is
-    /// represented explicitly and must never be replaced by a later status.
+    /// Freezes only a HEAD previously proven to match the local save by a
+    /// successful restore/upload. Merely observing the current cloud HEAD is
+    /// not proof that a directly launched emulator started from those bytes.
     public mutating func beginSession(logicalSaveID: String, observedCloudHead: String?) {
         var entry = saves[logicalSaveID] ?? Entry()
-        entry.sessionBaseHead = observedCloudHead
-        entry.sessionObservationKnown = observedCloudHead != nil
+        entry.sessionBaseHead = entry.establishedHead
+        entry.sessionObservationKnown = entry.establishedHead != nil
         saves[logicalSaveID] = entry
     }
 
     /// Status refreshes are informational only; they cannot rewrite a session base.
     public mutating func observeStatus(logicalSaveID: String, cloudHead: String?) {
-        guard var entry = saves[logicalSaveID] else { return }
-        if entry.establishedHead == nil, !entry.sessionObservationKnown {
-            entry.establishedHead = cloudHead
-        }
-        saves[logicalSaveID] = entry
+        _ = (logicalSaveID, cloudHead)
     }
 
     /// Restore/up-to-date/fast-forward/explicit replace prove local and cloud HEAD.
