@@ -885,6 +885,246 @@ pub async fn fetch_android_cloud_head(
     Ok(CloudHeadReport { head: Some(head.0) })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AndroidConflictSummary {
+    pub snapshot_id: String,
+    pub cloud_head: String,
+    pub branch_device_id: String,
+    pub branch_created_unix_ms: u64,
+    pub cloud_device_id: String,
+    pub cloud_created_unix_ms: u64,
+    pub changed_files: u64,
+    pub changed_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AndroidConflictReport {
+    pub cloud_head: Option<String>,
+    pub conflicts: Vec<AndroidConflictSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AndroidSnapshotRow {
+    snapshot_id: SnapshotId,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum AndroidConflictResolutionKind {
+    KeepCloudHead,
+    ReplaceWithLocal,
+}
+
+#[derive(Debug, Serialize)]
+struct AndroidResolveConflictRequest {
+    chosen_snapshot_id: SnapshotId,
+    resolution: AndroidConflictResolutionKind,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AndroidResolveReport {
+    pub resolved: usize,
+    pub total: usize,
+    pub failed_snapshot_ids: Vec<String>,
+}
+
+fn manifest_diff_summary(
+    head_entries: &BTreeMap<String, save_domain::ManifestEntry>,
+    branch_entries: &BTreeMap<String, save_domain::ManifestEntry>,
+) -> (u64, u64) {
+    let paths: std::collections::BTreeSet<_> =
+        head_entries.keys().chain(branch_entries.keys()).collect();
+    let mut changed_files = 0u64;
+    let mut changed_bytes = 0u64;
+    for path in paths {
+        let left = head_entries.get(path);
+        let right = branch_entries.get(path);
+        if left.map(|v| (&v.kind, v.size, &v.plaintext_sha256))
+            != right.map(|v| (&v.kind, v.size, &v.plaintext_sha256))
+        {
+            changed_files += 1;
+            changed_bytes = changed_bytes
+                .saturating_add(left.map_or(0, |v| v.size).max(right.map_or(0, |v| v.size)));
+        }
+    }
+    (changed_files, changed_bytes)
+}
+
+fn android_request_identity<'a>(
+    handle: &'a str,
+    cert_hex: &'a str,
+    device: &'a SigningKey,
+) -> RequestIdentity<'a> {
+    RequestIdentity {
+        account_handle: handle,
+        device_cert_id: cert_hex,
+        signing_key: device,
+    }
+}
+
+fn android_device_identity(
+    secret: &[u8; 32],
+    device_id: &str,
+) -> anyhow::Result<(String, String, SigningKey)> {
+    let keys = derive_account_keys(secret)?;
+    let handle = account_handle(&keys);
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-signing-seed/v1");
+    h.update(keys.auth);
+    h.update(device_id.as_bytes());
+    let device = SigningKey::from_bytes(&h.finalize().into());
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-cert-id/v1");
+    h.update(device.verifying_key().to_bytes());
+    let cert_hex = hex::encode(&h.finalize()[..16]);
+    Ok((handle, cert_hex, device))
+}
+
+async fn fetch_snapshot_for_conflict_diff(
+    client: &reqwest::Client,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+    secret: &[u8; 32],
+    snapshot_id: &str,
+) -> anyhow::Result<EncryptedSnapshot> {
+    let response = signed_get(
+        client,
+        &format!("{server}/v1/snapshots/{snapshot_id}/encrypted-bundle"),
+        server,
+        identity,
+    )
+    .await?;
+    anyhow::ensure!(response.status().is_success(), "bundle request failed");
+    decode_download_bundle(secret, snapshot_id, bounded_json_response(response).await?)
+}
+
+/// Reads only unresolved branches and decrypts manifests locally to produce a
+/// path-free count/byte summary. The server never receives plaintext paths.
+pub async fn fetch_android_conflicts(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    device_id: &str,
+) -> anyhow::Result<AndroidConflictReport> {
+    let server = server.trim_end_matches('/');
+    validate_logical_save_id(logical_save_id)?;
+    let head = fetch_android_cloud_head(server, secret, logical_save_id, device_id)
+        .await?
+        .head;
+    let Some(head_id) = head.clone() else {
+        return Ok(AndroidConflictReport {
+            cloud_head: None,
+            conflicts: Vec::new(),
+        });
+    };
+    let (handle, cert_hex, device) = android_device_identity(secret, device_id)?;
+    let identity = android_request_identity(&handle, &cert_hex, &device);
+    let client = reqwest::Client::new();
+    let response = signed_get(
+        &client,
+        &format!("{server}/v1/conflicts/{logical_save_id}"),
+        server,
+        &identity,
+    )
+    .await?;
+    anyhow::ensure!(response.status().is_success(), "conflict request failed");
+    let rows: Vec<AndroidSnapshotRow> = bounded_json_response(response).await?;
+    let head_snapshot =
+        fetch_snapshot_for_conflict_diff(&client, server, &identity, secret, &head_id).await?;
+    let head_manifest = decrypt_manifest(secret, &head_snapshot)?;
+    let head_device_id = head_manifest.device_id.0.clone();
+    let head_created_unix_ms = head_manifest.created_unix_ms;
+    let head_entries: BTreeMap<_, _> = head_manifest
+        .entries
+        .into_iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect();
+    let mut conflicts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let branch_id = row.snapshot_id.0;
+        let branch =
+            fetch_snapshot_for_conflict_diff(&client, server, &identity, secret, &branch_id)
+                .await?;
+        let manifest = decrypt_manifest(secret, &branch)?;
+        let branch_device_id = manifest.device_id.0.clone();
+        let branch_created_unix_ms = manifest.created_unix_ms;
+        let branch_entries: BTreeMap<_, _> = manifest
+            .entries
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect();
+        let (changed_files, changed_bytes) = manifest_diff_summary(&head_entries, &branch_entries);
+        conflicts.push(AndroidConflictSummary {
+            snapshot_id: branch_id,
+            cloud_head: head_id.clone(),
+            branch_device_id,
+            branch_created_unix_ms,
+            cloud_device_id: head_device_id.clone(),
+            cloud_created_unix_ms: head_created_unix_ms,
+            changed_files,
+            changed_bytes,
+        });
+    }
+    Ok(AndroidConflictReport {
+        cloud_head: head,
+        conflicts,
+    })
+}
+
+pub async fn resolve_android_conflicts(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    device_id: &str,
+    conflict_snapshot_ids: &[String],
+    chosen_snapshot_id: &str,
+    replace_with_local: bool,
+) -> anyhow::Result<AndroidResolveReport> {
+    let server = server.trim_end_matches('/');
+    validate_logical_save_id(logical_save_id)?;
+    let observed = fetch_android_cloud_head(server, secret, logical_save_id, device_id).await?;
+    anyhow::ensure!(
+        observed.head.as_deref() == Some(chosen_snapshot_id),
+        "chosen snapshot is not current head"
+    );
+    let (handle, cert_hex, device) = android_device_identity(secret, device_id)?;
+    let identity = android_request_identity(&handle, &cert_hex, &device);
+    let client = reqwest::Client::new();
+    let mut failed = Vec::new();
+    let resolution = || {
+        if replace_with_local {
+            AndroidConflictResolutionKind::ReplaceWithLocal
+        } else {
+            AndroidConflictResolutionKind::KeepCloudHead
+        }
+    };
+    for conflict in conflict_snapshot_ids {
+        if conflict.len() != 64 || !conflict.bytes().all(|b| b.is_ascii_hexdigit()) {
+            failed.push(conflict.clone());
+            continue;
+        }
+        let response = signed_request(
+            &client,
+            &format!("{server}/v1/conflicts/{logical_save_id}/{conflict}/resolve"),
+            server,
+            &identity,
+            &AndroidResolveConflictRequest {
+                chosen_snapshot_id: SnapshotId(chosen_snapshot_id.to_owned()),
+                resolution: resolution(),
+            },
+        )
+        .await;
+        if !response.is_ok_and(|response| response.status().is_success()) {
+            failed.push(conflict.clone());
+        }
+    }
+    Ok(AndroidResolveReport {
+        resolved: conflict_snapshot_ids.len() - failed.len(),
+        total: conflict_snapshot_ids.len(),
+        failed_snapshot_ids: failed,
+    })
+}
+
 fn decode_download_bundle(
     secret: &[u8; 32],
     expected_snapshot_id: &str,
@@ -1120,6 +1360,90 @@ async fn signed_post_json_client<T: Serialize, R: for<'de> Deserialize<'de>>(
         response.status()
     );
     Ok(response.json().await?)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_fetchUnresolvedConflicts<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            Ok(serde_json::to_string(&runtime.block_on(
+                fetch_android_conflicts(&server, &key, &logical, &device),
+            )?)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"conflict_fetch_failed"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_resolveConflicts<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+    conflict_ids_json: jni::objects::JString<'local>,
+    chosen: jni::objects::JString<'local>,
+    replace_with_local: jni::sys::jboolean,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let ids_json: String = env.get_string(&conflict_ids_json)?.into();
+            let chosen: String = env.get_string(&chosen)?.into();
+            let ids: Vec<String> = serde_json::from_str(&ids_json)?;
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            Ok(serde_json::to_string(&runtime.block_on(
+                resolve_android_conflicts(
+                    &server,
+                    &key,
+                    &logical,
+                    &device,
+                    &ids,
+                    &chosen,
+                    replace_with_local != 0,
+                ),
+            )?)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"conflict_resolve_failed"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[cfg(target_os = "android")]
@@ -1664,5 +1988,25 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(bytes);
         assert!(decode_download_bundle(&secret, &snapshot.snapshot_id.0, wrong_nonce).is_err());
         assert!(validate_encoded_object_size(MAX_ENCODED_OBJECT_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn conflict_summary_counts_changed_paths_without_exposing_them() {
+        let entry = |path: &str, size: u64, hash: &str| save_domain::ManifestEntry {
+            path: path.into(),
+            kind: save_domain::FileKind::Regular,
+            size,
+            plaintext_sha256: hash.into(),
+            chunks: Vec::new(),
+        };
+        let head = BTreeMap::from([
+            ("slot/a".into(), entry("slot/a", 10, "aa")),
+            ("slot/b".into(), entry("slot/b", 20, "bb")),
+        ]);
+        let branch = BTreeMap::from([
+            ("slot/a".into(), entry("slot/a", 10, "changed")),
+            ("slot/c".into(), entry("slot/c", 30, "cc")),
+        ]);
+        assert_eq!(manifest_diff_summary(&head, &branch), (3, 60));
     }
 }

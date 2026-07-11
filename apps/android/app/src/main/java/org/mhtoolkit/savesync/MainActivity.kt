@@ -170,6 +170,9 @@ class MainActivity : ComponentActivity() {
             )
         }
         var conflictVisible by remember { mutableStateOf(false) }
+        var conflictReport by remember { mutableStateOf<UnresolvedConflictReport?>(null) }
+        var conflictLoading by remember { mutableStateOf(false) }
+        var conflictError by remember { mutableStateOf("") }
         var helpVisible by remember { mutableStateOf(false) }
         var settingsVisible by remember { mutableStateOf(false) }
         var restoreCloudConfirmVisible by remember { mutableStateOf(false) }
@@ -183,6 +186,32 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val serverEndpointFocusRequester = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
+
+        fun refreshConflicts() {
+            conflictVisible = true
+            conflictLoading = true
+            conflictError = ""
+            scope.launch {
+                runCatching { ConflictPipeline(this@MainActivity).fetch(serverEndpoint) }
+                    .onSuccess { conflictReport = it }
+                    .onFailure { conflictError = "暂时无法读取冲突；没有执行任何覆盖。" }
+                conflictLoading = false
+            }
+        }
+
+        suspend fun resolveDisplayedConflicts(chosen: String, replaceWithLocal: Boolean): String {
+            val displayed = conflictReport?.branches.orEmpty()
+            if (displayed.isEmpty()) return ""
+            val result = ConflictPipeline(this@MainActivity).resolve(
+                serverEndpoint, displayed, chosen, replaceWithLocal,
+            )
+            conflictReport = ConflictPipeline(this@MainActivity).fetch(serverEndpoint)
+            return if (result.complete) {
+                "；${result.resolved}/${result.total} 个冲突已标记处理，历史仍保留"
+            } else {
+                "；仅处理 ${result.resolved}/${result.total} 个冲突，其余仍待处理"
+            }
+        }
 
         fun refreshDashboardStateFromPreferences() {
             authorized = preferences.contains(SyncScheduler.SAF_ROOT)
@@ -314,7 +343,9 @@ class MainActivity : ComponentActivity() {
                         when (upload) {
                             is LocalReplaceResult.Uploaded -> persistSyncStatus(
                                 "user-use-local",
-                                "本地存档已设为云端最新（版本 …${upload.cloudHead.takeLast(6)}，${upload.fileCount} 个文件）。",
+                                "本地存档已设为云端最新（版本 …${upload.cloudHead.takeLast(6)}，${upload.fileCount} 个文件）" +
+                                    runCatching { resolveDisplayedConflicts(upload.cloudHead, true) }
+                                        .getOrElse { "；冲突状态更新失败，仍保留待处理" } + "。",
                                 "上传完成",
                                 "Mac 端启动前检查后即可看到该版本。",
                             )
@@ -360,8 +391,11 @@ class MainActivity : ComponentActivity() {
                         RestoreStopEvidence.confirmed(sessionActive),
                     )
                 }.onSuccess { restored ->
+                    val resolution = runCatching {
+                        resolveDisplayedConflicts(restored.snapshotId, false)
+                    }.getOrElse { "；冲突状态更新失败，仍保留待处理" }
                     persistSyncStatus(
-                        reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留。",
+                        reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留$resolution。",
                         "恢复完成", "现在可以启动 Nemessix 检查存档。",
                     )
                 }.onFailure {
@@ -449,6 +483,10 @@ class MainActivity : ComponentActivity() {
 
         if (conflictVisible) {
             ConflictDialog(
+                report = conflictReport,
+                loading = conflictLoading,
+                error = conflictError,
+                onRefresh = { refreshConflicts() },
                 onDismiss = { conflictVisible = false },
             )
         }
@@ -539,7 +577,7 @@ class MainActivity : ComponentActivity() {
             HelpDialog(
                 onConflictHelp = {
                     helpVisible = false
-                    conflictVisible = true
+                    refreshConflicts()
                 },
                 onDismiss = { helpVisible = false },
             )
@@ -581,6 +619,11 @@ class MainActivity : ComponentActivity() {
                     if (syncError.isNotBlank()) {
                         Text(syncError, color = MaterialTheme.colorScheme.error)
                     }
+                    OutlinedButton(
+                        enabled = serverEndpoint.isNotBlank() && hasRecoverySecret && !conflictLoading,
+                        onClick = { refreshConflicts() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("查看待处理冲突") }
                 }
 
                 CardSection("快速同步") {
@@ -804,25 +847,47 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ConflictDialog(
+        report: UnresolvedConflictReport?,
+        loading: Boolean,
+        error: String,
+        onRefresh: () -> Unit,
         onDismiss: () -> Unit,
     ) {
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("冲突处理说明") },
+            title = { Text("存档冲突") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("这是说明页，不会执行覆盖或上传。真正发生冲突时，App 会列出本地与云端的设备、时间、上一个版本、大小和校验摘要。")
-                    Text(SyncMessages.conflictDiffBoundary())
-                    Text("不会按最新时间自动覆盖。你可以回到「同步动作」选择云端覆盖本地、本地替换云端，或暂不处理；另一边会保留为历史/冲突分支。")
-                    Text("二进制游戏存档不做语义合并；只能选择一方或复制为分支。")
+                    when {
+                        loading -> Text("正在安全读取未处理分支…")
+                        error.isNotBlank() -> Text(error, color = MaterialTheme.colorScheme.error)
+                        report == null -> Text("尚未读取冲突状态。")
+                        report.branches.isEmpty() -> Text("当前没有待处理冲突。")
+                        else -> {
+                            Text("云端当前版本 …${report.cloudHead?.takeLast(6)}；发现 ${report.branches.size} 个待处理分支。")
+                            report.branches.forEach { branch ->
+                                Text(
+                                    "分支 …${branch.snapshotId.takeLast(6)}（设备 …${branch.branchDeviceId.takeLast(6)}，${formatTime(branch.branchCreatedUnixMs)}）：与云端 …${branch.cloudHead.takeLast(6)}（设备 …${branch.cloudDeviceId.takeLast(6)}，${formatTime(branch.cloudCreatedUnixMs)}）有 ${branch.changedFiles} 个文件不同，涉及 ${formatBytes(branch.changedBytes)}。",
+                                )
+                            }
+                            Text("请选择首页“上传手机存档”或“恢复云端存档”。只有操作成功后才会标记已处理；不会自动选择。")
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = onDismiss) {
-                    Text("知道了")
+                    Text("关闭")
                 }
             },
+            dismissButton = { TextButton(onClick = onRefresh) { Text("刷新") } },
         )
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024 * 1024 -> "%.1f MiB".format(Locale.CHINA, bytes / 1024.0 / 1024.0)
+        bytes >= 1024 -> "%.1f KiB".format(Locale.CHINA, bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     @Composable

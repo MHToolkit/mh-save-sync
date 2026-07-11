@@ -21,6 +21,23 @@ object NativeSyncBridge {
         deviceId: String,
     ): String
 
+    external fun fetchUnresolvedConflicts(
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        deviceId: String,
+    ): String
+
+    external fun resolveConflicts(
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        deviceId: String,
+        conflictIdsJson: String,
+        chosenSnapshotId: String,
+        replaceWithLocal: Boolean,
+    ): String
+
     external fun downloadCloudSnapshotToStage(
         serverEndpoint: String,
         recoverySecret: ByteArray,

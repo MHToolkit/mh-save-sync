@@ -106,7 +106,7 @@ object SyncServerProbe {
         }
     }
 
-    private fun deviceId(context: Context): String {
+    internal fun deviceId(context: Context): String {
         val raw = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
             .orEmpty().toByteArray()
         return try {
