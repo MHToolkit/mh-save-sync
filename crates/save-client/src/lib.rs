@@ -1,6 +1,16 @@
+use base64::Engine;
+use ed25519_dalek::SigningKey;
+use save_crypto::{
+    account_handle, account_root_signing_key, derive_account_keys, deterministic_cbor,
+    issue_device_certificate_with_id,
+};
 use save_domain::{AdapterDescriptor, SnapshotId};
+use save_domain::{DeviceId, GameKey, LogicalSaveId};
 use save_engine::{HeadUpdate, decide_head_update};
+use save_engine::{SnapshotOptions, create_snapshot_from_stable_folder};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::path::Path;
 
 uniffi::setup_scaffolding!();
 
@@ -360,6 +370,293 @@ pub fn bridge_head_decision(
 
 pub struct SyncCoordinator {
     pub policy: SyncPolicy,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AndroidUploadReport {
+    pub outcome: String,
+    pub snapshot_id: String,
+    pub cloud_head: String,
+    pub conflict_snapshot: Option<String>,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct Bootstrap<'a> {
+    account_handle: &'a str,
+    root_public_key_b64: String,
+}
+#[derive(Serialize)]
+struct Register<'a> {
+    account_handle: &'a str,
+    cert_id: &'a str,
+    device_public_key_b64: String,
+    certificate_b64: String,
+}
+#[derive(Serialize)]
+struct Begin<'a> {
+    account_handle: &'a str,
+    device_cert_id: &'a str,
+    logical_save_id: &'a str,
+    base_head: Option<SnapshotId>,
+    parents: Vec<SnapshotId>,
+    encrypted_manifest_id: String,
+    chunk_ids: Vec<String>,
+}
+#[derive(Deserialize)]
+struct BeginReply {
+    upload_id: String,
+    missing_chunk_ids: Vec<String>,
+}
+#[derive(Serialize)]
+struct PutObject {
+    chunk_id: String,
+    sha256: String,
+    bytes_b64: String,
+}
+#[derive(Serialize)]
+struct PutManifest {
+    manifest_id: String,
+    sha256: String,
+    bytes_b64: String,
+}
+#[derive(Serialize)]
+struct Commit {
+    snapshot_id: SnapshotId,
+}
+#[derive(Deserialize)]
+struct CommitReply {
+    outcome: String,
+    head: SnapshotId,
+    conflict_snapshot: Option<SnapshotId>,
+}
+
+/// Uploads an already read-only staged SAF tree. The caller must create two
+/// matching captures before invoking this function. `base_head` is never
+/// guessed from wall-clock time: a stale/missing base becomes a server conflict.
+pub async fn upload_android_stable_stage(
+    staging_root: &Path,
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    base_head: Option<&str>,
+    device_id: &str,
+) -> anyhow::Result<AndroidUploadReport> {
+    let server = server.trim_end_matches('/');
+    anyhow::ensure!(
+        server.starts_with("https://") || server.starts_with("http://"),
+        "invalid server endpoint"
+    );
+    let descriptor = save_adapters::nemessix_android();
+    let mut options = SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "slot1"));
+    options.logical_save_id = LogicalSaveId(logical_save_id.to_owned());
+    options.device_id = DeviceId(device_id.to_owned());
+    options.parents = base_head
+        .map(|v| vec![SnapshotId(v.to_owned())])
+        .unwrap_or_default();
+    options.created_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64;
+    let snapshot = create_snapshot_from_stable_folder(staging_root, &descriptor, secret, options)?;
+    let keys = derive_account_keys(secret)?;
+    let handle = account_handle(&keys);
+    let root = account_root_signing_key(&keys);
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-signing-seed/v1");
+    h.update(keys.auth);
+    h.update(device_id.as_bytes());
+    let device = SigningKey::from_bytes(&h.finalize().into());
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-cert-id/v1");
+    h.update(device.verifying_key().to_bytes());
+    let digest = h.finalize();
+    let mut cert_id = [0u8; 16];
+    cert_id.copy_from_slice(&digest[..16]);
+    let cert_hex = hex::encode(cert_id);
+    let cert = issue_device_certificate_with_id(
+        &root,
+        &device.verifying_key(),
+        cert_id,
+        1_700_000_000,
+        4_102_444_800,
+        1,
+    )?;
+    let client = reqwest::Client::new();
+    post_empty(
+        &client,
+        &format!("{server}/v1/accounts/bootstrap"),
+        &Bootstrap {
+            account_handle: &handle,
+            root_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(root.verifying_key().to_bytes()),
+        },
+    )
+    .await?;
+    post_empty(
+        &client,
+        &format!("{server}/v1/devices/register"),
+        &Register {
+            account_handle: &handle,
+            cert_id: &cert_hex,
+            device_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(device.verifying_key().to_bytes()),
+            certificate_b64: base64::engine::general_purpose::STANDARD
+                .encode(deterministic_cbor(&cert)?),
+        },
+    )
+    .await?;
+    let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest)?;
+    let manifest_id = hex::encode(sha2::Sha256::digest(&manifest_bytes));
+    let chunk_ids = snapshot.chunks.keys().cloned().collect::<Vec<_>>();
+    let begin: BeginReply = post_json_client(
+        &client,
+        &format!("{server}/v1/snapshots/begin"),
+        &Begin {
+            account_handle: &handle,
+            device_cert_id: &cert_hex,
+            logical_save_id,
+            base_head: base_head.map(|v| SnapshotId(v.to_owned())),
+            parents: base_head
+                .map(|v| vec![SnapshotId(v.to_owned())])
+                .unwrap_or_default(),
+            encrypted_manifest_id: manifest_id.clone(),
+            chunk_ids,
+        },
+    )
+    .await?;
+    for id in &begin.missing_chunk_ids {
+        let bytes = serde_json::to_vec(
+            snapshot
+                .chunks
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("server requested unknown chunk"))?,
+        )?;
+        post_empty(
+            &client,
+            &format!("{server}/v1/snapshots/{}/chunks", begin.upload_id),
+            &PutObject {
+                chunk_id: id.clone(),
+                sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+                bytes_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+        )
+        .await?;
+    }
+    post_empty(
+        &client,
+        &format!("{server}/v1/snapshots/{}/manifest", begin.upload_id),
+        &PutManifest {
+            manifest_id,
+            sha256: hex::encode(sha2::Sha256::digest(&manifest_bytes)),
+            bytes_b64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+        },
+    )
+    .await?;
+    let commit: CommitReply = post_json_client(
+        &client,
+        &format!("{server}/v1/snapshots/{}/commit", begin.upload_id),
+        &Commit {
+            snapshot_id: snapshot.snapshot_id.clone(),
+        },
+    )
+    .await?;
+    Ok(AndroidUploadReport {
+        outcome: commit.outcome,
+        snapshot_id: snapshot.snapshot_id.0,
+        cloud_head: commit.head.0,
+        conflict_snapshot: commit.conflict_snapshot.map(|v| v.0),
+        file_count: snapshot.fingerprint.file_count,
+        total_bytes: snapshot.fingerprint.total_bytes,
+    })
+}
+
+async fn post_empty<T: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    body: &T,
+) -> anyhow::Result<()> {
+    let response = client.post(url).json(body).send().await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "server request failed: {}",
+        response.status()
+    );
+    Ok(())
+}
+async fn post_json_client<T: Serialize, R: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    url: &str,
+    body: &T,
+) -> anyhow::Result<R> {
+    let response = client.post(url).json(body).send().await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "server request failed: {}",
+        response.status()
+    );
+    Ok(response.json().await?)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_bridgeHealth<'local>(
+    env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+) -> jni::sys::jstring {
+    env.new_string("save-client-jni/1;e2ee=xchacha20poly1305;watcher=dirty-only")
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_uploadStableStage<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    staging: jni::objects::JString<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    base: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = (|| -> anyhow::Result<String> {
+        let staging: String = env.get_string(&staging)?.into();
+        let server: String = env.get_string(&server)?.into();
+        let logical: String = env.get_string(&logical)?.into();
+        let device: String = env.get_string(&device)?.into();
+        let base = if base.is_null() {
+            None
+        } else {
+            Some(String::from(env.get_string(&base)?))
+        };
+        let mut bytes = env.convert_byte_array(&secret)?;
+        anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        bytes.fill(0);
+        let runtime = tokio::runtime::Runtime::new()?;
+        let report = runtime.block_on(upload_android_stable_stage(
+            Path::new(&staging),
+            &server,
+            &key,
+            &logical,
+            base.as_deref(),
+            &device,
+        ));
+        key.fill(0);
+        Ok(serde_json::to_string(&report?)?)
+    })();
+    let output = result.unwrap_or_else(|_error| {
+        // Native error chains may contain private staging paths. Keep the JNI
+        // boundary redacted; structured diagnostics belong in metadata-only
+        // audit events, never UI/logcat.
+        serde_json::json!({"error":"sync_failed","message_zh":"同步失败，未修改云端 HEAD 或本地原始存档"}).to_string()
+    });
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 impl SyncCoordinator {

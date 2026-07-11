@@ -14,6 +14,7 @@ object SyncScheduler {
     // Flip only after a real SAF -> stable snapshot -> E2EE -> server pipeline is
     // loaded and covered by device tests. The current Android Alpha is a UI shell.
     const val REAL_SYNC_PIPELINE_AVAILABLE = false
+    const val LOCAL_REPLACE_PIPELINE_AVAILABLE = false
     const val PREFERENCES = "mh_save_sync"
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"
@@ -30,6 +31,7 @@ object SyncScheduler {
     const val LAUNCH_GATE_REASON = "launch_gate_reason"
     const val SESSION_ACTIVE = "session_active"
     const val GAME_MH3G_ENABLED = "game_mh3g_enabled"
+    const val NATIVE_BRIDGE_HEALTH = "native_bridge_health"
     const val NEMESSIX_PACKAGE = "io.github.vincentadamnemessisx.nemessix"
     private const val PERIODIC_NAME = "save-reconcile-periodic"
 

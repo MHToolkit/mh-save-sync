@@ -22,12 +22,34 @@ android {
         compose = true
     }
 
+    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
 }
+
+val buildRustAndroid by tasks.registering(Exec::class) {
+    val repoRoot = rootProject.projectDir.parentFile.parentFile
+    val output = layout.buildDirectory.dir("generated/jniLibs")
+    val sdkRoot = System.getenv("ANDROID_SDK_ROOT")
+        ?: System.getenv("ANDROID_HOME")
+        ?: File(System.getProperty("user.home"), "Library/Android/sdk").absolutePath
+    val ndkRoot = System.getenv("ANDROID_NDK_HOME")
+        ?: File(sdkRoot, "ndk/28.2.13676358").absolutePath
+    inputs.files(fileTree(repoRoot.resolve("crates")) { include("**/*.rs", "**/Cargo.toml") })
+    outputs.dir(output)
+    workingDir(repoRoot)
+    environment("ANDROID_NDK_HOME", ndkRoot)
+    commandLine(
+        "cargo", "ndk", "-t", "arm64-v8a", "-o", output.get().asFile.absolutePath,
+        "build", "-p", "save-client", "--release",
+    )
+}
+
+tasks.named("preBuild").configure { dependsOn(buildRustAndroid) }
 
 kotlin {
     compilerOptions {

@@ -61,6 +61,11 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         }
         SyncScheduler.ensureDefaults(this)
+        getSharedPreferences(SyncScheduler.PREFERENCES, MODE_PRIVATE).edit()
+            .putString(
+                SyncScheduler.NATIVE_BRIDGE_HEALTH,
+                runCatching { NativeSyncBridge.bridgeHealth() }.getOrElse { "unavailable:${it.javaClass.simpleName}" },
+            ).apply()
         SyncScheduler.ensurePeriodic(this)
         setContent {
             MaterialTheme {

@@ -13,11 +13,24 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 bindgen = ["uniffi/cli"]
 
 [dependencies]
+anyhow.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+save-adapters = { path = "../save-adapters" }
+save-crypto = { path = "../save-crypto" }
 save-domain = { path = "../save-domain" }
 save-engine = { path = "../save-engine" }
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uniffi.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
 
 [[bin]]
 name = "uniffi-bindgen"
