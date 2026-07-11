@@ -42,6 +42,12 @@ object NativeSyncBridge {
         expectedSnapshotId: String,
     ): String
 
+    external fun restoreEncryptedBundleToStage(
+        bundlePath: String,
+        recoverySecret: ByteArray,
+        privateStageTarget: String,
+    ): String
+
     external fun downloadCloudSnapshotToCache(
         serverEndpoint: String,
         recoverySecret: ByteArray,

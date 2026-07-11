@@ -1176,3 +1176,11 @@ Open Phase 1D gates:
   restore + core launch evidence**, not yet emulator-readable `Runtime Verified`
   proof. Runtime promotion remains gated on reaching the in-game save selection
   or loaded character state without exposing user save contents.
+
+### 2026-07-11 authoritative Android recovery and cloud replacement
+
+- The Android Nemessix save was declared authoritative before the test. A pre-restore encrypted local backup was therefore retained before applying cloud HEAD `…0f69f8`.
+- After the cloud-restore exercise, the client restored that encrypted pre-restore backup under a stopped-emulator lease: 2 files, snapshot suffix `…b3e27a`. No plaintext save or recovery secret was exported.
+- The restored phone save was then explicitly uploaded with “用本地替换云端”. The server CAS advanced from `…0f69f8` to `…f0f9f0`; prior versions remained in history/conflict branches.
+- An authenticated macOS status read independently observed full HEAD `550128a975b2a1f5cd4e24311a18c1c00a955d3bbc429608a1388b1484f0f9f0`, 16 history entries, and 11 retained conflict branches.
+- This proves backup-before-restore, encrypted local rollback, stopped-only commit, explicit local-to-cloud replacement, and independent authenticated readback. Emulator-readable gameplay validation remains pending and is not promoted to Runtime Verified.

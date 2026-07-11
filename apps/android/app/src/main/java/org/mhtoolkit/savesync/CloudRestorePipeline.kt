@@ -581,3 +581,85 @@ class CloudRestorePipeline(private val context: Context) {
         }
 
 }
+
+class LocalBackupRestorePipeline(private val context: Context) {
+    suspend fun execute(treeUri: Uri, snapshotId: String): CloudRestoreResult = withContext(Dispatchers.IO) {
+        NemessixProcessGate(context).requireStopped()
+        require(snapshotId.matches(Regex("[0-9a-f]{64}"))) { "local_backup_id_invalid" }
+        val sourceBundle = File(context.noBackupFilesDir, "restore-cas/$snapshotId.mhsavebundle")
+        require(sourceBundle.isFile) { "local_backup_missing" }
+        val quiescence = NemessixQuiescenceClient(context)
+        val restoreRoot = File(context.noBackupFilesDir, "restore").apply { mkdirs() }
+        RestoreRecovery.recoverPending(context, restoreRoot, treeUri, quiescence) { op ->
+            SafJournalRestorer(context, treeUri, File(op, "actions.log"))
+        }
+        val operationId = UUID.randomUUID().toString()
+        val challenge = ByteArray(32).also(SecureRandom()::nextBytes)
+            .joinToString("") { "%02x".format(it) }
+        val operation = File(restoreRoot, operationId).apply { mkdirs() }
+        val fingerprint = RestoreLeaseStore.treeFingerprint(treeUri)
+        RestoreLeaseStore.write(
+            operation,
+            DurableRestoreLease(NemessixQuiescenceLease("", challenge, operationId, ""), fingerprint),
+        )
+        val lease = quiescence.acquire(operationId, challenge)
+        var durable = DurableRestoreLease(lease, fingerprint)
+        RestoreLeaseStore.write(operation, durable)
+        val current = File(operation, "before")
+        val desired = File(operation, "incoming")
+        val encryptedCurrent = File(operation, "before.mhsavebundle")
+        var secret: ByteArray? = null
+        var terminalReleased = false
+        try {
+            val currentCapture = SafStableStager(context).capture(treeUri)
+            check(currentCapture.root.renameTo(current) || currentCapture.root.copyRecursively(current, false)) {
+                "local_history_current_backup_failed"
+            }
+            if (currentCapture.root.exists()) currentCapture.root.deleteRecursively()
+            secret = AndroidSecretVault(context).load()
+            val currentResult = JSONObject(NativeSyncBridge.encryptStageBackup(
+                current.absolutePath, secret, encryptedCurrent.absolutePath,
+            ))
+            val desiredResult = JSONObject(NativeSyncBridge.restoreEncryptedBundleToStage(
+                sourceBundle.absolutePath, secret, desired.absolutePath,
+            ))
+            check(!currentResult.has("error") && !desiredResult.has("error")) { "local_history_stage_failed" }
+            val backupId = currentResult.getString("snapshot_id")
+            val desiredId = desiredResult.getString("snapshot_id")
+            check(backupId.matches(Regex("[0-9a-f]{64}"))) { "local_history_backup_id_invalid" }
+            check(desiredId.matches(Regex("[0-9a-f]{64}"))) { "local_history_desired_id_invalid" }
+            check(desiredId == snapshotId) { "local_history_bundle_id_mismatch" }
+            durable = durable.copy(desiredSnapshotId = desiredId, backupSnapshotId = backupId)
+            RestoreLeaseStore.write(operation, durable)
+            quiescence.validate(lease)
+            RestoreTransaction(
+                DurableRestoreState(operation),
+                SafJournalRestorer(context, treeUri, File(operation, "actions.log")),
+            ).commit(desired, current)
+            RestoreRecovery.retainEncryptedBackup(
+                context, operation, encryptedCurrent, backupId, deleteOperation = false,
+            )
+            quiescence.release(lease, "COMMITTED", desiredId)
+            terminalReleased = true
+            operation.deleteRecursively()
+            CloudRestoreResult(
+                desiredId,
+                desiredResult.getLong("file_count"),
+                desiredResult.getLong("total_bytes"),
+            )
+        } finally {
+            secret?.fill(0)
+            desired.deleteRecursively()
+            if (!terminalReleased) {
+                val state = DurableRestoreState(operation).read()
+                if (state == RestoreOperationState.ROLLED_BACK) {
+                    val persisted = RestoreLeaseStore.read(operation)
+                    quiescence.release(lease, "ROLLED_BACK", requireNotNull(persisted.backupSnapshotId))
+                } else if (state == null || state == RestoreOperationState.PREPARED) {
+                    quiescence.release(lease, "ABORTED", challenge)
+                    operation.deleteRecursively()
+                }
+            }
+        }
+    }
+}
