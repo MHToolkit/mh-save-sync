@@ -1,11 +1,37 @@
 # Phase 1 validation evidence ledger
 
 - Status: live evidence ledger, not a stability claim
-- Last updated: 2026-07-08
+- Last updated: 2026-07-11
 - Git commit when captured: this branch state; exact commit reported in PR/final status
 - Secret policy: commands below use external secret files under
   `~/Documents/Secrets`; no recovery phrase, access token, device secret,
   plaintext save bytes or user save path content is recorded here.
+
+## OnePlus Ace 5 real Nemessix upload and authenticated service upgrade
+
+- Wireless ADB device: OnePlus Ace 5 (`PKG110`); installed Android Alpha commit
+  `155d23a`. APK SHA-256:
+  `62433af0a5c9f7e9a6a3e93d1bf2be2b395798c79f741f9e85cb2b4831cf876a`.
+- The persisted SAF grant targets the real Android Nemessix MH3G save root.
+  With Nemessix stopped, the client performed two read-only captures, stability
+  validation, E2EE snapshot creation and a signed CAS upload. It did not move
+  or rewrite the original save directory.
+- User-authorized “local becomes cloud latest” advanced HEAD from suffix
+  `a7e031` to
+  `1a42e3732243c9dad947ffa11eb115759d31f5082b8b43071089337d772ab231`
+  (`2ab231`) with 2 files. History increased to 13; all 10 prior conflict
+  branches remained retained.
+- Metadata-only evidence bundle:
+  `artifacts/runtime/android-real-device/20260711T100701Z.tar.gz`, SHA-256
+  `810136b25bb866a188974b88a3c2f9348c84c5d47657b376f026f7bc8297baca`.
+  This proves real stable upload only. Stopped restore and emulator readback are
+  still false, so the adapter is not yet promoted to full RuntimeVerified.
+- Before upgrade, PostgreSQL and MinIO were backed up with writers stopped to
+  `/home/ecs-user/mh-save-sync-backups/20260711-180846` on the isolated host.
+  The public Alpha service at `http://8.130.112.207:39082` was then upgraded in
+  place. Anonymous HEAD now returns HTTP 401; signed Android and macOS clients
+  both read the preserved `2ab231` HEAD. `/ready` reports `postgres-s3` ready.
+  No new port or Aliyun security-group change was required.
 
 ## Local gates executed
 
