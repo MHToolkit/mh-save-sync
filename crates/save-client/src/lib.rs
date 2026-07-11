@@ -930,7 +930,7 @@ fn decode_download_bundle(
             sha256: String::new(),
         },
     };
-    let manifest = decrypt_manifest(secret, &snapshot)?;
+    let manifest = verify_snapshot_content_id(secret, &snapshot)?;
     save_domain::validate_manifest_entries(&manifest.entries, 10_000, 128 * 1024 * 1024)?;
     let mut referenced = std::collections::BTreeSet::new();
     for entry in &manifest.entries {
@@ -957,19 +957,6 @@ fn decode_download_bundle(
         referenced == snapshot.chunks.keys().cloned().collect(),
         "bundle chunk set mismatch"
     );
-    let parent_bytes: Vec<Vec<u8>> = manifest
-        .parents
-        .iter()
-        .map(|p| p.0.as_bytes().to_vec())
-        .collect();
-    let mut parts: Vec<&[u8]> = vec![b"v1", &snapshot.encrypted_manifest.ciphertext];
-    for parent in &parent_bytes {
-        parts.push(parent);
-    }
-    anyhow::ensure!(
-        SnapshotId::from_parts(&parts) == snapshot.snapshot_id,
-        "snapshot integrity mismatch"
-    );
     snapshot.fingerprint.file_count = manifest
         .entries
         .iter()
@@ -982,6 +969,27 @@ fn decode_download_bundle(
         .map(|e| e.size)
         .sum();
     Ok(snapshot)
+}
+
+fn verify_snapshot_content_id(
+    secret: &[u8; 32],
+    snapshot: &EncryptedSnapshot,
+) -> anyhow::Result<save_domain::SnapshotManifest> {
+    let manifest = decrypt_manifest(secret, snapshot)?;
+    let parent_bytes: Vec<Vec<u8>> = manifest
+        .parents
+        .iter()
+        .map(|parent| parent.0.as_bytes().to_vec())
+        .collect();
+    let mut parts: Vec<&[u8]> = vec![b"v1", &snapshot.encrypted_manifest.ciphertext];
+    for parent in &parent_bytes {
+        parts.push(parent);
+    }
+    anyhow::ensure!(
+        SnapshotId::from_parts(&parts) == snapshot.snapshot_id,
+        "snapshot integrity mismatch"
+    );
+    Ok(manifest)
 }
 
 async fn fetch_android_encrypted_snapshot(
@@ -1300,6 +1308,7 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_restoreEncry
             let mut key = Zeroizing::new([0u8; 32]);
             key.copy_from_slice(&bytes);
             let snapshot = import_encrypted_bundle(Path::new(&bundle))?;
+            let manifest = verify_snapshot_content_id(&key, &snapshot)?;
             restore_snapshot_to_folder(
                 &key,
                 &snapshot,
@@ -1308,8 +1317,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_restoreEncry
             )?;
             Ok(serde_json::json!({
                 "snapshot_id":snapshot.snapshot_id.0,
-                "file_count":snapshot.fingerprint.file_count,
-                "total_bytes":snapshot.fingerprint.total_bytes
+                "file_count":manifest.entries.iter().filter(|entry| entry.kind != save_domain::FileKind::Tombstone).count(),
+                "total_bytes":manifest.entries.iter().filter(|entry| entry.kind != save_domain::FileKind::Tombstone).map(|entry| entry.size).sum::<u64>()
             })
             .to_string())
         },
@@ -1607,6 +1616,10 @@ mod tests {
             SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "slot1")),
         )
         .unwrap();
+        assert!(verify_snapshot_content_id(&secret, &snapshot).is_ok());
+        let mut forged_id = snapshot.clone();
+        forged_id.snapshot_id = SnapshotId::from_parts(&[b"forged-bundle-id"]);
+        assert!(verify_snapshot_content_id(&secret, &forged_id).is_err());
         let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest).unwrap();
         let object = |id: String, bytes: Vec<u8>| DownloadObject {
             object_id: id,

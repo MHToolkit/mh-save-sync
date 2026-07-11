@@ -604,13 +604,13 @@ class LocalBackupRestorePipeline(private val context: Context) {
         )
         val lease = quiescence.acquire(operationId, challenge)
         var durable = DurableRestoreLease(lease, fingerprint)
-        RestoreLeaseStore.write(operation, durable)
         val current = File(operation, "before")
         val desired = File(operation, "incoming")
         val encryptedCurrent = File(operation, "before.mhsavebundle")
         var secret: ByteArray? = null
         var terminalReleased = false
         try {
+            RestoreLeaseStore.write(operation, durable)
             val currentCapture = SafStableStager(context).capture(treeUri)
             check(currentCapture.root.renameTo(current) || currentCapture.root.copyRecursively(current, false)) {
                 "local_history_current_backup_failed"
