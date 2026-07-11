@@ -23,8 +23,10 @@ class AndroidSecretVault(private val context: Context) {
         require(secret.size == 32)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val encrypted = cipher.doFinal(secret)
-        prefs.edit().putString("wrapped", android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP))
-            .putString("iv", android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP)).commit()
+        check(
+            prefs.edit().putString("wrapped", android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP))
+                .putString("iv", android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP)).commit()
+        ) { "无法安全保存恢复密钥" }
     }
     fun load(): ByteArray {
         val encrypted = android.util.Base64.decode(requireNotNull(prefs.getString("wrapped", null)), android.util.Base64.NO_WRAP)
