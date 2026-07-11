@@ -37,16 +37,22 @@ class SafStableStager(private val context: Context) {
     suspend fun capture(treeUri: Uri, debounceMillis: Long = 2000, observationGapMillis: Long = 500): StableStage {
         kotlinx.coroutines.delay(debounceMillis)
         val first = copyOnce(treeUri, "first")
-        kotlinx.coroutines.delay(observationGapMillis)
-        val second = copyOnce(treeUri, "second")
         try {
-            SafStabilityPolicy.requireMatching(first.fingerprint, second.fingerprint)
-        } catch (error: IllegalArgumentException) {
-            first.root.deleteRecursively(); second.root.deleteRecursively()
-            throw IllegalStateException(error.message, error)
+            kotlinx.coroutines.delay(observationGapMillis)
+            val second = copyOnce(treeUri, "second")
+            try {
+                SafStabilityPolicy.requireMatching(first.fingerprint, second.fingerprint)
+                return second
+            } catch (error: Throwable) {
+                second.root.deleteRecursively()
+                if (error is IllegalArgumentException) {
+                    throw IllegalStateException(error.message, error)
+                }
+                throw error
+            }
+        } finally {
+            first.root.deleteRecursively()
         }
-        first.root.deleteRecursively()
-        return second
     }
 
     private fun copyOnce(treeUri: Uri, suffix: String): StableStage {

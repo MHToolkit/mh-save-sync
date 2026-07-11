@@ -68,6 +68,20 @@ object SyncServerProbe {
         }
     }
 
+    /** Returns the exact CAS base. Network/protocol failures are never mapped to an empty head. */
+    suspend fun fetchHeadForReplace(serverEndpoint: String): String? = withContext(Dispatchers.IO) {
+        val server = normalizeServer(serverEndpoint)
+        require(server.isNotBlank()) { "请先填写服务器地址" }
+        val ready = get("$server/ready")
+        check(ready.status in 200..299) { "服务器暂时不可用" }
+        val head = get("$server/v1/heads/$MH3G_NEMESSIX_LOGICAL_SAVE_ID")
+        when (head.status) {
+            404 -> null
+            in 200..299 -> head.body.trim().trim('"').ifBlank { null }
+            else -> error("无法读取云端版本")
+        }
+    }
+
     fun normalizeServer(serverEndpoint: String): String =
         serverEndpoint.trim().trimEnd('/')
 

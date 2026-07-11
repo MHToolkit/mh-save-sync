@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -43,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
@@ -135,6 +137,12 @@ class MainActivity : ComponentActivity() {
         var conflictVisible by remember { mutableStateOf(false) }
         var restoreCloudConfirmVisible by remember { mutableStateOf(false) }
         var localReplaceCloudConfirmVisible by remember { mutableStateOf(false) }
+        var recoverySecretVisible by remember { mutableStateOf(false) }
+        var recoverySecretInput by remember { mutableStateOf("") }
+        var recoverySecretError by remember { mutableStateOf("") }
+        var hasRecoverySecret by remember { mutableStateOf(AndroidSecretVault(this).hasSecret()) }
+        var observedReplaceHead by remember { mutableStateOf<String?>(null) }
+        var replaceProbeInProgress by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val serverEndpointFocusRequester = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
@@ -192,6 +200,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        DisposableEffect(recoverySecretVisible) {
+            if (recoverySecretVisible) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+            onDispose {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
+
         val folderPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree(),
         ) { uri ->
@@ -239,19 +256,55 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        fun queueLocalReplaceCloud() {
-            val reason = "user-use-local"
-            SyncScheduler.enqueueImmediate(this@MainActivity, reason)
+        fun executeLocalReplaceCloud() {
+            val observed = observedReplaceHead
             persistSyncStatus(
-                reason = reason,
-                summary = SyncMessages.localReplaceCloudQueued(
-                    target = "MH3G / Android Nemessix",
-                    serverEndpoint = serverEndpoint,
-                    sessionActive = sessionActive,
-                ),
-                phase = SyncMessages.queuedPhase(reason),
-                action = SyncMessages.queuedNextAction(reason, sessionActive),
+                reason = "user-use-local",
+                summary = "正在读取两次稳定存档并加密上传；不会修改本地原始存档。",
+                phase = "正在验证并上传",
+                action = "请保持应用在前台；失败不会伪报成功。",
             )
+            scope.launch {
+                val tree = preferences.getString(SyncScheduler.SAF_ROOT, null)
+                val result = runCatching {
+                    requireNotNull(tree) { "请先授权 Nemessix 存档目录" }
+                    LocalReplacePipeline(this@MainActivity).execute(
+                        serverEndpoint,
+                        android.net.Uri.parse(tree),
+                        observed,
+                        sessionActive,
+                    )
+                }
+                result.fold(
+                    onSuccess = { upload ->
+                        when (upload) {
+                            is LocalReplaceResult.Uploaded -> persistSyncStatus(
+                                "user-use-local",
+                                "本地存档已设为云端最新（版本 …${upload.cloudHead.takeLast(6)}，${upload.fileCount} 个文件）。",
+                                "上传完成",
+                                "Mac 端启动前检查后即可看到该版本。",
+                            )
+                            is LocalReplaceResult.Conflict -> persistSyncStatus(
+                                "user-use-local-conflict",
+                                "确认后云端版本仍发生竞争变化，本地快照已保留为冲突分支 …${upload.snapshotId.takeLast(6)}，云端 HEAD 仍为 …${upload.cloudHead.takeLast(6)}。",
+                                "已保留冲突，未覆盖云端",
+                                "重新检查云端版本后再决定，不会静默覆盖。",
+                            )
+                            LocalReplaceResult.Failed -> persistSyncStatus(
+                                "user-use-local-failed", "上传失败；本地原始存档和云端 HEAD 均未被本应用声称修改。",
+                                "上传失败", "检查网络、密钥和目录授权后重试。", "同步失败",
+                            )
+                        }
+                    },
+                    onFailure = {
+                        persistSyncStatus(
+                            "user-use-local-failed", "本地替换云端未完成；不会伪报成功。",
+                            "上传失败", "确认 Nemessix 已退出、网络可用后重新检查。",
+                            it.message ?: "同步失败",
+                        )
+                    },
+                )
+            }
         }
 
         fun queueRestoreCloudHead() {
@@ -350,10 +403,59 @@ class MainActivity : ComponentActivity() {
             LocalReplaceCloudConfirmDialog(
                 serverEndpoint = serverEndpoint,
                 sessionActive = sessionActive,
+                observedHead = observedReplaceHead,
                 onDismiss = { localReplaceCloudConfirmVisible = false },
                 onConfirm = {
                     localReplaceCloudConfirmVisible = false
-                    queueLocalReplaceCloud()
+                    executeLocalReplaceCloud()
+                },
+            )
+        }
+
+        if (recoverySecretVisible) {
+            AlertDialog(
+                onDismissRequest = {
+                    recoverySecretInput = ""
+                    recoverySecretError = ""
+                    recoverySecretVisible = false
+                },
+                title = { Text("导入恢复密钥") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("一期仅接受 64 位十六进制恢复密钥。密钥会由 Android Keystore 加密保存，不会发送到服务器。")
+                        OutlinedTextField(
+                            value = recoverySecretInput,
+                            onValueChange = { recoverySecretInput = it; recoverySecretError = "" },
+                            label = { Text("64 位十六进制密钥") },
+                            isError = recoverySecretError.isNotBlank(),
+                            supportingText = { if (recoverySecretError.isNotBlank()) Text(recoverySecretError) },
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        var decoded: ByteArray? = null
+                        try {
+                            decoded = RecoverySecretFormat.decodeHex(recoverySecretInput)
+                            recoverySecretInput = ""
+                            AndroidSecretVault(this@MainActivity).store(decoded)
+                            hasRecoverySecret = true
+                            recoverySecretVisible = false
+                            recoverySecretError = ""
+                        } catch (error: IllegalArgumentException) {
+                            recoverySecretError = error.message ?: "恢复密钥格式不正确"
+                        } finally {
+                            decoded?.fill(0)
+                        }
+                    }) { Text("安全导入") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        recoverySecretInput = ""
+                        recoverySecretVisible = false
+                    }) { Text("取消") }
                 },
             )
         }
@@ -378,7 +480,7 @@ class MainActivity : ComponentActivity() {
                 ).orEmpty()
                 if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
                     Text(
-                        "测试版 · 同步功能尚未启用",
+                        "测试版 · 服务器认证升级中，存档写入暂未开放",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelLarge,
                     )
@@ -489,6 +591,14 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Text(if (authorized) "更换 Nemessix 存档目录" else "选择 Android Nemessix 存档目录")
                     }
+                }
+
+                CardSection("端到端加密") {
+                    StatusLine("恢复密钥", if (hasRecoverySecret) "已安全导入" else "尚未导入，无法上传")
+                    OutlinedButton(
+                        onClick = { recoverySecretVisible = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (hasRecoverySecret) "重新导入恢复密钥" else "导入恢复密钥") }
                 }
 
                 CardSection("启动 MH3G 前") {
@@ -611,6 +721,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("同步动作") {
+                    Text("“本地设为云端最新”链路已接入安全确认，但服务端设备签名与账号隔离升级完成前保持关闭。")
                     Button(
                         enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
                         onClick = {
@@ -655,12 +766,41 @@ class MainActivity : ComponentActivity() {
                         Text("下载云端存档")
                     }
                     OutlinedButton(
-                        enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                        enabled = authorized && gameEnabled && hasRecoverySecret &&
+                            SyncScheduler.LOCAL_REPLACE_PIPELINE_AVAILABLE && !replaceProbeInProgress,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("user-use-local-no-server", "本地替换云端")
                             } else {
-                                localReplaceCloudConfirmVisible = true
+                                replaceProbeInProgress = true
+                                persistSyncStatus(
+                                    "user-use-local-probe", "正在读取云端当前版本；此时不会读取或上传本地存档。",
+                                    "正在检查云端版本", "检查后会要求二次确认。",
+                                )
+                                scope.launch {
+                                    runCatching {
+                                        LocalReplacePolicy.requireSessionStopped(sessionActive)
+                                        NemessixProcessGate(this@MainActivity).requireStopped()
+                                        SyncServerProbe.fetchHeadForReplace(serverEndpoint)
+                                    }.fold(
+                                        onSuccess = {
+                                            observedReplaceHead = it
+                                            localReplaceCloudConfirmVisible = true
+                                            persistSyncStatus(
+                                                "user-use-local-confirm", "已锁定待确认的云端版本 ${it?.let { h -> "…${h.takeLast(6)}" } ?: "（尚无版本）"}。",
+                                                "等待二次确认", "确认后将再次校验该版本，再创建稳定快照。",
+                                            )
+                                        },
+                                        onFailure = {
+                                            persistSyncStatus(
+                                                "user-use-local-probe-failed", "无法安全开始本地替换云端。",
+                                                "检查失败", "确认 Nemessix 已退出、服务器可用后重试。",
+                                                it.message ?: "检查失败",
+                                            )
+                                        },
+                                    )
+                                    replaceProbeInProgress = false
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -796,6 +936,7 @@ class MainActivity : ComponentActivity() {
     private fun LocalReplaceCloudConfirmDialog(
         serverEndpoint: String,
         sessionActive: Boolean,
+        observedHead: String?,
         onDismiss: () -> Unit,
         onConfirm: () -> Unit,
     ) {
@@ -803,13 +944,14 @@ class MainActivity : ComponentActivity() {
             onDismissRequest = onDismiss,
             title = { Text(SyncMessages.localReplaceCloudConfirmTitle()) },
             text = {
-                Text(
-                    SyncMessages.localReplaceCloudConfirmBody(
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("已观察到云端版本：${observedHead?.let { "…${it.takeLast(6)}" } ?: "尚无云端版本"}。确认时会再次校验；若已变化则保留冲突，不覆盖 HEAD。")
+                    Text(SyncMessages.localReplaceCloudConfirmBody(
                         target = "MH3G / Android Nemessix",
                         serverEndpoint = serverEndpoint,
                         sessionActive = sessionActive,
-                    ),
-                )
+                    ))
+                }
             },
             confirmButton = {
                 TextButton(onClick = onConfirm) {
