@@ -798,6 +798,25 @@ func configuredServerRestore(context: MacSyncContext) throws -> String {
     ])
 }
 
+func configuredResolveConflict(
+    context: MacSyncContext,
+    conflictSnapshotID: String,
+    chosenSnapshotID: String,
+    resolution: String
+) throws -> String {
+    let serverURL = try serverURLOrThrow(context)
+    let secret = try recoverySecretHexOrThrow(context)
+    return try runMHSave([
+        "server-resolve-conflict",
+        "--server-url", serverURL,
+        "--secret-hex", secret,
+        "--logical-save-id", mh3gNemessixLogicalSaveID,
+        "--conflict-snapshot-id", conflictSnapshotID,
+        "--chosen-snapshot-id", chosenSnapshotID,
+        "--resolution", resolution,
+    ])
+}
+
 func isNemessixRunning() -> Bool {
     NSWorkspace.shared.runningApplications.contains { app in
         app.bundleIdentifier == "io.github.vincentadamnemessisx.nemessix" ||
@@ -1150,6 +1169,10 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restoreCloudToLocal() {
+        performCloudRestore(resolving: nil)
+    }
+
+    private func performCloudRestore(resolving conflictState: UnresolvedConflictState?) {
         if isNemessixRunning() {
             showAlert(title: "不能恢复：Nemessix 仍在运行", message: "请先退出 MH3G/Nemessix。运行中绝不把云端内容覆盖到模拟器存档目录。")
             return
@@ -1160,10 +1183,31 @@ final class MenuController: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "确认恢复")
         confirm.addButton(withTitle: "取消")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
-        performSyncAction(title: "云端覆盖本地", state: "云端恢复") {
+        performSyncAction(
+            title: conflictState == nil ? "云端覆盖本地" : "冲突处理",
+            state: conflictState == nil ? "云端恢复" : "保留云端版本"
+        ) {
             let raw = try configuredServerRestore(context: self.context)
             self.recordRestoreResult(raw)
-            return presentSyncResult(raw, kind: .restore)
+            guard let conflictState else {
+                return presentSyncResult(raw, kind: .restore)
+            }
+            guard let restoredHead = headEstablishedByRestoreResult(raw) else {
+                throw CommandFailure(
+                    command: ["server-restore"],
+                    status: 2,
+                    stderr: "云端已恢复到本地，但返回结果没有可验证的版本 ID；冲突标记没有改动。请刷新状态后重试。\n"
+                )
+            }
+            try self.resolveCapturedConflictBranches(
+                conflictState,
+                chosenSnapshotID: restoredHead,
+                resolution: "keep-cloud-head"
+            )
+            return presentSyncResult(raw, kind: .restore) + "\n\n" + conflictResolutionSummary(
+                resolvedCount: conflictState.snapshotIDs.count,
+                chosenSnapshotID: restoredHead
+            )
         }
     }
 
@@ -1176,11 +1220,24 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     @objc private func showConflict() {
         refreshContext()
+        let statusRaw: String
         let summary: String
         do {
-            summary = presentSyncResult(try configuredServerStatus(context: context), kind: .status)
+            statusRaw = try configuredServerStatus(context: context)
+            summary = presentSyncResult(statusRaw, kind: .status)
         } catch {
             showAlert(title: "无法读取冲突状态", message: "\(error)")
+            return
+        }
+        let conflictState: UnresolvedConflictState
+        do {
+            conflictState = try unresolvedConflictState(statusRaw)
+        } catch {
+            showAlert(title: "无法安全处理冲突", message: error.localizedDescription)
+            return
+        }
+        guard !conflictState.snapshotIDs.isEmpty else {
+            showAlert(title: "当前没有冲突", message: "本地与云端没有待处理的冲突分支。")
             return
         }
         let choice = NSAlert()
@@ -1191,13 +1248,51 @@ final class MenuController: NSObject, NSApplicationDelegate {
         choice.addButton(withTitle: "暂不处理")
         let response = choice.runModal()
         if response == .alertFirstButtonReturn {
-            performSyncAction(title: "本地版本已设为云端最新", state: "替换云端版本") {
+            performSyncAction(title: "冲突处理", state: "保留本地版本") {
                 let raw = try configuredReplaceCloudHead(context: self.context)
                 self.recordUploadResult(raw)
-                return presentSyncResult(raw, kind: .upload)
+                guard let newHead = headEstablishedBySyncResult(raw) else {
+                    throw CommandFailure(
+                        command: ["server-upload", "--replace-cloud-head"],
+                        status: 2,
+                        stderr: "本地上传结果没有可验证的新 HEAD；冲突标记没有改动。请刷新云端状态后重试。\n"
+                    )
+                }
+                try self.resolveCapturedConflictBranches(
+                    conflictState,
+                    chosenSnapshotID: newHead,
+                    resolution: "replace-with-local"
+                )
+                return presentSyncResult(raw, kind: .upload) + "\n\n" + conflictResolutionSummary(
+                    resolvedCount: conflictState.snapshotIDs.count,
+                    chosenSnapshotID: newHead
+                )
             }
         } else if response == .alertSecondButtonReturn {
-            restoreCloudToLocal()
+            performCloudRestore(resolving: conflictState)
+        }
+    }
+
+    private func resolveCapturedConflictBranches(
+        _ conflictState: UnresolvedConflictState,
+        chosenSnapshotID: String,
+        resolution: String
+    ) throws {
+        for (index, conflictID) in conflictState.snapshotIDs.enumerated() {
+            do {
+                _ = try configuredResolveConflict(
+                    context: context,
+                    conflictSnapshotID: conflictID,
+                    chosenSnapshotID: chosenSnapshotID,
+                    resolution: resolution
+                )
+            } catch {
+                throw CommandFailure(
+                    command: ["server-resolve-conflict"],
+                    status: 2,
+                    stderr: "已完成存档方向选择，但只处理了 \(index)/\(conflictState.snapshotIDs.count) 个冲突标记。云端 HEAD 可能已被其他设备推进（CAS stale），或网络请求失败；不会谎称全部完成。历史版本仍保留。请刷新“处理冲突”后重试。底层错误：\(error)\n"
+                )
+            }
         }
     }
 

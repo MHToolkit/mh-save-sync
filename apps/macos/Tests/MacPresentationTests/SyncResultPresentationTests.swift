@@ -35,6 +35,28 @@ import Testing
     #expect(headFromStatusResult(#"{"cloud_head":"observed123"}"#) == "observed123")
 }
 
+@Test func conflictStateUsesExactUnresolvedBranchIDs() throws {
+    let raw = #"{"cloud_head":"head-12345678","conflict_count":2,"conflict_diffs":[{"conflict_snapshot":"branch-a"},{"conflict_snapshot":"branch-b"}]}"#
+    let state = try unresolvedConflictState(raw)
+    #expect(state.cloudHead == "head-12345678")
+    #expect(state.snapshotIDs == ["branch-a", "branch-b"])
+}
+
+@Test func conflictStateFailsClosedWhenIdentifiersAreIncomplete() {
+    let raw = #"{"cloud_head":"head","conflict_count":2,"conflict_diffs":[{"conflict_snapshot":"branch-a"}]}"#
+    #expect(throws: ConflictStateError.self) {
+        try unresolvedConflictState(raw)
+    }
+}
+
+@Test func resolvedSummaryPromisesHistoryRetentionButHidesFullIDs() {
+    let result = conflictResolutionSummary(resolvedCount: 2, chosenSnapshotID: "1234567890abcdef")
+    #expect(result.contains("已处理 2 个冲突分支"))
+    #expect(result.contains("12345678…"))
+    #expect(result.contains("旧版本仍保留"))
+    #expect(!result.contains("1234567890abcdef"))
+}
+
 @Test func sessionLedgerKeepsTheHeadObservedBeforePlay() throws {
     var ledger = SaveSessionLedger()
     ledger.recordEstablishedHead(logicalSaveID: "mh3g", head: "before-play")

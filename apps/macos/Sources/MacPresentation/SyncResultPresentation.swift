@@ -64,6 +64,55 @@ public func headFromStatusResult(_ raw: String) -> String? {
     resultJSON(raw)?["cloud_head"] as? String
 }
 
+public struct UnresolvedConflictState: Equatable {
+    public let cloudHead: String
+    public let snapshotIDs: [String]
+
+    public init(cloudHead: String, snapshotIDs: [String]) {
+        self.cloudHead = cloudHead
+        self.snapshotIDs = snapshotIDs
+    }
+}
+
+public enum ConflictStateError: LocalizedError {
+    case missingCloudHead
+    case incomplete(expected: Int, decoded: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingCloudHead:
+            return "云端当前版本不可读，未执行冲突处理。请刷新云端状态后重试。"
+        case let .incomplete(expected, decoded):
+            return "服务器报告有 \(expected) 个冲突，但只读取到 \(decoded) 个分支标识；为避免误处理，本次没有继续。"
+        }
+    }
+}
+
+/// Extracts the exact unresolved branches shown by the same authenticated status read.
+/// It intentionally fails closed when the summary count and identifiers disagree.
+public func unresolvedConflictState(_ raw: String) throws -> UnresolvedConflictState {
+    guard let json = resultJSON(raw),
+          let cloudHead = json["cloud_head"] as? String,
+          !cloudHead.isEmpty
+    else { throw ConflictStateError.missingCloudHead }
+    let expected = json["conflict_count"] as? Int ?? 0
+    let reports = json["conflict_diffs"] as? [[String: Any]] ?? []
+    let ids = reports.compactMap { report -> String? in
+        guard let id = report["conflict_snapshot"] as? String, !id.isEmpty else { return nil }
+        return id
+    }
+    var seen = Set<String>()
+    let uniqueIDs = ids.filter { seen.insert($0).inserted }
+    guard expected == uniqueIDs.count else {
+        throw ConflictStateError.incomplete(expected: expected, decoded: uniqueIDs.count)
+    }
+    return UnresolvedConflictState(cloudHead: cloudHead, snapshotIDs: uniqueIDs)
+}
+
+public func conflictResolutionSummary(resolvedCount: Int, chosenSnapshotID: String) -> String {
+    "已处理 \(resolvedCount) 个冲突分支。\n\n云端当前版本：\(shortSnapshotID(chosenSnapshotID) ?? "未知")…\n旧版本仍保留在历史记录中。"
+}
+
 public func presentSyncResult(
     _ raw: String,
     kind: SyncResultKind,
