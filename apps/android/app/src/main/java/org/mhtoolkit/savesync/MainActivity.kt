@@ -173,6 +173,8 @@ class MainActivity : ComponentActivity() {
             )
         }
         var conflictVisible by remember { mutableStateOf(false) }
+        var helpVisible by remember { mutableStateOf(false) }
+        var settingsVisible by remember { mutableStateOf(false) }
         var restoreCloudConfirmVisible by remember { mutableStateOf(false) }
         var localReplaceCloudConfirmVisible by remember { mutableStateOf(false) }
         var recoverySecretVisible by remember { mutableStateOf(false) }
@@ -539,6 +541,16 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        if (helpVisible) {
+            HelpDialog(
+                onConflictHelp = {
+                    helpVisible = false
+                    conflictVisible = true
+                },
+                onDismiss = { helpVisible = false },
+            )
+        }
+
         Scaffold { padding ->
             Column(
                 modifier = Modifier
@@ -548,328 +560,66 @@ class MainActivity : ComponentActivity() {
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text("MH 云存档同步", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    "MH3G · Android Nemessix",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                val syncTarget = preferences.getString(
-                    SyncScheduler.LAST_SYNC_TARGET,
-                    "MH3G / Android Nemessix",
-                ).orEmpty()
-                Text(
-                    if (authorized && hasRecoverySecret && serverEndpoint.isNotBlank()) {
-                        "手动上传、下载可用 · 自动同步尚在验证"
-                    } else {
-                        "完成服务器、密钥和目录设置后即可同步"
-                    },
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelLarge,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column {
+                        Text("MH 云存档", style = MaterialTheme.typography.headlineMedium)
+                        Text("MH3G · Android Nemessix", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    TextButton(onClick = { helpVisible = true }) {
+                        Text(DashboardContentPolicy.helpLabel)
+                    }
+                }
 
-                CardSection("当前状态和下一步") {
-                    StatusLine(
-                        "状态",
-                        SyncMessages.dashboardStateSummary(
-                            authorized = authorized,
-                            gameEnabled = gameEnabled,
-                            endpoint = serverEndpoint,
-                            sessionActive = sessionActive,
+                CardSection("存档状态") {
+                    Text(
+                        DashboardContentPolicy.status(
+                            authorized,
+                            gameEnabled,
+                            serverEndpoint.isNotBlank(),
+                            sessionActive,
                         ),
+                        style = MaterialTheme.typography.titleMedium,
                     )
-                    Button(
-                        enabled = true,
-                        onClick = {
-                            when {
-                                !gameEnabled -> {
-                                    gameEnabled = true
-                                    preferences.edit()
-                                        .putBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)
-                                        .apply()
-                                    persistSyncStatus(
-                                        reason = "enable-mh3g",
-                                        summary = "已打开 MH3G 同步开关。下一步请选择 Android Nemessix 存档目录并填写和 Mac 一样的服务器地址。",
-                                        phase = "MH3G 同步已开启",
-                                        action = "继续完成目录授权和服务器地址设置；未完成前不会上传到任何地方。",
-                                    )
-                                }
-                                !authorized -> folderPicker.launch(null)
-                                serverEndpoint.isBlank() -> {
-                                    serverEndpointFocusRequester.requestFocus()
-                                    keyboardController?.show()
-                                    persistNoServerStatus("dashboard-no-server", "启动前检查")
-                                }
-                                sessionActive -> toggleSessionProtection()
-                                else -> runPrelaunchCheck()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            if (authorized && gameEnabled && serverEndpoint.isNotBlank()) {
-                                "检查云端存档"
-                            } else {
-                                SyncMessages.dashboardPrimaryActionLabel(
-                                    authorized = authorized,
-                                    gameEnabled = gameEnabled,
-                                    endpoint = serverEndpoint,
-                                    sessionActive = sessionActive,
-                                )
-                            },
-                        )
+                    Text(syncPhase, color = MaterialTheme.colorScheme.primary)
+                    if (syncError.isNotBlank()) {
+                        Text(syncError, color = MaterialTheme.colorScheme.error)
                     }
                 }
 
-                CardSection("同步到哪里") {
-                    OutlinedTextField(
-                        value = serverEndpoint,
-                        onValueChange = {
-                            serverEndpoint = it
-                            preferences.edit()
-                                .putString(SyncScheduler.SERVER_ENDPOINT, it.trim())
-                                .apply()
-                        },
-                        label = { Text("服务器地址") },
-                        placeholder = { Text("例如 http://192.168.1.10:18080") },
-                        supportingText = {
-                            Text("Mac、Android 都填同一个地址；服务器只保存端到端加密后的快照。")
-                        },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(serverEndpointFocusRequester),
-                    )
-                    StatusLine(
-                        "当前目标",
-                        preferences.getString(
-                            SyncScheduler.LAST_SYNC_TARGET,
-                            "MH3G / Android Nemessix",
-                        ).orEmpty(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("MH3G 同步开关", fontWeight = FontWeight.Medium)
-                            Text("关闭后不会自动上传/恢复该游戏，历史版本仍保留。")
-                        }
-                        Switch(
-                            checked = gameEnabled,
-                            onCheckedChange = {
-                                gameEnabled = it
-                                preferences.edit()
-                                    .putBoolean(SyncScheduler.GAME_MH3G_ENABLED, it)
-                                    .apply()
-                            },
-                        )
-                    }
-                }
-
-                CardSection("Android Nemessix 存档目录") {
-                    StatusLine("目录权限", if (authorized) "已授权存档目录" else "未授权，无法读取/恢复存档")
+                CardSection("快速同步") {
                     Button(
-                        onClick = { folderPicker.launch(null) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (authorized) "更换 Nemessix 存档目录" else "选择 Android Nemessix 存档目录")
-                    }
-                }
-
-                CardSection("端到端加密") {
-                    StatusLine("恢复密钥", if (hasRecoverySecret) "已安全导入" else "尚未导入，无法上传")
-                    OutlinedButton(
-                        onClick = { recoverySecretVisible = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (hasRecoverySecret) "重新导入恢复密钥" else "导入恢复密钥") }
-                }
-
-                CardSection("启动 MH3G 前") {
-                    StatusLine("检查结果", launchGate)
-                    Button(
-                        enabled = authorized && gameEnabled,
-                        onClick = { runPrelaunchCheck() },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("启动前检查")
-                    }
-                    OutlinedButton(
-                        enabled = authorized && gameEnabled,
-                        onClick = {
-                            launchGate = "正在启动前检查；检查完成前不会打开 Nemessix，也不会修改本地存档。"
-                            preferences.edit()
-                                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                                .putString(SyncScheduler.LAUNCH_GATE_REASON, "launch-precheck")
-                                .putString(SyncScheduler.LAST_SYNC_REASON, "launch-precheck")
-                                .apply()
-                            scope.launch {
-                                val result = SyncServerProbe.checkPrelaunch(
-                                    context = this@MainActivity,
-                                    serverEndpoint = serverEndpoint,
-                                    emulatorRunning = sessionActive,
-                                )
-                                launchGate = result.summary
-                                launchGateReason = result.reason
-                                lastSummary = if (result.remoteHead != null) {
-                                    "已发现${result.remoteVersionLabel ?: "云端版本"}。为避免覆盖风险，暂不自动打开 Nemessix；请直接在启动前检查卡片里选择下载、恢复或继续本地。"
-                                } else if (!result.cloudReachable) {
-                                    SyncMessages.launchPausedForCloudUnavailable()
-                                } else {
-                                    launchNemessixOrExplain()
-                                }
-                                preferences.edit()
-                                    .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
-                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                                    .putString(SyncScheduler.LAST_SYNC_REASON, "launch-nemessix")
-                                    .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
-                                    .apply()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("检查后打开 Nemessix")
-                    }
-                    OutlinedButton(
-                        enabled = authorized && gameEnabled,
-                        onClick = { conflictVisible = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("查看冲突处理说明")
-                    }
-                    val canContinueLocalAfterGate = launchGateReason in setOf(
-                        "prelaunch-no-server",
-                        "prelaunch-cloud-unavailable",
-                        "prelaunch-remote-head",
-                    )
-                    val canActOnRemoteAfterGate = launchGateReason == "prelaunch-remote-head"
-                    if (canActOnRemoteAfterGate) {
-                        Text(
-                            SyncMessages.prelaunchRemoteDecisionHint(),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedButton(
-                            enabled = authorized && gameEnabled && hasRecoverySecret && serverEndpoint.isNotBlank() &&
-                                SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
-                            onClick = {
-                                downloadCloudHeadToCache()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("先下载云端到本机缓存（不覆盖）")
-                        }
-                        OutlinedButton(
-                            enabled = authorized && gameEnabled && hasRecoverySecret && serverEndpoint.isNotBlank() &&
-                                SyncScheduler.CLOUD_RESTORE_PIPELINE_AVAILABLE,
-                            onClick = { restoreCloudConfirmVisible = true },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("云端覆盖本地（先备份，需停止 Nemessix）")
-                        }
-                    }
-                    if (canContinueLocalAfterGate) {
-                        Text(
-                            SyncMessages.continueLocalRiskHint(),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    OutlinedButton(
-                        enabled = authorized && gameEnabled && canContinueLocalAfterGate,
-                        onClick = {
-                            val summary = SyncMessages.continueLocalLaunchQueued()
-                            val launchResult = launchNemessixOrExplain()
-                            launchGate = "$summary\n$launchResult"
-                            launchGateReason = "continue-local-launch"
-                            persistSyncStatus(
-                                reason = "continue-local-launch",
-                                summary = summary,
-                                phase = SyncMessages.continueLocalPhase(),
-                                action = SyncMessages.continueLocalNextAction(),
-                            )
-                            preferences.edit()
-                                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
-                                .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
-                                .apply()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("继续使用本地并打开 Nemessix")
-                    }
-                }
-
-                CardSection("同步动作") {
-                    Text("把手机进度带到 Mac：点“用本地替换云端”。旧版本仍会保留。")
-                    Button(
-                        enabled = authorized && gameEnabled && hasRecoverySecret &&
-                            SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
-                        onClick = {
-                            if (serverEndpoint.isBlank()) {
-                                persistNoServerStatus("manual-upload-no-server", "同步到服务器")
-                            } else {
-                                val reason = "manual-upload"
-                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.manualUploadQueued(
-                                        "MH3G / Android Nemessix",
-                                        serverEndpoint,
-                                    ),
-                                    phase = SyncMessages.queuedPhase(reason),
-                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("自动上传（尚在验证）")
-                    }
-                    Button(
-                        enabled = authorized && gameEnabled && hasRecoverySecret &&
-                            SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
-                        onClick = {
-                            if (serverEndpoint.isBlank()) {
-                                persistNoServerStatus("download-cache-no-server", "同步到本机缓存")
-                            } else {
-                                downloadCloudHeadToCache()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("下载云端存档")
-                    }
-                    OutlinedButton(
                         enabled = authorized && gameEnabled && hasRecoverySecret &&
                             SyncScheduler.LOCAL_REPLACE_PIPELINE_AVAILABLE && !replaceProbeInProgress,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                persistNoServerStatus("user-use-local-no-server", "本地替换云端")
+                                persistNoServerStatus("user-use-local-no-server", "上传手机存档")
                             } else {
                                 replaceProbeInProgress = true
                                 persistSyncStatus(
-                                    "user-use-local-probe", "正在读取云端当前版本；此时不会读取或上传本地存档。",
-                                    "正在检查云端版本", "检查后会要求二次确认。",
+                                    "user-use-local-probe", "正在检查云端版本。",
+                                    "检查云端", "检查完成后请确认上传。",
                                 )
                                 scope.launch {
                                     runCatching {
                                         LocalReplacePolicy.requireSessionStopped(sessionActive)
                                         NemessixProcessGate(this@MainActivity).requireStopped()
-                                        SyncServerProbe.fetchHeadForReplace(
-                                            this@MainActivity,
-                                            serverEndpoint,
-                                        )
+                                        SyncServerProbe.fetchHeadForReplace(this@MainActivity, serverEndpoint)
                                     }.fold(
                                         onSuccess = {
                                             observedReplaceHead = it
                                             localReplaceCloudConfirmVisible = true
                                             persistSyncStatus(
-                                                "user-use-local-confirm", "已记录待确认的云端版本 ${it?.let { h -> "…${h.takeLast(6)}" } ?: "（尚无版本）"}。",
-                                                "等待二次确认", "确认后将再次校验该版本，再创建稳定快照。",
+                                                "user-use-local-confirm", "云端版本已检查。",
+                                                "等待确认", "确认后上传稳定快照。",
                                             )
                                         },
                                         onFailure = {
                                             persistSyncStatus(
-                                                "user-use-local-probe-failed", "无法安全开始本地替换云端。",
-                                                "检查失败", "确认 Nemessix 已退出、服务器可用后重试。",
+                                                "user-use-local-probe-failed", "无法开始上传。",
+                                                "检查失败", "请退出 Nemessix 并检查网络。",
                                                 "检查失败（代码：cloud_probe_failed）",
                                             )
                                         },
@@ -879,59 +629,126 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("用本地替换云端（手机进度最新）")
-                    }
+                    ) { Text(DashboardContentPolicy.uploadLabel) }
                     OutlinedButton(
                         enabled = authorized && gameEnabled && hasRecoverySecret &&
                             SyncScheduler.CLOUD_RESTORE_PIPELINE_AVAILABLE,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
-                                persistNoServerStatus("restore-no-server", "云端覆盖本地")
+                                persistNoServerStatus("restore-no-server", "恢复云端存档")
                             } else {
                                 restoreCloudConfirmVisible = true
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("用云端替换本地")
-                    }
-                    OutlinedButton(
+                    ) { Text(DashboardContentPolicy.restoreLabel) }
+                    Text("上传保留旧版本；恢复前自动备份本地。", style = MaterialTheme.typography.bodySmall)
+                }
+
+                CardSection("启动游戏") {
+                    Button(
                         enabled = authorized && gameEnabled,
-                        onClick = { toggleSessionProtection() },
+                        onClick = {
+                            launchGate = "正在检查云端…"
+                            scope.launch {
+                                val result = SyncServerProbe.checkPrelaunch(
+                                    context = this@MainActivity,
+                                    serverEndpoint = serverEndpoint,
+                                    emulatorRunning = sessionActive,
+                                )
+                                launchGate = result.summary
+                                launchGateReason = result.reason
+                                lastSummary = if (result.remoteHead != null) {
+                                    "发现云端版本，请先选择上传或恢复。"
+                                } else if (!result.cloudReachable) {
+                                    SyncMessages.launchPausedForCloudUnavailable()
+                                } else {
+                                    launchNemessixOrExplain()
+                                }
+                                preferences.edit()
+                                    .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                    .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
+                                    .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                    .apply()
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(SyncMessages.activeSessionToggleLabel(sessionActive))
+                    ) { Text(DashboardContentPolicy.launchLabel) }
+                    Text(launchGate, style = MaterialTheme.typography.bodySmall)
+                    val canContinueLocal = launchGateReason in setOf(
+                        "prelaunch-no-server", "prelaunch-cloud-unavailable", "prelaunch-remote-head",
+                    )
+                    if (canContinueLocal) {
+                        OutlinedButton(
+                            onClick = { launchNemessixOrExplain() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("仍使用本地存档启动") }
                     }
                 }
 
-                CardSection("最近状态") {
+                CardSection("最近记录") {
                     StatusLine("最近同步", lastSummary)
-                    StatusLine("处理状态", syncPhase)
-                    StatusLine("下一步动作", nextAction)
-                    if (syncError.isNotBlank()) {
-                        StatusLine("最近失败原因", syncError)
-                    }
-                    StatusLine(
-                        "最近时间",
-                        formatTime(preferences.getLong(SyncScheduler.LAST_SYNC_UNIX_MS, 0L)),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("默认仅 Wi-Fi 上传", fontWeight = FontWeight.Medium)
-                            Text("同时要求电量不是低电量；Android 周期任务最低 15 分钟级兜底。")
-                        }
-                        Switch(
-                            checked = wifiOnly,
-                            onCheckedChange = {
-                                wifiOnly = it
-                                preferences.edit().putBoolean(SyncScheduler.WIFI_ONLY, it).apply()
-                                SyncScheduler.ensurePeriodic(this@MainActivity)
+                    StatusLine("下一步", nextAction)
+                    Text(formatTime(preferences.getLong(SyncScheduler.LAST_SYNC_UNIX_MS, 0L)),
+                        style = MaterialTheme.typography.labelMedium)
+                }
+
+                OutlinedButton(
+                    onClick = { settingsVisible = !settingsVisible },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (settingsVisible) "收起设置" else DashboardContentPolicy.settingsLabel)
+                }
+
+                if (settingsVisible) {
+                    CardSection("连接与游戏") {
+                        OutlinedTextField(
+                            value = serverEndpoint,
+                            onValueChange = {
+                                serverEndpoint = it
+                                preferences.edit().putString(SyncScheduler.SERVER_ENDPOINT, it.trim()).apply()
                             },
+                            label = { Text("服务器地址") },
+                            placeholder = { Text("http://服务器:端口") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().focusRequester(serverEndpointFocusRequester),
                         )
+                        SettingSwitch("同步 MH3G", gameEnabled) {
+                            gameEnabled = it
+                            preferences.edit().putBoolean(SyncScheduler.GAME_MH3G_ENABLED, it).apply()
+                        }
+                    }
+                    CardSection("存档与密钥") {
+                        StatusLine("存档目录", if (authorized) "已授权" else "未授权")
+                        OutlinedButton(onClick = { folderPicker.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (authorized) "更换存档目录" else "选择存档目录")
+                        }
+                        StatusLine("恢复密钥", if (hasRecoverySecret) "已导入" else "未导入")
+                        OutlinedButton(
+                            onClick = { recoverySecretVisible = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (hasRecoverySecret) "重新导入密钥" else "导入密钥") }
+                    }
+                    CardSection("同步偏好") {
+                        SettingSwitch("仅 Wi-Fi 上传", wifiOnly) {
+                            wifiOnly = it
+                            preferences.edit().putBoolean(SyncScheduler.WIFI_ONLY, it).apply()
+                            SyncScheduler.ensurePeriodic(this@MainActivity)
+                        }
+                        OutlinedButton(
+                            enabled = authorized && gameEnabled && hasRecoverySecret &&
+                                SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
+                            onClick = {
+                                if (serverEndpoint.isBlank()) persistNoServerStatus("download-cache-no-server", "下载到缓存")
+                                else downloadCloudHeadToCache()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("仅下载到安全缓存") }
+                        OutlinedButton(
+                            enabled = authorized && gameEnabled,
+                            onClick = { toggleSessionProtection() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(SyncMessages.activeSessionToggleLabel(sessionActive)) }
                     }
                 }
 
@@ -960,6 +777,35 @@ class MainActivity : ComponentActivity() {
             Text(label, style = MaterialTheme.typography.labelLarge)
             Text(value, style = MaterialTheme.typography.bodyMedium)
         }
+    }
+
+    @Composable
+    private fun SettingSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+
+    @Composable
+    private fun HelpDialog(onConflictHelp: () -> Unit, onDismiss: () -> Unit) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("使用帮助") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("第一次怎么用", fontWeight = FontWeight.Bold)
+                    Text("在设置中填写服务器、授权存档目录并导入密钥。回家先恢复云端；游玩结束后上传手机存档。")
+                    Text("同步安全吗", fontWeight = FontWeight.Bold)
+                    Text("服务器只保存加密快照。恢复前会备份本地，旧版本不会立即删除。")
+                    TextButton(onClick = onConflictHelp) { Text("冲突怎么处理") }
+                }
+            },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },
+        )
     }
 
     @Composable
