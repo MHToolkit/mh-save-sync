@@ -130,7 +130,7 @@ class NemessixQuiescenceClient(private val context: Context) {
                 )
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             })
-            repeat(10) {
+            repeat(40) {
                 Thread.sleep(100)
                 runCatching {
                     context.contentResolver.call(AUTHORITY_URI, method, null, extras)
