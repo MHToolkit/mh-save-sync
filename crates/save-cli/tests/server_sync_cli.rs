@@ -306,6 +306,45 @@ async fn cli_preserves_cloud_head_and_reports_conflict_branch() {
         "conflict status must expose user-readable diff: {status_json}",
     );
 
+    let resolve = run_mh_save(&[
+        "server-resolve-conflict".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--secret-hex".into(),
+        "4444444444444444444444444444444444444444444444444444444444444444".into(),
+        "--conflict-snapshot-id".into(),
+        conflict_json["snapshot_id"].as_str().unwrap().into(),
+        "--chosen-snapshot-id".into(),
+        office_json["snapshot_id"].as_str().unwrap().into(),
+        "--resolution".into(),
+        "keep-cloud-head".into(),
+    ])
+    .await;
+    assert!(
+        resolve.status.success(),
+        "explicit conflict resolution failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    let resolve_json: Value = serde_json::from_slice(&resolve.stdout).unwrap();
+    assert_eq!(resolve_json["resolved"], true);
+    assert_eq!(
+        resolve_json["chosen_snapshot_id"],
+        office_json["snapshot_id"]
+    );
+
+    let resolved_status = run_mh_save(&[
+        "server-status".into(),
+        "--server-url".into(),
+        server_url.clone(),
+        "--secret-hex".into(),
+        "4444444444444444444444444444444444444444444444444444444444444444".into(),
+    ])
+    .await;
+    assert!(resolved_status.status.success());
+    let resolved_status_json: Value = serde_json::from_slice(&resolved_status.stdout).unwrap();
+    assert_eq!(resolved_status_json["history_count"], 2);
+    assert_eq!(resolved_status_json["conflict_count"], 0);
+
     let restored = tmp.path().join("restored-conflict-head");
     let restore = run_mh_save(&[
         "server-restore".into(),

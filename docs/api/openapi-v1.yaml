@@ -115,7 +115,26 @@ paths:
   /v1/conflicts/{logical_save_id}:
     get:
       responses:
-        '200': { description: Retained conflict branches }
+        '200': { description: Unresolved conflict branches; resolved branches remain in history }
+  /v1/conflicts/{logical_save_id}/{snapshot_id}/resolve:
+    post:
+      description: Explicitly marks a conflict handled without deleting history or applying last-write-wins. The chosen snapshot must be the current HEAD.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chosen_snapshot_id, resolution]
+              properties:
+                chosen_snapshot_id: { type: string }
+                resolution:
+                  type: string
+                  enum: [keep-cloud-head, replace-with-local]
+      responses:
+        '200': { description: Conflict marked resolved and retained in history }
+        '404': { description: Conflict snapshot not found }
+        '409': { description: Chosen snapshot is no longer current HEAD }
   /v1/retention/{logical_save_id}:
     put:
       responses:

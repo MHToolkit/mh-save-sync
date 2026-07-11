@@ -108,12 +108,34 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliEmulatorState::Stopped)]
         emulator_state: CliEmulatorState,
     },
+    /// Mark one retained conflict as handled after the user has explicitly chosen a side.
+    ServerResolveConflict {
+        #[arg(long, env = "MH_SAVE_SYNC_SERVER_URL")]
+        server_url: String,
+        #[arg(long)]
+        secret_hex: String,
+        #[arg(long)]
+        logical_save_id: Option<String>,
+        #[arg(long)]
+        conflict_snapshot_id: String,
+        #[arg(long)]
+        chosen_snapshot_id: String,
+        #[arg(long, value_enum)]
+        resolution: CliConflictResolution,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliEmulatorState {
     Stopped,
     Running,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CliConflictResolution {
+    KeepCloudHead,
+    ReplaceWithLocal,
 }
 
 impl From<CliEmulatorState> for EmulatorState {
@@ -319,6 +341,25 @@ async fn run() -> anyhow::Result<()> {
             .await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Commands::ServerResolveConflict {
+            server_url,
+            secret_hex,
+            logical_save_id,
+            conflict_snapshot_id,
+            chosen_snapshot_id,
+            resolution,
+        } => {
+            let report = server_resolve_conflict(
+                server_url,
+                secret_hex,
+                logical_save_id,
+                conflict_snapshot_id,
+                chosen_snapshot_id,
+                resolution,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
     Ok(())
 }
@@ -490,6 +531,20 @@ struct CommitSnapshotResponse {
 struct SnapshotRowResponse {
     #[allow(dead_code)]
     snapshot_id: SnapshotId,
+}
+
+#[derive(Debug, Serialize)]
+struct ResolveConflictRequest {
+    chosen_snapshot_id: SnapshotId,
+    resolution: CliConflictResolution,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ResolveConflictResponse {
+    conflict_snapshot_id: SnapshotId,
+    chosen_snapshot_id: SnapshotId,
+    resolution: String,
+    resolved: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -818,6 +873,39 @@ async fn server_status(
         conflict_diffs,
         message_zh,
     })
+}
+
+async fn server_resolve_conflict(
+    server_url: String,
+    secret_hex: String,
+    logical_save_id: Option<String>,
+    conflict_snapshot_id: String,
+    chosen_snapshot_id: String,
+    resolution: CliConflictResolution,
+) -> anyhow::Result<ResolveConflictResponse> {
+    let server_url = normalize_server_url(&server_url);
+    let secret = secret_from_hex(&secret_hex)?;
+    let keys = derive_account_keys(&secret)?;
+    let computed_account_handle = account_handle(&keys);
+    let descriptor = save_adapters::generic_folder_macos();
+    let game_key = GameKey::new("generic", "fixture", "none", "slot1");
+    let logical_save_id = logical_save_id
+        .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
+    let client = reqwest::Client::new();
+    let identity =
+        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
+            .await?;
+    signed_post_json(
+        &client,
+        &format!("{server_url}/v1/conflicts/{logical_save_id}/{conflict_snapshot_id}/resolve"),
+        &server_url,
+        &identity,
+        &ResolveConflictRequest {
+            chosen_snapshot_id: SnapshotId(chosen_snapshot_id),
+            resolution,
+        },
+    )
+    .await
 }
 
 async fn remote_snapshot_fingerprint(

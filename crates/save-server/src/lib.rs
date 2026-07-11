@@ -108,6 +108,30 @@ pub struct SnapshotRow {
     pub parents: Vec<SnapshotId>,
     pub manifest_id: String,
     pub conflict: bool,
+    /// A conflict remains immutable history after the user explicitly chooses a side.
+    #[serde(default)]
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConflictResolutionKind {
+    KeepCloudHead,
+    ReplaceWithLocal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveConflictRequest {
+    pub chosen_snapshot_id: SnapshotId,
+    pub resolution: ConflictResolutionKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveConflictResponse {
+    pub conflict_snapshot_id: SnapshotId,
+    pub chosen_snapshot_id: SnapshotId,
+    pub resolution: ConflictResolutionKind,
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +372,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/heads/{logical_save_id}", get(get_head))
         .route("/v1/history/{logical_save_id}", get(get_history))
         .route("/v1/conflicts/{logical_save_id}", get(get_conflicts))
+        .route(
+            "/v1/conflicts/{logical_save_id}/{snapshot_id}/resolve",
+            post(resolve_conflict),
+        )
         .layer(from_fn_with_state(
             state.clone(),
             authenticate_write_request,
@@ -363,7 +391,8 @@ fn requires_resource_auth(method: &axum::http::Method, path: &str) -> bool {
                 && (path.ends_with("/chunks")
                     || path.ends_with("/manifest")
                     || path.ends_with("/commit")))
-            || (path.starts_with("/v1/devices/") && path.ends_with("/revoke"))))
+            || (path.starts_with("/v1/devices/") && path.ends_with("/revoke"))
+            || (path.starts_with("/v1/conflicts/") && path.ends_with("/resolve"))))
         || (method == axum::http::Method::GET
             && (path.starts_with("/v1/heads/")
                 || path.starts_with("/v1/history/")
@@ -1140,6 +1169,7 @@ fn commit_memory(
             parents: session.parents,
             manifest_id,
             conflict,
+            resolved: false,
         },
     );
     guard
@@ -1396,6 +1426,102 @@ async fn get_conflicts(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
+async fn resolve_conflict(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path((logical_save_id, snapshot_id)): Path<(String, String)>,
+    Json(request): Json<ResolveConflictRequest>,
+) -> Result<Json<ResolveConflictResponse>, ApiError> {
+    validate_object_id(&snapshot_id)?;
+    validate_object_id(&request.chosen_snapshot_id.0)?;
+    resolve_conflict_in_backend(
+        &state,
+        &auth,
+        &logical_save_id,
+        &SnapshotId(snapshot_id),
+        &request,
+    )
+    .await
+    .map(Json)
+    .map_err(BackendError::api)
+}
+
+async fn resolve_conflict_in_backend(
+    state: &AppState,
+    auth: &AuthContext,
+    logical_save_id: &str,
+    conflict_snapshot_id: &SnapshotId,
+    request: &ResolveConflictRequest,
+) -> Result<ResolveConflictResponse, BackendError> {
+    match &state.backend {
+        Backend::Memory(inner) => {
+            let mut guard = inner.lock().unwrap();
+            let logical_key = scoped_key(&auth.account_handle, logical_save_id);
+            let current_head = guard
+                .heads
+                .get(&logical_key)
+                .ok_or_else(|| BackendError::NotFound("logical save head".into()))?;
+            if current_head != &request.chosen_snapshot_id {
+                return Err(BackendError::Conflict(
+                    "chosen snapshot must be the current HEAD".into(),
+                ));
+            }
+            let snapshot_key = scoped_key(&auth.account_handle, &conflict_snapshot_id.0);
+            let row = guard
+                .snapshots
+                .get_mut(&snapshot_key)
+                .ok_or_else(|| BackendError::NotFound("conflict snapshot".into()))?;
+            if row.logical_save_id != logical_save_id || !row.conflict {
+                return Err(BackendError::Invalid(
+                    "snapshot is not a conflict branch".into(),
+                ));
+            }
+            row.resolved = true;
+        }
+        Backend::Persistent(p) => {
+            let account = hex::decode(&auth.account_handle)
+                .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
+            let mut tx = p.pool.begin().await.map_err(db_unavailable)?;
+            let current_head: Option<String> = sqlx::query_scalar(
+                "SELECT head_snapshot_id FROM logical_saves WHERE id=$1 AND account_handle=$2 FOR UPDATE",
+            )
+            .bind(logical_save_id)
+            .bind(&account)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_unavailable)?
+            .flatten();
+            if current_head.as_deref() != Some(request.chosen_snapshot_id.0.as_str()) {
+                return Err(BackendError::Conflict(
+                    "chosen snapshot must be the current HEAD".into(),
+                ));
+            }
+            let result = sqlx::query(
+                "UPDATE snapshots SET resolved_at=COALESCE(resolved_at,now()), resolved_by_device_cert_id=COALESCE(resolved_by_device_cert_id,$1), resolution_kind=COALESCE(resolution_kind,$2), chosen_snapshot_id=COALESCE(chosen_snapshot_id,$3) WHERE id=$4 AND account_handle=$5 AND logical_save_id=$6 AND conflict=true",
+            )
+            .bind(hex::decode(&auth.device_cert_id).map_err(|_| BackendError::Invalid("invalid auth device".into()))?)
+            .bind(match request.resolution { ConflictResolutionKind::KeepCloudHead => "keep-cloud-head", ConflictResolutionKind::ReplaceWithLocal => "replace-with-local" })
+            .bind(&request.chosen_snapshot_id.0)
+            .bind(&conflict_snapshot_id.0)
+            .bind(&account)
+            .bind(logical_save_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_unavailable)?;
+            if result.rows_affected() == 0 {
+                return Err(BackendError::NotFound("conflict snapshot".into()));
+            }
+            tx.commit().await.map_err(db_unavailable)?;
+        }
+    }
+    Ok(ResolveConflictResponse {
+        conflict_snapshot_id: conflict_snapshot_id.clone(),
+        chosen_snapshot_id: request.chosen_snapshot_id.clone(),
+        resolution: request.resolution.clone(),
+        resolved: true,
+    })
+}
+
 async fn history(
     state: &AppState,
     account_handle: &str,
@@ -1414,7 +1540,7 @@ async fn history(
                             .snapshot_accounts
                             .get(*key)
                             .is_some_and(|a| a == account_handle)
-                        && (!conflicts_only || s.conflict)
+                        && (!conflicts_only || (s.conflict && !s.resolved))
                 })
                 .map(|(_, s)| s.clone())
                 .collect())
@@ -1422,7 +1548,7 @@ async fn history(
         Backend::Persistent(p) => {
             let account = hex::decode(account_handle)
                 .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
-            let rows = sqlx::query("SELECT id,encrypted_manifest_object,conflict FROM snapshots WHERE logical_save_id=$1 AND account_handle=$2 AND ($3=false OR conflict=true) ORDER BY created_at DESC")
+            let rows = sqlx::query("SELECT id,encrypted_manifest_object,conflict,(resolved_at IS NOT NULL) AS resolved FROM snapshots WHERE logical_save_id=$1 AND account_handle=$2 AND ($3=false OR (conflict=true AND resolved_at IS NULL)) ORDER BY created_at DESC")
                 .bind(logical_save_id).bind(&account).bind(conflicts_only).fetch_all(&p.pool).await.map_err(db_unavailable)?;
             let mut result = Vec::new();
             for row in rows {
@@ -1435,6 +1561,7 @@ async fn history(
                     parents: parents.into_iter().map(SnapshotId).collect(),
                     manifest_id: row.get("encrypted_manifest_object"),
                     conflict: row.get("conflict"),
+                    resolved: row.get("resolved"),
                 });
             }
             Ok(result)
@@ -2060,6 +2187,61 @@ mod tests {
         assert!(matches!(c2.outcome, CommitOutcomeKind::Conflict));
         assert_eq!(c2.head, SnapshotId(id(2)));
         assert_eq!(c2.conflict_snapshot, Some(SnapshotId(id(4))));
+
+        let auth = AuthContext {
+            account_handle: hex::encode([0x11; 20]),
+            device_cert_id: hex::encode([0x22; 16]),
+        };
+        let before = history(&state, &auth.account_handle, "ls", true)
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 1);
+        let stale_choice = resolve_conflict_in_backend(
+            &state,
+            &auth,
+            "ls",
+            &SnapshotId(id(4)),
+            &ResolveConflictRequest {
+                chosen_snapshot_id: SnapshotId(id(9)),
+                resolution: ConflictResolutionKind::ReplaceWithLocal,
+            },
+        )
+        .await;
+        assert!(matches!(stale_choice, Err(BackendError::Conflict(_))));
+        assert_eq!(
+            history(&state, &auth.account_handle, "ls", true)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "a stale explicit choice must not hide the conflict"
+        );
+        resolve_conflict_in_backend(
+            &state,
+            &auth,
+            "ls",
+            &SnapshotId(id(4)),
+            &ResolveConflictRequest {
+                chosen_snapshot_id: SnapshotId(id(2)),
+                resolution: ConflictResolutionKind::KeepCloudHead,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            history(&state, &auth.account_handle, "ls", true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let all = history(&state, &auth.account_handle, "ls", false)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2, "resolution must not erase DAG history");
+        assert!(
+            all.iter()
+                .any(|row| row.snapshot_id == SnapshotId(id(4)) && row.resolved)
+        );
     }
 
     #[tokio::test]
