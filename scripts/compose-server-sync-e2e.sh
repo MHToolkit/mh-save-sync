@@ -184,70 +184,6 @@ if ready.get("backend") != "postgres-s3":
     raise SystemExit(f"persistent postgres-s3 backend required, got {ready}")
 PY
 
-device_json="$tmp/device-identity.json"
-cargo run -q -p save-cli --bin mh-save -- crypto-device-fixture > "$device_json"
-python3 - "$server_url" "$device_json" <<'PY'
-import json
-import sys
-import urllib.error
-import urllib.request
-
-server_url, device_path = sys.argv[1:3]
-identity = json.load(open(device_path, encoding="utf-8"))
-
-def post(path, payload, expected):
-    data = json.dumps(payload, separators=(",", ":")).encode()
-    request = urllib.request.Request(
-        server_url + path,
-        data=data,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            body = response.read()
-            status = response.status
-    except urllib.error.HTTPError as error:
-        body = error.read()
-        status = error.code
-    if status not in expected:
-        raise SystemExit(
-            f"POST {path}: expected {expected}, got {status}: "
-            f"{body.decode(errors='replace')}"
-        )
-
-post(
-    "/v1/accounts/bootstrap",
-    {
-        "account_handle": identity["account_handle"],
-        "root_public_key_b64": identity["root_public_key_b64"],
-    },
-    {201},
-)
-post(
-    "/v1/devices/register",
-    {
-        "account_handle": identity["account_handle"],
-        "cert_id": identity["cert_id"],
-        "device_public_key_b64": identity["device_public_key_b64"],
-        "certificate_b64": identity["certificate_b64"],
-    },
-    {201},
-)
-PY
-
-account_handle="$(python3 - "$device_json" <<'PY'
-import json
-import sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["account_handle"])
-PY
-)"
-device_cert_id="$(python3 - "$device_json" <<'PY'
-import json
-import sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["cert_id"])
-PY
-)"
 run_id="$(python3 - <<'PY'
 import time
 print(time.time_ns())
@@ -269,8 +205,6 @@ cargo run -q -p save-cli --bin mh-save -- server-upload \
   --secret-hex "$secret_hex" \
   --device-id office-mac \
   --logical-save-id "$logical_save_id" \
-  --account-handle "$account_handle" \
-  --device-cert-id "$device_cert_id" \
   > "$tmp/office.json"
 
 cargo run -q -p save-cli --bin mh-save -- server-upload \
@@ -279,8 +213,6 @@ cargo run -q -p save-cli --bin mh-save -- server-upload \
   --secret-hex "$secret_hex" \
   --device-id home-android \
   --logical-save-id "$logical_save_id" \
-  --account-handle "$account_handle" \
-  --device-cert-id "$device_cert_id" \
   > "$tmp/conflict.json"
 
 cargo run -q -p save-cli --bin mh-save -- server-status \

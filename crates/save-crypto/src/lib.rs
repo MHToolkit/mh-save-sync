@@ -258,6 +258,56 @@ pub fn verify_device_certificate(cert: &DeviceCertificate) -> Result<(), CryptoE
     root.verify(&msg, &sig).map_err(|_| CryptoError::Signature)
 }
 
+/// Domain-separated bytes signed for every authenticated HTTP request.
+///
+/// The body hash is over the exact transmitted bytes. Length-prefixing makes
+/// the encoding unambiguous and keeps intermediaries from changing semantics.
+pub fn canonical_http_request(
+    method: &str,
+    path_and_query: &str,
+    body_sha256_hex: &str,
+    challenge_id: &str,
+    nonce_b64: &str,
+    timestamp_unix_seconds: u64,
+) -> Vec<u8> {
+    let fields = [
+        "mh-save-sync/http-auth/v1".to_owned(),
+        method.to_ascii_uppercase(),
+        path_and_query.to_owned(),
+        body_sha256_hex.to_ascii_lowercase(),
+        challenge_id.to_owned(),
+        nonce_b64.to_owned(),
+        timestamp_unix_seconds.to_string(),
+    ];
+    let mut out = Vec::new();
+    for field in fields {
+        out.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        out.extend_from_slice(field.as_bytes());
+    }
+    out
+}
+
+pub fn sign_http_request(
+    key: &SigningKey,
+    method: &str,
+    path_and_query: &str,
+    body: &[u8],
+    challenge_id: &str,
+    nonce_b64: &str,
+    timestamp_unix_seconds: u64,
+) -> [u8; 64] {
+    let body_hash = hex::encode(Sha256::digest(body));
+    key.sign(&canonical_http_request(
+        method,
+        path_and_query,
+        &body_hash,
+        challenge_id,
+        nonce_b64,
+        timestamp_unix_seconds,
+    ))
+    .to_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

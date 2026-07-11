@@ -438,6 +438,20 @@ struct DeviceRegisterRequest {
 struct ClientDeviceIdentity {
     account_handle: String,
     device_cert_id: String,
+    signing_key: SigningKey,
+}
+
+#[derive(Debug, Serialize)]
+struct ChallengeRequest<'a> {
+    account_handle: &'a str,
+    device_cert_id: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChallengeResponse {
+    challenge_id: String,
+    nonce_b64: String,
+    expires_unix_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -503,7 +517,11 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         .logical_save_id
         .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
     let client = reqwest::Client::new();
-    let cloud_head_before = get_head(&client, &server_url, &logical_save_id).await?;
+    let default_identity =
+        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
+            .await?;
+    let cloud_head_before =
+        get_head(&client, &server_url, &logical_save_id, &default_identity).await?;
     let base_head = if input.replace_cloud_head {
         cloud_head_before.clone()
     } else {
@@ -519,9 +537,6 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
     options.parents = parents.clone();
     options.created_unix_ms = unix_millis();
     let snapshot = create_snapshot_from_stable_folder(&input.root, &descriptor, &secret, options)?;
-    let default_identity =
-        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
-            .await?;
     let request_account_handle = input
         .account_handle
         .clone()
@@ -531,8 +546,14 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         .clone()
         .unwrap_or_else(|| default_identity.device_cert_id.clone());
     if let Some(current_head) = &cloud_head_before
-        && let Some(remote_fingerprint) =
-            remote_snapshot_fingerprint(&client, &server_url, &secret, current_head).await?
+        && let Some(remote_fingerprint) = remote_snapshot_fingerprint(
+            &client,
+            &server_url,
+            &secret,
+            &default_identity,
+            current_head,
+        )
+        .await?
         && remote_fingerprint == snapshot.fingerprint
     {
         let message_zh = format!(
@@ -562,9 +583,11 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
     let manifest_id = sha256_hex(&manifest_bytes);
     let mut chunk_ids = snapshot.chunks.keys().cloned().collect::<Vec<_>>();
     chunk_ids.sort();
-    let begin = post_json::<_, BeginSnapshotResponse>(
+    let begin = signed_post_json::<_, BeginSnapshotResponse>(
         &client,
         &format!("{server_url}/v1/snapshots/begin"),
+        &server_url,
+        &default_identity,
         &BeginSnapshotRequest {
             account_handle: Some(&request_account_handle),
             device_cert_id: Some(&request_device_cert_id),
@@ -582,9 +605,11 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
             .get(chunk_id)
             .ok_or_else(|| anyhow::anyhow!("server requested unknown chunk {chunk_id}"))?;
         let bytes = serde_json::to_vec(blob)?;
-        post_no_content(
+        signed_post_no_content(
             &client,
             &format!("{server_url}/v1/snapshots/{}/chunks", begin.upload_id),
+            &server_url,
+            &default_identity,
             &PutChunkRequest {
                 chunk_id: chunk_id.clone(),
                 sha256: sha256_hex(&bytes),
@@ -593,9 +618,11 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         )
         .await?;
     }
-    post_no_content(
+    signed_post_no_content(
         &client,
         &format!("{server_url}/v1/snapshots/{}/manifest", begin.upload_id),
+        &server_url,
+        &default_identity,
         &PutManifestRequest {
             manifest_id,
             sha256: sha256_hex(&manifest_bytes),
@@ -603,9 +630,11 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         },
     )
     .await?;
-    let commit = post_json::<_, CommitSnapshotResponse>(
+    let commit = signed_post_json::<_, CommitSnapshotResponse>(
         &client,
         &format!("{server_url}/v1/snapshots/{}/commit", begin.upload_id),
+        &server_url,
+        &default_identity,
         &CommitSnapshotRequest {
             snapshot_id: snapshot.snapshot_id.clone(),
         },
@@ -671,6 +700,7 @@ async fn ensure_account_device_registered(
     Ok(ClientDeviceIdentity {
         account_handle: computed_account_handle.to_owned(),
         device_cert_id: cert_id_hex,
+        signing_key: device,
     })
 }
 
@@ -723,21 +753,29 @@ async fn server_status(
     let logical_save_id = logical_save_id
         .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
     let client = reqwest::Client::new();
-    let cloud_head = get_head(&client, &server_url, &logical_save_id).await?;
+    let identity =
+        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
+            .await?;
+    let cloud_head = get_head(&client, &server_url, &logical_save_id, &identity).await?;
     let history = get_vec::<SnapshotRowResponse>(
         &client,
         &format!("{server_url}/v1/history/{logical_save_id}"),
+        &server_url,
+        &identity,
     )
     .await?;
     let conflicts = get_vec::<SnapshotRowResponse>(
         &client,
         &format!("{server_url}/v1/conflicts/{logical_save_id}"),
+        &server_url,
+        &identity,
     )
     .await?;
     let conflict_diffs = conflict_diff_reports(
         &client,
         &server_url,
         &secret,
+        &identity,
         cloud_head.as_ref(),
         &conflicts,
         &game_profile,
@@ -786,9 +824,11 @@ async fn remote_snapshot_fingerprint(
     client: &reqwest::Client,
     server_url: &str,
     secret: &[u8; 32],
+    identity: &ClientDeviceIdentity,
     snapshot_id: &SnapshotId,
 ) -> anyhow::Result<Option<TreeFingerprint>> {
-    let Some(manifest) = remote_snapshot_manifest(client, server_url, secret, snapshot_id).await?
+    let Some(manifest) =
+        remote_snapshot_manifest(client, server_url, secret, identity, snapshot_id).await?
     else {
         return Ok(None);
     };
@@ -799,13 +839,14 @@ async fn remote_snapshot_manifest(
     client: &reqwest::Client,
     server_url: &str,
     secret: &[u8; 32],
+    identity: &ClientDeviceIdentity,
     snapshot_id: &SnapshotId,
 ) -> anyhow::Result<Option<SnapshotManifest>> {
     let url = format!(
         "{server_url}/v1/snapshots/{}/encrypted-bundle",
         snapshot_id.0
     );
-    let resp = client.get(&url).send().await?;
+    let resp = signed_get(client, &url, server_url, identity).await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -828,6 +869,7 @@ async fn conflict_diff_reports(
     client: &reqwest::Client,
     server_url: &str,
     secret: &[u8; 32],
+    identity: &ClientDeviceIdentity,
     cloud_head: Option<&SnapshotId>,
     conflicts: &[SnapshotRowResponse],
     game_profile: &str,
@@ -839,14 +881,14 @@ async fn conflict_diff_reports(
         return Ok(Vec::new());
     }
     let Some(head_manifest) =
-        remote_snapshot_manifest(client, server_url, secret, current_head).await?
+        remote_snapshot_manifest(client, server_url, secret, identity, current_head).await?
     else {
         return Ok(Vec::new());
     };
     let mut reports = Vec::new();
     for row in conflicts.iter().take(20) {
         if let Some(conflict_manifest) =
-            remote_snapshot_manifest(client, server_url, secret, &row.snapshot_id).await?
+            remote_snapshot_manifest(client, server_url, secret, identity, &row.snapshot_id).await?
         {
             let diff = diff_manifests_for_game(&head_manifest, &conflict_manifest, game_profile)?;
             let message_zh = format!(
@@ -905,9 +947,12 @@ async fn server_restore(
     let logical_save_id = logical_save_id
         .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
     let client = reqwest::Client::new();
+    let identity =
+        ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
+            .await?;
     let snapshot_id = match snapshot_id {
         Some(id) => SnapshotId(id),
-        None => get_head(&client, &server_url, &logical_save_id)
+        None => get_head(&client, &server_url, &logical_save_id, &identity)
             .await?
             .ok_or_else(|| anyhow::anyhow!("cloud head not found for {logical_save_id}"))?,
     };
@@ -917,6 +962,8 @@ async fn server_restore(
             "{server_url}/v1/snapshots/{}/encrypted-bundle",
             snapshot_id.0
         ),
+        &server_url,
+        &identity,
     )
     .await?;
     anyhow::ensure!(
@@ -1000,11 +1047,10 @@ async fn get_head(
     client: &reqwest::Client,
     server_url: &str,
     logical_save_id: &str,
+    identity: &ClientDeviceIdentity,
 ) -> anyhow::Result<Option<SnapshotId>> {
-    let resp = client
-        .get(format!("{server_url}/v1/heads/{logical_save_id}"))
-        .send()
-        .await?;
+    let url = format!("{server_url}/v1/heads/{logical_save_id}");
+    let resp = signed_get(client, &url, server_url, identity).await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -1015,8 +1061,10 @@ async fn get_head(
 async fn get_vec<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
 ) -> anyhow::Result<Vec<T>> {
-    let resp = client.get(url).send().await?;
+    let resp = signed_get(client, url, server_url, identity).await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Vec::new());
     }
@@ -1027,8 +1075,10 @@ async fn get_vec<T: for<'de> Deserialize<'de>>(
 async fn get_json<R: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
 ) -> anyhow::Result<R> {
-    let resp = client.get(url).send().await?;
+    let resp = signed_get(client, url, server_url, identity).await?;
     let resp = ensure_success(resp).await?;
     Ok(resp.json().await?)
 }
@@ -1053,6 +1103,118 @@ async fn post_no_content<T: Serialize>(
     Ok(())
 }
 
+async fn signed_raw_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
+    body: Vec<u8>,
+) -> anyhow::Result<reqwest::Response> {
+    let challenge: ChallengeResponse = post_json(
+        client,
+        &format!("{server_url}/v1/accounts/challenge"),
+        &ChallengeRequest {
+            account_handle: &identity.account_handle,
+            device_cert_id: &identity.device_cert_id,
+        },
+    )
+    .await?;
+    anyhow::ensure!(
+        challenge.expires_unix_seconds >= unix_seconds(),
+        "server returned expired auth challenge"
+    );
+    let parsed = reqwest::Url::parse(url)?;
+    let path = parsed.path().to_owned()
+        + parsed
+            .query()
+            .map(|q| format!("?{q}"))
+            .as_deref()
+            .unwrap_or("");
+    let timestamp = unix_seconds();
+    let signature = save_crypto::sign_http_request(
+        &identity.signing_key,
+        method.as_str(),
+        &path,
+        &body,
+        &challenge.challenge_id,
+        &challenge.nonce_b64,
+        timestamp,
+    );
+    Ok(client
+        .request(method, url)
+        .header("content-type", "application/json")
+        .header("x-mh-account", &identity.account_handle)
+        .header("x-mh-device-cert", &identity.device_cert_id)
+        .header("x-mh-challenge-id", &challenge.challenge_id)
+        .header("x-mh-nonce", &challenge.nonce_b64)
+        .header("x-mh-timestamp", timestamp.to_string())
+        .header(
+            "x-mh-signature",
+            base64::engine::general_purpose::STANDARD.encode(signature),
+        )
+        .body(body)
+        .send()
+        .await?)
+}
+
+async fn signed_request<T: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
+    body: &T,
+) -> anyhow::Result<reqwest::Response> {
+    signed_raw_request(
+        client,
+        reqwest::Method::POST,
+        url,
+        server_url,
+        identity,
+        serde_json::to_vec(body)?,
+    )
+    .await
+}
+
+async fn signed_get(
+    client: &reqwest::Client,
+    url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
+) -> anyhow::Result<reqwest::Response> {
+    signed_raw_request(
+        client,
+        reqwest::Method::GET,
+        url,
+        server_url,
+        identity,
+        Vec::new(),
+    )
+    .await
+}
+
+async fn signed_post_json<T: Serialize, R: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
+    body: &T,
+) -> anyhow::Result<R> {
+    let response = signed_request(client, url, server_url, identity, body).await?;
+    Ok(ensure_success(response).await?.json().await?)
+}
+
+async fn signed_post_no_content<T: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    server_url: &str,
+    identity: &ClientDeviceIdentity,
+    body: &T,
+) -> anyhow::Result<()> {
+    ensure_success(signed_request(client, url, server_url, identity, body).await?).await?;
+    Ok(())
+}
+
 async fn ensure_success(resp: reqwest::Response) -> anyhow::Result<reqwest::Response> {
     let status = resp.status();
     if status.is_success() {
@@ -1060,6 +1222,13 @@ async fn ensure_success(resp: reqwest::Response) -> anyhow::Result<reqwest::Resp
     }
     let body = resp.text().await.unwrap_or_default();
     anyhow::bail!("server returned {status}: {body}");
+}
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn decode_downloaded_blob(object: &SnapshotObjectDownload) -> anyhow::Result<EncryptedBlob> {

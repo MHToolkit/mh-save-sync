@@ -25,10 +25,11 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+ed25519-dalek.workspace = true
 
 [[bin]]
 name = "mh-save-server"
 path = "src/main.rs"
 
 [dev-dependencies]
-ed25519-dalek.workspace = true
+tower = { version = "0.5", features = ["util"] }

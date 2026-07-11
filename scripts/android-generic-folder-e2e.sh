@@ -89,84 +89,6 @@ trap cleanup EXIT
 ready_json="$tmp/ready.json"
 retry_cmd curl -fsS "$server_url/ready" > "$ready_json"
 
-device_json="$tmp/device-identity.json"
-cargo run -q -p save-cli --bin mh-save -- crypto-device-fixture > "$device_json"
-
-python3 - "$server_url" "$device_json" <<'PY'
-import json
-import sys
-import http.client
-import time
-import urllib.error
-import urllib.request
-
-server_url, device_path = sys.argv[1:3]
-identity = json.load(open(device_path, encoding="utf-8"))
-
-def post(path, payload, expected):
-    data = json.dumps(payload, separators=(",", ":")).encode()
-    last_error = None
-    for attempt in range(1, 5):
-        request = urllib.request.Request(
-            server_url + path,
-            data=data,
-            headers={"content-type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                body = response.read()
-                status = response.status
-        except urllib.error.HTTPError as error:
-            body = error.read()
-            status = error.code
-        except (urllib.error.URLError, http.client.RemoteDisconnected, ConnectionError) as error:
-            last_error = error
-            if attempt == 4:
-                raise
-            time.sleep(attempt * 5)
-            continue
-        break
-    else:
-        raise last_error
-    if status not in expected:
-        raise SystemExit(
-            f"POST {path}: expected {expected}, got {status}: "
-            f"{body.decode(errors='replace')}"
-        )
-
-post(
-    "/v1/accounts/bootstrap",
-    {
-        "account_handle": identity["account_handle"],
-        "root_public_key_b64": identity["root_public_key_b64"],
-    },
-    {200, 201, 204, 409},
-)
-post(
-    "/v1/devices/register",
-    {
-        "account_handle": identity["account_handle"],
-        "cert_id": identity["cert_id"],
-        "device_public_key_b64": identity["device_public_key_b64"],
-        "certificate_b64": identity["certificate_b64"],
-    },
-    {200, 201, 204, 409},
-)
-PY
-
-account_handle="$(python3 - "$device_json" <<'PY'
-import json
-import sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["account_handle"])
-PY
-)"
-device_cert_id="$(python3 - "$device_json" <<'PY'
-import json
-import sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["cert_id"])
-PY
-)"
 run_id="$(python3 - <<'PY'
 import time
 print(time.time_ns())
@@ -192,8 +114,6 @@ retry_cmd cargo run -q -p save-cli --bin mh-save -- server-upload \
   --secret-hex "$secret_hex" \
   --device-id macos-generic-folder \
   --logical-save-id "$logical_save_id" \
-  --account-handle "$account_handle" \
-  --device-cert-id "$device_cert_id" \
   > "$tmp/macos-upload.json"
 
 retry_cmd cargo run -q -p save-cli --bin mh-save -- server-upload \
@@ -202,8 +122,6 @@ retry_cmd cargo run -q -p save-cli --bin mh-save -- server-upload \
   --secret-hex "$secret_hex" \
   --device-id "android-generic-folder-${device_serial}" \
   --logical-save-id "$logical_save_id" \
-  --account-handle "$account_handle" \
-  --device-cert-id "$device_cert_id" \
   > "$tmp/android-conflict.json"
 
 retry_cmd cargo run -q -p save-cli --bin mh-save -- server-status \

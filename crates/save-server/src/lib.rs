@@ -1,12 +1,18 @@
-use axum::extract::{Path, State};
+use axum::body::{Body, to_bytes};
+use axum::extract::{Extension, Path, Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use object_store::aws::{AmazonS3Builder, Checksum};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt};
-use save_crypto::{CRYPTO_SUITE_V1, DeviceCertificate, verify_device_certificate};
+use save_crypto::{
+    CRYPTO_SUITE_V1, DeviceCertificate, canonical_http_request, verify_device_certificate,
+};
 use save_domain::SnapshotId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,6 +27,19 @@ use uuid::Uuid;
 pub struct AppState {
     backend: Backend,
 }
+
+#[derive(Debug, Clone)]
+struct AuthContext {
+    account_handle: String,
+    device_cert_id: String,
+}
+
+const AUTH_ACCOUNT: &str = "x-mh-account";
+const AUTH_DEVICE: &str = "x-mh-device-cert";
+const AUTH_CHALLENGE: &str = "x-mh-challenge-id";
+const AUTH_NONCE: &str = "x-mh-nonce";
+const AUTH_TIMESTAMP: &str = "x-mh-timestamp";
+const AUTH_SIGNATURE: &str = "x-mh-signature";
 
 #[derive(Clone)]
 enum Backend {
@@ -43,9 +62,26 @@ struct InMemoryState {
     uploads: BTreeMap<Uuid, UploadSession>,
     heads: BTreeMap<String, SnapshotId>,
     snapshots: BTreeMap<String, SnapshotRow>,
+    snapshot_accounts: BTreeMap<String, String>,
     snapshot_chunks: BTreeMap<String, Vec<String>>,
     accounts: BTreeMap<String, Vec<u8>>,
-    devices: BTreeMap<String, bool>,
+    devices: BTreeMap<String, MemoryDevice>,
+    challenges: BTreeMap<Uuid, MemoryChallenge>,
+}
+
+#[derive(Clone)]
+struct MemoryDevice {
+    account_handle: String,
+    public_key: Vec<u8>,
+    revoked: bool,
+}
+#[derive(Clone)]
+struct MemoryChallenge {
+    account_handle: String,
+    device_cert_id: String,
+    nonce: Vec<u8>,
+    expires: u64,
+    used: bool,
 }
 
 struct PersistentState {
@@ -269,7 +305,7 @@ impl AppState {
                     .head(&ObjectPath::from("__mh_save_sync_readiness__"))
                     .await
                     .map_err(object_store_unavailable)?;
-                let rows = sqlx::query("SELECT DISTINCT o.storage_key FROM snapshots s JOIN snapshot_objects so ON so.snapshot_id=s.id JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id LIMIT 2000")
+                let rows = sqlx::query("SELECT DISTINCT o.storage_key FROM snapshots s JOIN snapshot_objects so ON so.account_handle=s.account_handle AND so.snapshot_id=s.id JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id LIMIT 2000")
                     .fetch_all(&p.pool).await.map_err(db_unavailable)?;
                 for row in rows {
                     let key: String = row.get("storage_key");
@@ -304,8 +340,224 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/heads/{logical_save_id}", get(get_head))
         .route("/v1/history/{logical_save_id}", get(get_history))
         .route("/v1/conflicts/{logical_save_id}", get(get_conflicts))
+        .layer(from_fn_with_state(
+            state.clone(),
+            authenticate_write_request,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+fn requires_resource_auth(method: &axum::http::Method, path: &str) -> bool {
+    (method == axum::http::Method::POST
+        && (path == "/v1/snapshots/begin"
+            || (path.starts_with("/v1/snapshots/")
+                && (path.ends_with("/chunks")
+                    || path.ends_with("/manifest")
+                    || path.ends_with("/commit")))
+            || (path.starts_with("/v1/devices/") && path.ends_with("/revoke"))))
+        || (method == axum::http::Method::GET
+            && (path.starts_with("/v1/heads/")
+                || path.starts_with("/v1/history/")
+                || path.starts_with("/v1/conflicts/")
+                || (path.starts_with("/v1/snapshots/") && path.ends_with("/encrypted-bundle"))))
+}
+
+async fn authenticate_write_request(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|v| v.as_str())
+        .unwrap_or(request.uri().path())
+        .to_owned();
+    if !requires_resource_auth(&method, request.uri().path()) {
+        return next.run(request).await;
+    }
+    let headers = request.headers();
+    let field = |name: &'static str| -> Result<String, ApiError> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, format!("missing {name}")))
+    };
+    let parsed = (|| {
+        let account = field(AUTH_ACCOUNT)?;
+        let device = field(AUTH_DEVICE)?;
+        validate_hex(&account, 20)?;
+        validate_hex(&device, 16)?;
+        let challenge = field(AUTH_CHALLENGE)?;
+        let challenge_id = Uuid::parse_str(&challenge)
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid challenge id".into()))?;
+        let nonce_b64 = field(AUTH_NONCE)?;
+        let nonce = decode_b64(&nonce_b64)?;
+        let timestamp = field(AUTH_TIMESTAMP)?
+            .parse::<u64>()
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid timestamp".into()))?;
+        let signature = decode_b64_len(&field(AUTH_SIGNATURE)?, 64)?;
+        Ok::<_, ApiError>((
+            account,
+            device,
+            challenge_id,
+            nonce_b64,
+            nonce,
+            timestamp,
+            signature,
+        ))
+    })();
+    let (account, device, challenge_id, nonce_b64, nonce, timestamp, signature) = match parsed {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let (parts, incoming_body) = request.into_parts();
+    let body = match to_bytes(incoming_body, 128 * 1024 * 1024).await {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid request body").into_response(),
+    };
+    let message = canonical_http_request(
+        method.as_str(),
+        &path,
+        &sha256_hex(&body),
+        &challenge_id.to_string(),
+        &nonce_b64,
+        timestamp,
+    );
+    if let Err(error) = verify_and_consume_challenge(
+        &state,
+        &account,
+        &device,
+        challenge_id,
+        &nonce,
+        timestamp,
+        &signature,
+        &message,
+    )
+    .await
+    {
+        return error.into_response();
+    }
+    request = Request::from_parts(parts, Body::from(body));
+    request.extensions_mut().insert(AuthContext {
+        account_handle: account,
+        device_cert_id: device,
+    });
+    next.run(request).await
+}
+
+async fn verify_and_consume_challenge(
+    state: &AppState,
+    account_hex: &str,
+    device_hex: &str,
+    challenge_id: Uuid,
+    nonce: &[u8],
+    timestamp: u64,
+    signature_bytes: &[u8],
+    message: &[u8],
+) -> Result<(), ApiError> {
+    let now = unix_seconds();
+    if timestamp.abs_diff(now) > 300 {
+        return Err((StatusCode::UNAUTHORIZED, "request timestamp expired".into()));
+    }
+    let account = hex::decode(account_hex).map_err(invalid_hex)?;
+    let device = hex::decode(device_hex).map_err(invalid_hex)?;
+    let signature = Signature::from_slice(signature_bytes)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid signature".into()))?;
+    match &state.backend {
+        Backend::Memory(inner) => {
+            let mut guard = inner.lock().unwrap();
+            let challenge = guard
+                .challenges
+                .get(&challenge_id)
+                .filter(|c| {
+                    c.account_handle == account_hex
+                        && c.device_cert_id == device_hex
+                        && c.nonce == nonce
+                        && !c.used
+                        && c.expires > now
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        "challenge invalid, expired, or already used".into(),
+                    )
+                })?;
+            let device_row = guard
+                .devices
+                .get(device_hex)
+                .filter(|d| d.account_handle == account_hex && !d.revoked)
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "active device not found".into()))?;
+            let key = VerifyingKey::from_bytes(
+                device_row
+                    .public_key
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid device key".into()))?,
+            )
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid device key".into()))?;
+            key.verify(message, &signature).map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "signature verification failed".into(),
+                )
+            })?;
+            guard
+                .challenges
+                .get_mut(&challenge_id)
+                .expect("challenge locked")
+                .used = true;
+            let _ = challenge;
+            Ok(())
+        }
+        Backend::Persistent(p) => {
+            let mut tx = p
+                .pool
+                .begin()
+                .await
+                .map_err(db_unavailable)
+                .map_err(BackendError::api)?;
+            let row = sqlx::query("SELECT d.device_public_key FROM auth_challenges c JOIN devices d ON d.cert_id=c.device_cert_id AND d.account_handle=c.account_handle WHERE c.id=$1 AND c.account_handle=$2 AND c.device_cert_id=$3 AND c.nonce=$4 AND c.used_at IS NULL AND c.expires_at>now() AND d.revoked_at IS NULL FOR UPDATE OF c")
+                .bind(challenge_id).bind(&account).bind(&device).bind(nonce)
+                .fetch_optional(&mut *tx).await.map_err(db_unavailable).map_err(BackendError::api)?
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "challenge invalid, expired, or already used".into()))?;
+            let public: Vec<u8> = row.get("device_public_key");
+            let key = VerifyingKey::from_bytes(
+                public
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid device key".into()))?,
+            )
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid device key".into()))?;
+            key.verify(message, &signature).map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "signature verification failed".into(),
+                )
+            })?;
+            let affected = sqlx::query(
+                "UPDATE auth_challenges SET used_at=now() WHERE id=$1 AND used_at IS NULL",
+            )
+            .bind(challenge_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_unavailable)
+            .map_err(BackendError::api)?
+            .rows_affected();
+            if affected != 1 {
+                return Err((StatusCode::UNAUTHORIZED, "challenge already used".into()));
+            }
+            tx.commit()
+                .await
+                .map_err(db_unavailable)
+                .map_err(BackendError::api)?;
+            Ok(())
+        }
+    }
 }
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -385,17 +637,39 @@ async fn account_challenge(
     let challenge_id = Uuid::new_v4();
     let nonce = Uuid::new_v4().as_bytes().to_vec();
     let expires = unix_seconds() + 300;
-    if let Backend::Persistent(p) = &state.backend {
-        let account = hex::decode(req.account_handle).map_err(invalid_hex)?;
-        let cert = hex::decode(req.device_cert_id).map_err(invalid_hex)?;
-        let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE account_handle=$1 AND cert_id=$2 AND revoked_at IS NULL)")
-            .bind(account.clone()).bind(cert.clone()).fetch_one(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
-        if !active {
-            return Err(BackendError::NotFound("active device".into()).api());
+    match &state.backend {
+        Backend::Memory(inner) => {
+            let mut guard = inner.lock().unwrap();
+            let active = guard
+                .devices
+                .get(&req.device_cert_id)
+                .is_some_and(|d| d.account_handle == req.account_handle && !d.revoked);
+            if !active {
+                return Err(BackendError::NotFound("active device".into()).api());
+            }
+            guard.challenges.insert(
+                challenge_id,
+                MemoryChallenge {
+                    account_handle: req.account_handle.clone(),
+                    device_cert_id: req.device_cert_id.clone(),
+                    nonce: nonce.clone(),
+                    expires,
+                    used: false,
+                },
+            );
         }
-        sqlx::query("INSERT INTO auth_challenges(id,account_handle,device_cert_id,nonce,expires_at) VALUES ($1,$2,$3,$4,to_timestamp($5))")
+        Backend::Persistent(p) => {
+            let account = hex::decode(&req.account_handle).map_err(invalid_hex)?;
+            let cert = hex::decode(&req.device_cert_id).map_err(invalid_hex)?;
+            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE account_handle=$1 AND cert_id=$2 AND revoked_at IS NULL)")
+            .bind(account.clone()).bind(cert.clone()).fetch_one(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+            if !active {
+                return Err(BackendError::NotFound("active device".into()).api());
+            }
+            sqlx::query("INSERT INTO auth_challenges(id,account_handle,device_cert_id,nonce,expires_at) VALUES ($1,$2,$3,$4,to_timestamp($5))")
             .bind(challenge_id).bind(account).bind(cert).bind(&nonce).bind(expires as i64)
             .execute(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+        }
     }
     Ok(Json(ChallengeResponse {
         challenge_id,
@@ -427,7 +701,14 @@ async fn device_register(
                 .get(&req.account_handle)
                 .ok_or_else(|| BackendError::NotFound("account".into()).api())?;
             validate_device_certificate(&parsed, root, &req.cert_id, &public_key, unix_seconds())?;
-            guard.devices.insert(req.cert_id, false);
+            guard.devices.insert(
+                req.cert_id,
+                MemoryDevice {
+                    account_handle: req.account_handle,
+                    public_key,
+                    revoked: false,
+                },
+            );
         }
         Backend::Persistent(p) => {
             let account = hex::decode(&req.account_handle).map_err(invalid_hex)?;
@@ -467,20 +748,36 @@ async fn device_register(
 
 async fn device_revoke(
     State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
     Path(cert_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     validate_hex(&cert_id, 16)?;
     match &state.backend {
         Backend::Memory(inner) => {
-            inner.lock().unwrap().devices.insert(cert_id, true);
+            let mut guard = inner.lock().unwrap();
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let device = guard
+                .devices
+                .get_mut(&cert_id)
+                .filter(|d| d.account_handle == auth.account_handle)
+                .ok_or_else(|| BackendError::NotFound("device".into()).api())?;
+            device.revoked = true;
         }
         Backend::Persistent(p) => {
-            let result = sqlx::query("UPDATE devices SET revoked_at=now() WHERE cert_id=$1")
-                .bind(hex::decode(cert_id).map_err(invalid_hex)?)
-                .execute(&p.pool)
-                .await
-                .map_err(db_unavailable)
-                .map_err(BackendError::api)?;
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let result = sqlx::query(
+                "UPDATE devices SET revoked_at=now() WHERE cert_id=$1 AND account_handle=$2",
+            )
+            .bind(hex::decode(cert_id).map_err(invalid_hex)?)
+            .bind(hex::decode(auth.account_handle).map_err(invalid_hex)?)
+            .execute(&p.pool)
+            .await
+            .map_err(db_unavailable)
+            .map_err(BackendError::api)?;
             if result.rows_affected() == 0 {
                 return Err(BackendError::NotFound("device".into()).api());
             }
@@ -491,15 +788,34 @@ async fn device_revoke(
 
 async fn begin_snapshot(
     State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
     Json(req): Json<BeginSnapshotRequest>,
 ) -> Result<Json<BeginSnapshotResponse>, ApiError> {
     validate_object_id(&req.encrypted_manifest_id)?;
     for id in &req.chunk_ids {
         validate_object_id(id)?;
     }
+    validate_parent_shape(req.base_head.as_ref(), &req.parents)?;
     match &state.backend {
         Backend::Memory(inner) => {
             let mut guard = inner.lock().unwrap();
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let account = req
+                .account_handle
+                .as_ref()
+                .ok_or_else(|| BackendError::Invalid("account_handle required".into()).api())?;
+            let device = req
+                .device_cert_id
+                .as_ref()
+                .ok_or_else(|| BackendError::Invalid("device_cert_id required".into()).api())?;
+            if account != &auth.account_handle || device != &auth.device_cert_id {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "authenticated identity mismatch".into(),
+                ));
+            }
             let upload_id = Uuid::new_v4();
             let missing = req
                 .chunk_ids
@@ -526,6 +842,9 @@ async fn begin_snapshot(
             }))
         }
         Backend::Persistent(p) => {
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
             let account_hex = req
                 .account_handle
                 .ok_or_else(|| BackendError::Invalid("account_handle required".into()).api())?;
@@ -534,6 +853,12 @@ async fn begin_snapshot(
                 .ok_or_else(|| BackendError::Invalid("device_cert_id required".into()).api())?;
             validate_hex(&account_hex, 20)?;
             validate_hex(&cert_hex, 16)?;
+            if account_hex != auth.account_handle || cert_hex != auth.device_cert_id {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "authenticated identity mismatch".into(),
+                ));
+            }
             let account = hex::decode(&account_hex).map_err(invalid_hex)?;
             let cert = hex::decode(&cert_hex).map_err(invalid_hex)?;
             let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE account_handle=$1 AND cert_id=$2 AND revoked_at IS NULL)")
@@ -541,9 +866,32 @@ async fn begin_snapshot(
             if !active {
                 return Err(BackendError::NotFound("active device".into()).api());
             }
-            sqlx::query("INSERT INTO logical_saves(id,account_handle,encrypted_label) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING")
+            sqlx::query("INSERT INTO logical_saves(id,account_handle,encrypted_label) VALUES ($1,$2,$3) ON CONFLICT (account_handle,id) DO NOTHING")
                 .bind(&req.logical_save_id).bind(&account).bind(Vec::<u8>::new())
                 .execute(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+            let owner: Vec<u8> = sqlx::query_scalar(
+                "SELECT account_handle FROM logical_saves WHERE id=$1 AND account_handle=$2",
+            )
+            .bind(&req.logical_save_id)
+            .bind(&account)
+            .fetch_one(&p.pool)
+            .await
+            .map_err(db_unavailable)
+            .map_err(BackendError::api)?;
+            if owner != account {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "logical save belongs to another account".into(),
+                ));
+            }
+            validate_parent_set_persistent(
+                p,
+                &account,
+                &req.logical_save_id,
+                req.base_head.as_ref(),
+                &req.parents,
+            )
+            .await?;
             let mut missing = Vec::new();
             for id in &req.chunk_ids {
                 if !persistent_object_exists(p, &account_hex, id)
@@ -572,6 +920,7 @@ async fn begin_snapshot(
 
 async fn put_chunk(
     State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
     Path(upload_id): Path<Uuid>,
     Json(req): Json<PutChunkRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -580,9 +929,17 @@ async fn put_chunk(
     match &state.backend {
         Backend::Memory(inner) => {
             let mut guard = inner.lock().unwrap();
-            let upload_exists = guard.uploads.contains_key(&upload_id);
-            if !upload_exists {
-                return Err(BackendError::NotFound("upload".into()).api());
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let session = guard
+                .uploads
+                .get(&upload_id)
+                .ok_or_else(|| BackendError::NotFound("upload".into()).api())?;
+            if session.account_handle.as_deref() != Some(&auth.account_handle)
+                || session.device_cert_id.as_deref() != Some(&auth.device_cert_id)
+            {
+                return Err((StatusCode::NOT_FOUND, "upload not found".into()));
             }
             if let Some(existing) = guard.chunks.get(&req.chunk_id)
                 && sha256_hex(existing) != req.sha256.to_lowercase()
@@ -601,8 +958,11 @@ async fn put_chunk(
                 .insert(req.chunk_id);
         }
         Backend::Persistent(p) => {
-            let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, required_chunks FROM upload_sessions WHERE id=$1 AND expires_at>now()")
-                .bind(upload_id).fetch_optional(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, encode(device_cert_id,'hex') AS device_cert_id, required_chunks FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now()")
+                .bind(upload_id).bind(hex::decode(&auth.account_handle).map_err(invalid_hex)?).bind(hex::decode(&auth.device_cert_id).map_err(invalid_hex)?).fetch_optional(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?
                 .ok_or_else(|| BackendError::NotFound("upload".into()).api())?;
             let account: String = row.get("account_handle");
             let required: serde_json::Value = row.get("required_chunks");
@@ -620,6 +980,7 @@ async fn put_chunk(
 
 async fn put_manifest(
     State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
     Path(upload_id): Path<Uuid>,
     Json(req): Json<PutManifestRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -628,10 +989,18 @@ async fn put_manifest(
     match &state.backend {
         Backend::Memory(inner) => {
             let mut guard = inner.lock().unwrap();
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
             let session = guard
                 .uploads
                 .get_mut(&upload_id)
                 .ok_or_else(|| BackendError::NotFound("upload".into()).api())?;
+            if session.account_handle.as_deref() != Some(&auth.account_handle)
+                || session.device_cert_id.as_deref() != Some(&auth.device_cert_id)
+            {
+                return Err((StatusCode::NOT_FOUND, "upload not found".into()));
+            }
             if session.manifest_id.as_deref() != Some(&req.manifest_id) {
                 return Err(BackendError::Invalid("manifest id mismatch".into()).api());
             }
@@ -646,8 +1015,11 @@ async fn put_manifest(
             guard.manifests.entry(req.manifest_id).or_insert(bytes);
         }
         Backend::Persistent(p) => {
-            let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, manifest_id FROM upload_sessions WHERE id=$1 AND expires_at>now()")
-                .bind(upload_id).fetch_optional(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            let row = sqlx::query("SELECT encode(account_handle,'hex') AS account_handle, manifest_id FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now()")
+                .bind(upload_id).bind(hex::decode(&auth.account_handle).map_err(invalid_hex)?).bind(hex::decode(&auth.device_cert_id).map_err(invalid_hex)?).fetch_optional(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?
                 .ok_or_else(|| BackendError::NotFound("upload".into()).api())?;
             let account: String = row.get("account_handle");
             let expected: String = row.get("manifest_id");
@@ -670,18 +1042,29 @@ async fn put_manifest(
 
 async fn commit_snapshot(
     State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
     Path(upload_id): Path<Uuid>,
     Json(req): Json<CommitSnapshotRequest>,
 ) -> Result<Json<CommitSnapshotResponse>, ApiError> {
     validate_object_id(&req.snapshot_id.0)?;
     match &state.backend {
-        Backend::Memory(inner) => commit_memory(inner, upload_id, req)
-            .map(Json)
-            .map_err(BackendError::api),
-        Backend::Persistent(p) => commit_persistent(p, upload_id, req)
-            .await
-            .map(Json)
-            .map_err(BackendError::api),
+        Backend::Memory(inner) => {
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            commit_memory(inner, upload_id, req, &auth)
+        }
+        .map(Json)
+        .map_err(BackendError::api),
+        Backend::Persistent(p) => {
+            let auth = auth
+                .ok_or_else(|| (StatusCode::UNAUTHORIZED, "authentication required".into()))?
+                .0;
+            commit_persistent(p, upload_id, req, &auth)
+                .await
+                .map(Json)
+                .map_err(BackendError::api)
+        }
     }
 }
 
@@ -689,13 +1072,18 @@ fn commit_memory(
     inner: &Arc<Mutex<InMemoryState>>,
     upload_id: Uuid,
     req: CommitSnapshotRequest,
+    auth: &AuthContext,
 ) -> Result<CommitSnapshotResponse, BackendError> {
     let mut guard = inner.lock().unwrap();
     let session = guard
         .uploads
         .remove(&upload_id)
         .ok_or_else(|| BackendError::NotFound("upload".into()))?;
-    let _auth_scope = (&session.account_handle, &session.device_cert_id);
+    if session.account_handle.as_deref() != Some(&auth.account_handle)
+        || session.device_cert_id.as_deref() != Some(&auth.device_cert_id)
+    {
+        return Err(BackendError::NotFound("upload".into()));
+    }
     for chunk in &session.required_chunks {
         if !guard.chunks.contains_key(chunk) && !session.uploaded_chunks.contains(chunk) {
             return Err(BackendError::Conflict(format!("missing chunk {chunk}")));
@@ -707,10 +1095,13 @@ fn commit_memory(
     if !guard.manifests.contains_key(&manifest_id) {
         return Err(BackendError::Conflict("manifest not durable".into()));
     }
-    let current = guard.heads.get(&session.logical_save_id).cloned();
+    let account = session.account_handle.as_deref().unwrap_or_default();
+    let logical_key = scoped_key(account, &session.logical_save_id);
+    let snapshot_key = scoped_key(account, &req.snapshot_id.0);
+    let current = guard.heads.get(&logical_key).cloned();
     let (kind, head, conflict) = cas_outcome(&session.base_head, &current, &req.snapshot_id);
     guard.snapshots.insert(
-        req.snapshot_id.0.clone(),
+        snapshot_key.clone(),
         SnapshotRow {
             snapshot_id: req.snapshot_id.clone(),
             logical_save_id: session.logical_save_id.clone(),
@@ -719,14 +1110,15 @@ fn commit_memory(
             conflict,
         },
     );
+    guard
+        .snapshot_accounts
+        .insert(snapshot_key.clone(), auth.account_handle.clone());
     guard.snapshot_chunks.insert(
-        req.snapshot_id.0.clone(),
+        snapshot_key,
         session.required_chunks.iter().cloned().collect(),
     );
     if !conflict {
-        guard
-            .heads
-            .insert(session.logical_save_id, req.snapshot_id.clone());
+        guard.heads.insert(logical_key, req.snapshot_id.clone());
     }
     Ok(CommitSnapshotResponse {
         outcome: kind,
@@ -739,9 +1131,14 @@ async fn commit_persistent(
     p: &PersistentState,
     upload_id: Uuid,
     req: CommitSnapshotRequest,
+    auth: &AuthContext,
 ) -> Result<CommitSnapshotResponse, BackendError> {
-    let pre = sqlx::query("SELECT encode(account_handle,'hex') AS account_hex, logical_save_id, manifest_id, required_chunks FROM upload_sessions WHERE id=$1 AND expires_at>now()")
-        .bind(upload_id).fetch_optional(&p.pool).await.map_err(db_unavailable)?
+    let auth_account = hex::decode(&auth.account_handle)
+        .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
+    let auth_device = hex::decode(&auth.device_cert_id)
+        .map_err(|_| BackendError::Invalid("invalid auth device".into()))?;
+    let pre = sqlx::query("SELECT encode(account_handle,'hex') AS account_hex, logical_save_id, manifest_id, required_chunks FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now()")
+        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&p.pool).await.map_err(db_unavailable)?
         .ok_or_else(|| BackendError::NotFound("upload".into()))?;
     let account_hex: String = pre.get("account_hex");
     let manifest_id: String = pre.get("manifest_id");
@@ -756,29 +1153,39 @@ async fn commit_persistent(
     }
 
     let mut tx = p.pool.begin().await.map_err(db_unavailable)?;
-    let row = sqlx::query("SELECT account_handle,device_cert_id,logical_save_id,base_head,parents,required_chunks,manifest_id FROM upload_sessions WHERE id=$1 AND expires_at>now() FOR UPDATE")
-        .bind(upload_id).fetch_optional(&mut *tx).await.map_err(db_unavailable)?
+    let row = sqlx::query("SELECT account_handle,device_cert_id,logical_save_id,base_head,parents,required_chunks,manifest_id FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now() FOR UPDATE")
+        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&mut *tx).await.map_err(db_unavailable)?
         .ok_or_else(|| BackendError::NotFound("upload".into()))?;
     let account: Vec<u8> = row.get("account_handle");
     let device: Vec<u8> = row.get("device_cert_id");
     let logical_save_id: String = row.get("logical_save_id");
     let base_head: Option<String> = row.get("base_head");
     let parents = json_string_array(&row.get::<serde_json::Value, _>("parents"));
-    let current: Option<String> =
-        sqlx::query_scalar("SELECT head_snapshot_id FROM logical_saves WHERE id=$1 FOR UPDATE")
-            .bind(&logical_save_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_unavailable)?;
+    validate_parent_set_tx(
+        &mut tx,
+        &account,
+        &logical_save_id,
+        base_head.as_deref(),
+        &parents,
+    )
+    .await?;
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT head_snapshot_id FROM logical_saves WHERE id=$1 AND account_handle=$2 FOR UPDATE",
+    )
+    .bind(&logical_save_id)
+    .bind(&account)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
     let base = base_head.as_ref().map(|x| SnapshotId(x.clone()));
     let current_id = current.as_ref().map(|x| SnapshotId(x.clone()));
     let (kind, head, conflict) = cas_outcome(&base, &current_id, &req.snapshot_id);
-    sqlx::query("INSERT INTO snapshots(id,logical_save_id,encrypted_manifest_object,committing_device_cert_id,conflict) VALUES ($1,$2,$3,$4,$5)")
-        .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(&manifest_id).bind(device).bind(conflict)
+    sqlx::query("INSERT INTO snapshots(id,account_handle,logical_save_id,encrypted_manifest_object,committing_device_cert_id,conflict) VALUES ($1,$2,$3,$4,$5,$6)")
+        .bind(&req.snapshot_id.0).bind(&account).bind(&logical_save_id).bind(&manifest_id).bind(device).bind(conflict)
         .execute(&mut *tx).await.map_err(db_unavailable)?;
     for parent in &parents {
-        sqlx::query("INSERT INTO snapshot_parents(snapshot_id,parent_snapshot_id) VALUES ($1,$2) ON CONFLICT DO NOTHING")
-            .bind(&req.snapshot_id.0).bind(parent).execute(&mut *tx).await.map_err(db_unavailable)?;
+        sqlx::query("INSERT INTO snapshot_parents(account_handle,snapshot_id,parent_snapshot_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
+            .bind(&account).bind(&req.snapshot_id.0).bind(parent).execute(&mut *tx).await.map_err(db_unavailable)?;
     }
     for object_id in std::iter::once(&manifest_id).chain(chunks.iter()) {
         sqlx::query("INSERT INTO snapshot_objects(account_handle,snapshot_id,object_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
@@ -786,10 +1193,10 @@ async fn commit_persistent(
     }
     if !conflict {
         let affected = match base_head {
-            Some(base) => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND head_snapshot_id=$3")
-                .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(base).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
-            None => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND head_snapshot_id IS NULL")
-                .bind(&req.snapshot_id.0).bind(&logical_save_id).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
+            Some(base) => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND account_handle=$3 AND head_snapshot_id=$4")
+                .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(&account).bind(base).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
+            None => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND account_handle=$3 AND head_snapshot_id IS NULL")
+                .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(&account).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
         };
         if affected != 1 {
             return Err(BackendError::Conflict(
@@ -812,15 +1219,17 @@ async fn commit_persistent(
 
 async fn get_encrypted_bundle(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
     Path(snapshot_id): Path<String>,
 ) -> Result<Json<SnapshotDownloadResponse>, ApiError> {
     validate_object_id(&snapshot_id)?;
     match &state.backend {
         Backend::Memory(inner) => {
             let guard = inner.lock().unwrap();
+            let snapshot_key = scoped_key(&auth.account_handle, &snapshot_id);
             let row = guard
                 .snapshots
-                .get(&snapshot_id)
+                .get(&snapshot_key)
                 .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
             let manifest_bytes = guard
                 .manifests
@@ -829,7 +1238,7 @@ async fn get_encrypted_bundle(
             let mut chunks = Vec::new();
             for chunk_id in guard
                 .snapshot_chunks
-                .get(&snapshot_id)
+                .get(&snapshot_key)
                 .cloned()
                 .unwrap_or_default()
             {
@@ -845,22 +1254,31 @@ async fn get_encrypted_bundle(
             }))
         }
         Backend::Persistent(p) => {
-            let manifest_id: String =
-                sqlx::query_scalar("SELECT encrypted_manifest_object FROM snapshots WHERE id=$1")
-                    .bind(&snapshot_id)
-                    .fetch_optional(&p.pool)
-                    .await
-                    .map_err(db_unavailable)
-                    .map_err(BackendError::api)?
-                    .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
-            let manifest =
-                persistent_get_snapshot_object(p, &snapshot_id, &manifest_id, "manifest")
-                    .await
-                    .map_err(BackendError::api)?;
-            let chunk_ids: Vec<String> = sqlx::query_scalar(
-                "SELECT so.object_id FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.snapshot_id=$1 AND o.object_kind='chunk' ORDER BY so.object_id",
+            let account = hex::decode(&auth.account_handle).map_err(invalid_hex)?;
+            let manifest_id: String = sqlx::query_scalar(
+                "SELECT encrypted_manifest_object FROM snapshots WHERE id=$1 AND account_handle=$2",
             )
             .bind(&snapshot_id)
+            .bind(&account)
+            .fetch_optional(&p.pool)
+            .await
+            .map_err(db_unavailable)
+            .map_err(BackendError::api)?
+            .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
+            let manifest = persistent_get_snapshot_object(
+                p,
+                &auth.account_handle,
+                &snapshot_id,
+                &manifest_id,
+                "manifest",
+            )
+            .await
+            .map_err(BackendError::api)?;
+            let chunk_ids: Vec<String> = sqlx::query_scalar(
+                "SELECT so.object_id FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.snapshot_id=$1 AND so.account_handle=$2 AND o.object_kind='chunk' ORDER BY so.object_id",
+            )
+            .bind(&snapshot_id)
+            .bind(&account)
             .fetch_all(&p.pool)
             .await
             .map_err(db_unavailable)
@@ -868,9 +1286,15 @@ async fn get_encrypted_bundle(
             let mut chunks = Vec::new();
             for chunk_id in chunk_ids {
                 chunks.push(
-                    persistent_get_snapshot_object(p, &snapshot_id, &chunk_id, "chunk")
-                        .await
-                        .map_err(BackendError::api)?,
+                    persistent_get_snapshot_object(
+                        p,
+                        &auth.account_handle,
+                        &snapshot_id,
+                        &chunk_id,
+                        "chunk",
+                    )
+                    .await
+                    .map_err(BackendError::api)?,
                 );
             }
             Ok(Json(SnapshotDownloadResponse {
@@ -884,25 +1308,31 @@ async fn get_encrypted_bundle(
 
 async fn get_head(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
     Path(logical_save_id): Path<String>,
 ) -> Result<Json<SnapshotId>, StatusCode> {
     match &state.backend {
-        Backend::Memory(inner) => inner
-            .lock()
-            .unwrap()
-            .heads
-            .get(&logical_save_id)
-            .cloned()
-            .map(Json)
-            .ok_or(StatusCode::NOT_FOUND),
+        Backend::Memory(inner) => {
+            let guard = inner.lock().unwrap();
+            guard
+                .heads
+                .get(&scoped_key(&auth.account_handle, &logical_save_id))
+                .cloned()
+                .map(Json)
+                .ok_or(StatusCode::NOT_FOUND)
+        }
         Backend::Persistent(p) => {
-            let head: Option<String> =
-                sqlx::query_scalar("SELECT head_snapshot_id FROM logical_saves WHERE id=$1")
-                    .bind(logical_save_id)
-                    .fetch_optional(&p.pool)
-                    .await
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-                    .flatten();
+            let account =
+                hex::decode(&auth.account_handle).map_err(|_| StatusCode::UNAUTHORIZED)?;
+            let head: Option<String> = sqlx::query_scalar(
+                "SELECT head_snapshot_id FROM logical_saves WHERE id=$1 AND account_handle=$2",
+            )
+            .bind(logical_save_id)
+            .bind(account)
+            .fetch_optional(&p.pool)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+            .flatten();
             head.map(|x| Json(SnapshotId(x)))
                 .ok_or(StatusCode::NOT_FOUND)
         }
@@ -911,9 +1341,10 @@ async fn get_head(
 
 async fn get_history(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
     Path(logical_save_id): Path<String>,
 ) -> Result<Json<Vec<SnapshotRow>>, StatusCode> {
-    history(&state, &logical_save_id, false)
+    history(&state, &auth.account_handle, &logical_save_id, false)
         .await
         .map(Json)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
@@ -921,9 +1352,10 @@ async fn get_history(
 
 async fn get_conflicts(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
     Path(logical_save_id): Path<String>,
 ) -> Result<Json<Vec<SnapshotRow>>, StatusCode> {
-    history(&state, &logical_save_id, true)
+    history(&state, &auth.account_handle, &logical_save_id, true)
         .await
         .map(Json)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
@@ -931,26 +1363,37 @@ async fn get_conflicts(
 
 async fn history(
     state: &AppState,
+    account_handle: &str,
     logical_save_id: &str,
     conflicts_only: bool,
 ) -> Result<Vec<SnapshotRow>, BackendError> {
     match &state.backend {
-        Backend::Memory(inner) => Ok(inner
-            .lock()
-            .unwrap()
-            .snapshots
-            .values()
-            .filter(|s| s.logical_save_id == logical_save_id && (!conflicts_only || s.conflict))
-            .cloned()
-            .collect()),
+        Backend::Memory(inner) => {
+            let guard = inner.lock().unwrap();
+            Ok(guard
+                .snapshots
+                .iter()
+                .filter(|(key, s)| {
+                    s.logical_save_id == logical_save_id
+                        && guard
+                            .snapshot_accounts
+                            .get(*key)
+                            .is_some_and(|a| a == account_handle)
+                        && (!conflicts_only || s.conflict)
+                })
+                .map(|(_, s)| s.clone())
+                .collect())
+        }
         Backend::Persistent(p) => {
-            let rows = sqlx::query("SELECT id,encrypted_manifest_object,conflict FROM snapshots WHERE logical_save_id=$1 AND ($2=false OR conflict=true) ORDER BY created_at DESC")
-                .bind(logical_save_id).bind(conflicts_only).fetch_all(&p.pool).await.map_err(db_unavailable)?;
+            let account = hex::decode(account_handle)
+                .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
+            let rows = sqlx::query("SELECT id,encrypted_manifest_object,conflict FROM snapshots WHERE logical_save_id=$1 AND account_handle=$2 AND ($3=false OR conflict=true) ORDER BY created_at DESC")
+                .bind(logical_save_id).bind(&account).bind(conflicts_only).fetch_all(&p.pool).await.map_err(db_unavailable)?;
             let mut result = Vec::new();
             for row in rows {
                 let id: String = row.get("id");
-                let parents: Vec<String> = sqlx::query_scalar("SELECT parent_snapshot_id FROM snapshot_parents WHERE snapshot_id=$1 ORDER BY parent_snapshot_id")
-                    .bind(&id).fetch_all(&p.pool).await.map_err(db_unavailable)?;
+                let parents: Vec<String> = sqlx::query_scalar("SELECT sp.parent_snapshot_id FROM snapshot_parents sp WHERE sp.snapshot_id=$1 AND sp.account_handle=$2 ORDER BY sp.parent_snapshot_id")
+                    .bind(&id).bind(&account).fetch_all(&p.pool).await.map_err(db_unavailable)?;
                 result.push(SnapshotRow {
                     snapshot_id: SnapshotId(id),
                     logical_save_id: logical_save_id.into(),
@@ -980,6 +1423,70 @@ fn cas_outcome(
             true,
         ),
     }
+}
+
+fn validate_parent_shape(
+    base: Option<&SnapshotId>,
+    parents: &[SnapshotId],
+) -> Result<(), ApiError> {
+    let unique = parents
+        .iter()
+        .map(|p| p.0.as_str())
+        .collect::<BTreeSet<_>>();
+    if unique.len() != parents.len() {
+        return Err(BackendError::Invalid("duplicate parents".into()).api());
+    }
+    if let Some(base) = base
+        && !unique.contains(base.0.as_str())
+    {
+        return Err(BackendError::Invalid("base_head must be included in parents".into()).api());
+    }
+    Ok(())
+}
+
+async fn validate_parent_set_persistent(
+    p: &PersistentState,
+    account: &[u8],
+    logical_save_id: &str,
+    base: Option<&SnapshotId>,
+    parents: &[SnapshotId],
+) -> Result<(), ApiError> {
+    validate_parent_shape(base, parents)?;
+    for parent in parents {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM snapshots s WHERE s.id=$1 AND s.logical_save_id=$2 AND s.account_handle=$3)")
+            .bind(&parent.0).bind(logical_save_id).bind(account)
+            .fetch_one(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+        if !exists {
+            return Err(BackendError::Invalid(
+                "parent does not belong to this account and logical save".into(),
+            )
+            .api());
+        }
+    }
+    Ok(())
+}
+
+async fn validate_parent_set_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: &[u8],
+    logical_save_id: &str,
+    base: Option<&str>,
+    parents: &[String],
+) -> Result<(), BackendError> {
+    let parent_ids = parents.iter().cloned().map(SnapshotId).collect::<Vec<_>>();
+    validate_parent_shape(base.map(|v| SnapshotId(v.to_owned())).as_ref(), &parent_ids)
+        .map_err(|(_, message)| BackendError::Invalid(message))?;
+    for parent in parents {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM snapshots s WHERE s.id=$1 AND s.logical_save_id=$2 AND s.account_handle=$3)")
+            .bind(parent).bind(logical_save_id).bind(account)
+            .fetch_one(&mut **tx).await.map_err(db_unavailable)?;
+        if !exists {
+            return Err(BackendError::Invalid(
+                "parent changed account or logical save before commit".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn persistent_object_exists(
@@ -1044,13 +1551,15 @@ async fn persistent_put_object(
 
 async fn persistent_get_snapshot_object(
     p: &PersistentState,
+    account_handle: &str,
     snapshot_id: &str,
     object_id: &str,
     kind: &str,
 ) -> Result<SnapshotObjectResponse, BackendError> {
     let row = sqlx::query(
-        "SELECT o.storage_key,o.checksum_sha256 FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.snapshot_id=$1 AND so.object_id=$2 AND o.object_kind=$3",
+        "SELECT o.storage_key,o.checksum_sha256 FROM snapshot_objects so JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id WHERE so.account_handle=decode($1,'hex') AND so.snapshot_id=$2 AND so.object_id=$3 AND o.object_kind=$4",
     )
+    .bind(account_handle)
     .bind(snapshot_id)
     .bind(object_id)
     .bind(kind)
@@ -1088,6 +1597,10 @@ fn object_response(object_id: &str, bytes: &[u8]) -> SnapshotObjectResponse {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+fn scoped_key(account_handle: &str, opaque_id: &str) -> String {
+    format!("{account_handle}:{opaque_id}")
 }
 
 fn database_url_from_env() -> anyhow::Result<String> {
@@ -1229,6 +1742,12 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(bytes),
         )
     }
+    fn test_auth() -> Option<Extension<AuthContext>> {
+        Some(Extension(AuthContext {
+            account_handle: hex::encode([0x11; 20]),
+            device_cert_id: hex::encode([0x22; 16]),
+        }))
+    }
 
     #[test]
     fn reissued_device_certificate_is_idempotent_when_identity_matches() {
@@ -1301,6 +1820,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn challenge_is_consumed_once_and_signature_binds_request() {
+        use ed25519_dalek::Signer;
+        let state = AppState::default();
+        let signing = SigningKey::from_bytes(&[0x55; 32]);
+        let account = hex::encode([0x11; 20]);
+        let device = hex::encode([0x22; 16]);
+        let challenge_id = Uuid::new_v4();
+        let nonce = vec![0x33; 16];
+        let nonce_b64 = base64::engine::general_purpose::STANDARD.encode(&nonce);
+        let timestamp = unix_seconds();
+        if let Backend::Memory(inner) = &state.backend {
+            let mut guard = inner.lock().unwrap();
+            guard.devices.insert(
+                device.clone(),
+                MemoryDevice {
+                    account_handle: account.clone(),
+                    public_key: signing.verifying_key().to_bytes().to_vec(),
+                    revoked: false,
+                },
+            );
+            guard.challenges.insert(
+                challenge_id,
+                MemoryChallenge {
+                    account_handle: account.clone(),
+                    device_cert_id: device.clone(),
+                    nonce: nonce.clone(),
+                    expires: timestamp + 60,
+                    used: false,
+                },
+            );
+        }
+        let message = canonical_http_request(
+            "POST",
+            "/v1/snapshots/begin",
+            &sha256_hex(b"{}"),
+            &challenge_id.to_string(),
+            &nonce_b64,
+            timestamp,
+        );
+        let signature = signing.sign(&message).to_bytes();
+        verify_and_consume_challenge(
+            &state,
+            &account,
+            &device,
+            challenge_id,
+            &nonce,
+            timestamp,
+            &signature,
+            &message,
+        )
+        .await
+        .unwrap();
+        let replay = verify_and_consume_challenge(
+            &state,
+            &account,
+            &device,
+            challenge_id,
+            &nonce,
+            timestamp,
+            &signature,
+            &message,
+        )
+        .await;
+        assert!(matches!(replay, Err((StatusCode::UNAUTHORIZED, _))));
+    }
+
+    #[test]
+    fn canonical_signature_rejects_path_or_body_tampering() {
+        use ed25519_dalek::Signer;
+        let signing = SigningKey::from_bytes(&[0x44; 32]);
+        let good = canonical_http_request(
+            "POST",
+            "/v1/snapshots/begin",
+            &sha256_hex(b"a"),
+            "challenge",
+            "nonce",
+            123,
+        );
+        let signature = signing.sign(&good);
+        let changed = canonical_http_request(
+            "POST",
+            "/v1/snapshots/begin",
+            &sha256_hex(b"b"),
+            "challenge",
+            "nonce",
+            123,
+        );
+        assert!(
+            signing
+                .verifying_key()
+                .verify(&changed, &signature)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parent_shape_rejects_duplicates_and_requires_base_parent() {
+        let parent = SnapshotId(id(1));
+        assert!(validate_parent_shape(Some(&parent), &[parent.clone()]).is_ok());
+        assert!(validate_parent_shape(Some(&parent), &[]).is_err());
+        assert!(validate_parent_shape(None, &[parent.clone(), parent]).is_err());
+    }
+
+    #[tokio::test]
     async fn ready_starts_ready() {
         let state = AppState::default();
         let response = ready(State(state)).await.unwrap().0;
@@ -1314,9 +1937,10 @@ mod tests {
         let manifest1 = id(1);
         let begin1 = begin_snapshot(
             State(state.clone()),
+            test_auth(),
             Json(BeginSnapshotRequest {
-                account_handle: None,
-                device_cert_id: None,
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([0x22; 16])),
                 logical_save_id: "ls".into(),
                 base_head: None,
                 parents: vec![],
@@ -1330,6 +1954,7 @@ mod tests {
         let (sha1, b641) = sha_b64(b"abc");
         put_manifest(
             State(state.clone()),
+            test_auth(),
             Path(begin1.upload_id),
             Json(PutManifestRequest {
                 manifest_id: manifest1,
@@ -1341,6 +1966,7 @@ mod tests {
         .unwrap();
         let c1 = commit_snapshot(
             State(state.clone()),
+            test_auth(),
             Path(begin1.upload_id),
             Json(CommitSnapshotRequest {
                 snapshot_id: SnapshotId(id(2)),
@@ -1354,9 +1980,10 @@ mod tests {
         let manifest2 = id(3);
         let begin2 = begin_snapshot(
             State(state.clone()),
+            test_auth(),
             Json(BeginSnapshotRequest {
-                account_handle: None,
-                device_cert_id: None,
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([0x22; 16])),
                 logical_save_id: "ls".into(),
                 base_head: None,
                 parents: vec![],
@@ -1370,6 +1997,7 @@ mod tests {
         let (sha2, b642) = sha_b64(b"def");
         put_manifest(
             State(state.clone()),
+            test_auth(),
             Path(begin2.upload_id),
             Json(PutManifestRequest {
                 manifest_id: manifest2,
@@ -1381,6 +2009,7 @@ mod tests {
         .unwrap();
         let c2 = commit_snapshot(
             State(state.clone()),
+            test_auth(),
             Path(begin2.upload_id),
             Json(CommitSnapshotRequest {
                 snapshot_id: SnapshotId(id(4)),
@@ -1413,9 +2042,10 @@ mod tests {
         let state = AppState::default();
         let begin = begin_snapshot(
             State(state.clone()),
+            test_auth(),
             Json(BeginSnapshotRequest {
-                account_handle: None,
-                device_cert_id: None,
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([0x22; 16])),
                 logical_save_id: "ls".into(),
                 base_head: None,
                 parents: vec![],
@@ -1428,6 +2058,7 @@ mod tests {
         .0;
         let result = put_chunk(
             State(state),
+            test_auth(),
             Path(begin.upload_id),
             Json(PutChunkRequest {
                 chunk_id: id(6),

@@ -431,6 +431,22 @@ struct CommitReply {
     head: SnapshotId,
     conflict_snapshot: Option<SnapshotId>,
 }
+#[derive(Serialize)]
+struct Challenge<'a> {
+    account_handle: &'a str,
+    device_cert_id: &'a str,
+}
+#[derive(Deserialize)]
+struct ChallengeReply {
+    challenge_id: String,
+    nonce_b64: String,
+    expires_unix_seconds: u64,
+}
+struct RequestIdentity<'a> {
+    account_handle: &'a str,
+    device_cert_id: &'a str,
+    signing_key: &'a SigningKey,
+}
 
 /// Uploads an already read-only staged SAF tree. The caller must create two
 /// matching captures before invoking this function. `base_head` is never
@@ -482,6 +498,11 @@ pub async fn upload_android_stable_stage(
         4_102_444_800,
         1,
     )?;
+    let identity = RequestIdentity {
+        account_handle: &handle,
+        device_cert_id: &cert_hex,
+        signing_key: &device,
+    };
     let client = reqwest::Client::new();
     post_empty(
         &client,
@@ -509,9 +530,11 @@ pub async fn upload_android_stable_stage(
     let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest)?;
     let manifest_id = hex::encode(sha2::Sha256::digest(&manifest_bytes));
     let chunk_ids = snapshot.chunks.keys().cloned().collect::<Vec<_>>();
-    let begin: BeginReply = post_json_client(
+    let begin: BeginReply = signed_post_json_client(
         &client,
         &format!("{server}/v1/snapshots/begin"),
+        server,
+        &identity,
         &Begin {
             account_handle: &handle,
             device_cert_id: &cert_hex,
@@ -532,9 +555,11 @@ pub async fn upload_android_stable_stage(
                 .get(id)
                 .ok_or_else(|| anyhow::anyhow!("server requested unknown chunk"))?,
         )?;
-        post_empty(
+        signed_post_empty(
             &client,
             &format!("{server}/v1/snapshots/{}/chunks", begin.upload_id),
+            server,
+            &identity,
             &PutObject {
                 chunk_id: id.clone(),
                 sha256: hex::encode(sha2::Sha256::digest(&bytes)),
@@ -543,9 +568,11 @@ pub async fn upload_android_stable_stage(
         )
         .await?;
     }
-    post_empty(
+    signed_post_empty(
         &client,
         &format!("{server}/v1/snapshots/{}/manifest", begin.upload_id),
+        server,
+        &identity,
         &PutManifest {
             manifest_id,
             sha256: hex::encode(sha2::Sha256::digest(&manifest_bytes)),
@@ -553,9 +580,11 @@ pub async fn upload_android_stable_stage(
         },
     )
     .await?;
-    let commit: CommitReply = post_json_client(
+    let commit: CommitReply = signed_post_json_client(
         &client,
         &format!("{server}/v1/snapshots/{}/commit", begin.upload_id),
+        server,
+        &identity,
         &Commit {
             snapshot_id: snapshot.snapshot_id.clone(),
         },
@@ -590,6 +619,95 @@ async fn post_json_client<T: Serialize, R: for<'de> Deserialize<'de>>(
     body: &T,
 ) -> anyhow::Result<R> {
     let response = client.post(url).json(body).send().await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "server request failed: {}",
+        response.status()
+    );
+    Ok(response.json().await?)
+}
+
+async fn signed_request<T: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+    body: &T,
+) -> anyhow::Result<reqwest::Response> {
+    let challenge: ChallengeReply = post_json_client(
+        client,
+        &format!("{server}/v1/accounts/challenge"),
+        &Challenge {
+            account_handle: identity.account_handle,
+            device_cert_id: identity.device_cert_id,
+        },
+    )
+    .await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    anyhow::ensure!(
+        challenge.expires_unix_seconds >= now,
+        "expired auth challenge"
+    );
+    let body = serde_json::to_vec(body)?;
+    let parsed = reqwest::Url::parse(url)?;
+    let path = parsed.path().to_owned()
+        + parsed
+            .query()
+            .map(|q| format!("?{q}"))
+            .as_deref()
+            .unwrap_or("");
+    let signature = save_crypto::sign_http_request(
+        identity.signing_key,
+        "POST",
+        &path,
+        &body,
+        &challenge.challenge_id,
+        &challenge.nonce_b64,
+        now,
+    );
+    Ok(client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("x-mh-account", identity.account_handle)
+        .header("x-mh-device-cert", identity.device_cert_id)
+        .header("x-mh-challenge-id", challenge.challenge_id)
+        .header("x-mh-nonce", challenge.nonce_b64)
+        .header("x-mh-timestamp", now.to_string())
+        .header(
+            "x-mh-signature",
+            base64::engine::general_purpose::STANDARD.encode(signature),
+        )
+        .body(body)
+        .send()
+        .await?)
+}
+
+async fn signed_post_empty<T: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+    body: &T,
+) -> anyhow::Result<()> {
+    let response = signed_request(client, url, server, identity, body).await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "server request failed: {}",
+        response.status()
+    );
+    Ok(())
+}
+
+async fn signed_post_json_client<T: Serialize, R: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    url: &str,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+    body: &T,
+) -> anyhow::Result<R> {
+    let response = signed_request(client, url, server, identity, body).await?;
     anyhow::ensure!(
         response.status().is_success(),
         "server request failed: {}",
