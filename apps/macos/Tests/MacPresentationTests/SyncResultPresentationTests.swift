@@ -43,3 +43,27 @@ import Testing
     #expect(!result.contains("outcome"))
     #expect(!result.contains("触发来源"))
 }
+
+@Test func primaryMenuCopyMakesEverySyncDirectionDiscoverable() {
+    #expect(MenuCopy.syncNow == "同步存档…")
+    #expect(MenuCopy.uploadLocal == "上传本地存档")
+    #expect(MenuCopy.restoreCloud == "用云端恢复本地…")
+    #expect(MenuCopy.conflicts == "处理冲突…")
+    #expect(MenuCopy.cloudStatus == "云端状态")
+}
+
+@Test func onboardingPromptIsShortAndActionable() {
+    let text = onboardingPrompt(missingServer: true, missingSaveRoot: true, missingSecret: true)
+    #expect(text == "还差 3 项设置。先填写服务器地址。")
+    #expect(!text.contains("同步路线"))
+    #expect(!text.contains("第一步"))
+}
+
+@Test func onboardingPromptAdvancesToNextMissingSetting() {
+    #expect(onboardingPrompt(missingServer: false, missingSaveRoot: true, missingSecret: true) ==
+        "还差 2 项设置。请选择 Nemessix 存档目录。")
+    #expect(onboardingPrompt(missingServer: false, missingSaveRoot: false, missingSecret: true) ==
+        "还差 1 项设置。请选择或生成恢复密钥。")
+    #expect(onboardingPrompt(missingServer: false, missingSaveRoot: false, missingSecret: false) ==
+        "设置完成，可以同步。")
+}

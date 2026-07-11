@@ -389,7 +389,7 @@ func quickGuideText(_ context: MacSyncContext) -> String {
     你现在用的是菜单栏 App，不会出现在 Dock。请看屏幕右上角的「\(context.menuBarTitle)」。
 
     同步路线：\(context.routeLabel)
-    手动同步入口：菜单栏 →「立即上传 Mac 存档到服务器」。
+    手动同步入口：菜单栏 →「同步存档…」。
     自动同步入口：菜单栏 →「自动同步：退出 Nemessix 后上传」。开启后只在 Nemessix 从运行变为退出时上传稳定快照。
 
     \(onboardingChecklistText(context))
@@ -400,8 +400,8 @@ func quickGuideText(_ context: MacSyncContext) -> String {
     3. 点「生成恢复密钥文件」自动创建可用密钥，或点「选择恢复密钥文件…」选择已有文件；文件必须放在 ~/Documents/Secrets，配置只保存路径，不保存密钥内容。
     4. 启动 MH3G 前点「启动前检查」。退出后点「我已退出 MH3G：立即对账上传」，或开启自动同步让菜单栏检测 Nemessix 退出后上传。
 
-    手动同步：点「立即上传 Mac 存档到服务器」。
-    查看云端：点「查看云端状态」。
+    手动同步：点「同步存档…」。
+    查看云端：点「云端状态」。
     从云端恢复：点「云端覆盖本地」，但 Nemessix 必须先退出，恢复前会先备份当前本地。
 
     底线：运行中的 Nemessix 不会被云端覆盖；文件变化不会直接上传，必须等稳定快照通过校验。
@@ -421,13 +421,13 @@ func menuPreviewText(_ context: MacSyncContext) -> String {
     - 恢复密钥：\(context.hasRecoverySecretFile ? "已配置文件" : "未配置")
 
     一级菜单：
-    - 立即同步…
-    - 仅上传本地存档
-    - 下载云端并恢复…
-    - 冲突与差异…
+    - 同步存档…
+    - 上传本地存档
+    - 用云端恢复本地…
+    - 处理冲突…
       - 本地设为云端最新（显式选择，旧版保留）
       - 云端恢复到本地（恢复前先备份）
-    - 查看云端状态
+    - 云端状态
     - 自动同步：退出 Nemessix 后上传
 
     服务器、存档目录和恢复密钥放在「设置」；教程和启动前检查放在「帮助」。
@@ -810,15 +810,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         menu.addItem(stateItem)
         syncStateMenuItem = stateItem
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(makeMenuItem("立即同步…", action: #selector(syncNow), key: "s"))
-        menu.addItem(makeMenuItem("仅上传本地存档", action: #selector(uploadNow), key: "u"))
-        menu.addItem(makeMenuItem("下载云端并恢复…", action: #selector(restoreCloudToLocal), key: "d"))
+        menu.addItem(makeMenuItem(MenuCopy.syncNow, action: #selector(syncNow), key: "s"))
+        menu.addItem(makeMenuItem(MenuCopy.uploadLocal, action: #selector(uploadNow), key: "u"))
+        menu.addItem(makeMenuItem(MenuCopy.restoreCloud, action: #selector(restoreCloudToLocal), key: "d"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(makeMenuItem("冲突与差异…", action: #selector(showConflict), key: "c"))
+        menu.addItem(makeMenuItem(MenuCopy.conflicts, action: #selector(showConflict), key: "c"))
         let historyItem = NSMenuItem(title: "历史版本（尚未接入此界面）", action: nil, keyEquivalent: "")
         historyItem.isEnabled = false
         menu.addItem(historyItem)
-        menu.addItem(makeMenuItem("查看云端状态", action: #selector(showServerStatus), key: "h"))
+        menu.addItem(makeMenuItem(MenuCopy.cloudStatus, action: #selector(showServerStatus), key: "h"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(makeMenuItem("自动同步：退出 Nemessix 后上传", action: #selector(toggleAutoUploadOnExit), key: "a"))
 
@@ -844,20 +844,12 @@ final class MenuController: NSObject, NSApplicationDelegate {
         statusItem = item
         refreshMenuLabels()
         startProcessExitMonitor()
-        showStartupGuideIfNeeded()
     }
 
     private func makeMenuItem(_ title: String, action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         return item
-    }
-
-    private func showStartupGuideIfNeeded() {
-        guard !context.onboardingComplete else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.showQuickGuide()
-        }
     }
 
     @objc private func showQuickGuide() {
@@ -882,17 +874,16 @@ final class MenuController: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            let saved = try persistServerURL(input.stringValue)
+            _ = try persistServerURL(input.stringValue)
             context = loadContext()
             refreshMenuLabels()
             showAlert(
                 title: "服务器地址已保存",
-                message: """
-                当前同步到：\(saved)
-                Android App 里也填写同一个地址，两个客户端才会同步到同一套云端快照。
-
-                \(onboardingChecklistText(context))
-                """
+                message: onboardingPrompt(
+                    missingServer: false,
+                    missingSaveRoot: !context.hasSaveRoot,
+                    missingSecret: !context.hasRecoverySecretFile
+                )
             )
         } catch {
             showAlert(title: "服务器地址无效", message: "\(error)")
@@ -936,10 +927,10 @@ final class MenuController: NSObject, NSApplicationDelegate {
             return
         }
         let choice = NSAlert()
-        choice.messageText = "这次要使用哪一边？"
+        choice.messageText = "选择同步方向"
         choice.informativeText = "如果两边不同，不会自动按时间覆盖；上传会保留冲突分支，下载恢复前会先备份本地。"
         choice.addButton(withTitle: "上传本地存档")
-        choice.addButton(withTitle: "下载云端并恢复")
+        choice.addButton(withTitle: "用云端恢复本地")
         choice.addButton(withTitle: "取消")
         let response = choice.runModal()
         if response == .alertFirstButtonReturn {
@@ -984,16 +975,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let saved = try persistSaveRootPath(url.path)
+            _ = try persistSaveRootPath(url.path)
             refreshContext()
             showAlert(
                 title: "Mac 存档目录已保存",
-                message: """
-                目录：\(saved)
-                不会立刻上传；手动上传和退出后自动上传都会先做稳定快照校验。
-
-                \(onboardingChecklistText(context))
-                """
+                message: onboardingPrompt(
+                    missingServer: !context.hasServerURL,
+                    missingSaveRoot: false,
+                    missingSecret: !context.hasRecoverySecretFile
+                )
             )
         } catch {
             showAlert(title: "Mac 存档目录无效", message: "\(error)")
@@ -1002,18 +992,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     @objc private func generateRecoverySecretFromMenu() {
         do {
-            let path = try generateRecoverySecretFile(overwrite: false)
+            _ = try generateRecoverySecretFile(overwrite: false)
             refreshContext()
             showAlert(
                 title: "恢复密钥文件已生成",
-                message: """
-                文件：\(path)
-                已生成 64 位 hex 恢复密钥并设置文件权限 0600。配置文件只保存路径，不保存密钥内容。
-
-                如果这个文件已存在，本次不会覆盖，避免导致已注册设备身份变化。
-
-                \(onboardingChecklistText(context))
-                """
+                message: onboardingPrompt(
+                    missingServer: !context.hasServerURL,
+                    missingSaveRoot: !context.hasSaveRoot,
+                    missingSecret: false
+                )
             )
         } catch {
             showAlert(title: "生成恢复密钥失败", message: "\(error)")
@@ -1030,16 +1017,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
         panel.directoryURL = documentsSecretsDirectory()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let saved = try persistRecoverySecretFile(url.path)
+            _ = try persistRecoverySecretFile(url.path)
             refreshContext()
             showAlert(
                 title: "恢复密钥文件已保存",
-                message: """
-                文件：\(saved)
-                密钥内容没有写入配置、日志或提示。
-
-                \(onboardingChecklistText(context))
-                """
+                message: onboardingPrompt(
+                    missingServer: !context.hasServerURL,
+                    missingSaveRoot: !context.hasSaveRoot,
+                    missingSecret: false
+                )
             )
         } catch {
             showAlert(title: "恢复密钥文件无效", message: "\(error)")
@@ -1053,8 +1039,8 @@ final class MenuController: NSObject, NSApplicationDelegate {
             showAlert(
                 title: enabled ? "自动同步已开启" : "自动同步已关闭",
                 message: enabled
-                    ? "菜单栏 App 运行时，会每 15 秒检查 Nemessix 是否从运行变为退出；退出后才上传稳定快照。不会因为文件变化直接上传。"
-                    : "已关闭退出后自动上传；仍可手动点击「立即上传 Mac 存档到服务器」。"
+                    ? "Nemessix 退出后自动上传稳定快照。"
+                    : "仍可随时手动上传。"
             )
         } catch {
             showAlert(title: "自动同步设置失败", message: "\(error)")
@@ -1062,7 +1048,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func uploadNow() {
-        performSyncAction(title: "立即上传 Mac 存档到服务器", state: "手动上传") {
+        performSyncAction(title: "上传完成", state: "手动上传") {
             presentSyncResult(
                 try configuredServerUpload(context: self.context, reason: "菜单栏手动同步"),
                 kind: .upload
@@ -1095,8 +1081,8 @@ final class MenuController: NSObject, NSApplicationDelegate {
             return
         }
         let confirm = NSAlert()
-        confirm.messageText = "确认用云端版本覆盖 Mac 本地存档？"
-        confirm.informativeText = "执行前会走共享恢复流程：下载云端版本、校验、先备份当前本地存档，再恢复到配置的 Mac Nemessix 存档目录。若不确定，请先点查看云端状态。"
+        confirm.messageText = "用云端版本恢复本地？"
+        confirm.informativeText = "Nemessix 已停止。恢复前会自动备份当前本地存档；不会删除历史版本。"
         confirm.addButton(withTitle: "确认恢复")
         confirm.addButton(withTitle: "取消")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -1122,7 +1108,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
             return
         }
         let choice = NSAlert()
-        choice.messageText = "冲突与差异"
+        choice.messageText = "处理冲突"
         choice.informativeText = summary + "\n\n请选择要继续使用的版本。旧版本和冲突分支会保留。"
         choice.addButton(withTitle: "本地设为云端最新")
         choice.addButton(withTitle: "云端恢复到本地")

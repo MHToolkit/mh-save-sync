@@ -6,6 +6,32 @@ public enum SyncResultKind {
     case restore
 }
 
+public enum MenuCopy {
+    public static let syncNow = "同步存档…"
+    public static let uploadLocal = "上传本地存档"
+    public static let restoreCloud = "用云端恢复本地…"
+    public static let conflicts = "处理冲突…"
+    public static let cloudStatus = "云端状态"
+}
+
+public func onboardingPrompt(
+    missingServer: Bool,
+    missingSaveRoot: Bool,
+    missingSecret: Bool
+) -> String {
+    let missingCount = [missingServer, missingSaveRoot, missingSecret].filter { $0 }.count
+    guard missingCount > 0 else { return "设置完成，可以同步。" }
+    let next: String
+    if missingServer {
+        next = "先填写服务器地址。"
+    } else if missingSaveRoot {
+        next = "请选择 Nemessix 存档目录。"
+    } else {
+        next = "请选择或生成恢复密钥。"
+    }
+    return "还差 \(missingCount) 项设置。\(next)"
+}
+
 public func shortSnapshotID(_ value: Any?) -> String? {
     guard let value = value as? String, !value.isEmpty else { return nil }
     return String(value.prefix(8))
