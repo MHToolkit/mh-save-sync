@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MacPresentation
 
@@ -11,6 +12,53 @@ import Testing
     #expect(!result.contains("account_handle"))
     #expect(!result.contains("logical_save_id"))
     #expect(!result.contains("{"))
+}
+
+@Test func conflictExplainsTheSessionBaseInsteadOfLookingRandom() {
+    let raw = #"{"snapshot_id":"f058d19a515d51fb","cloud_head":"4d59cc8328a85e35","outcome":"conflict","file_count":2,"total_bytes":47616}"#
+    let known = presentSyncResult(raw, kind: .upload, sessionBaseHead: "1111222233334444")
+    #expect(known.contains("本次游玩前的云端版本：11112222…"))
+    #expect(known.contains("云端后来变成：4d59cc83…"))
+    #expect(known.contains("因此没有自动覆盖"))
+
+    let unknown = presentSyncResult(raw, kind: .upload, sessionBaseHead: nil)
+    #expect(unknown.contains("没有可信的游玩前基线"))
+    #expect(unknown.contains("先用云端恢复本地，再开始游戏"))
+}
+
+@Test func extractsHeadOnlyFromSuccessfulHeadEstablishingResults() {
+    #expect(headEstablishedBySyncResult(#"{"outcome":"fast-forward","snapshot_id":"abc123"}"#) == "abc123")
+    #expect(headEstablishedBySyncResult(#"{"outcome":"up-to-date","snapshot_id":"def456"}"#) == "def456")
+    #expect(headEstablishedBySyncResult(#"{"outcome":"first-snapshot","snapshot_id":"ghi789"}"#) == "ghi789")
+    #expect(headEstablishedBySyncResult(#"{"outcome":"conflict","snapshot_id":"branch","cloud_head":"head"}"#) == nil)
+    #expect(headEstablishedByRestoreResult(#"{"snapshot_id":"restored123"}"#) == "restored123")
+    #expect(headFromStatusResult(#"{"cloud_head":"observed123"}"#) == "observed123")
+}
+
+@Test func sessionLedgerKeepsTheHeadObservedBeforePlay() throws {
+    var ledger = SaveSessionLedger()
+    ledger.beginSession(logicalSaveID: "mh3g", observedCloudHead: "before-play")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == "before-play")
+
+    // A later cloud observation must not be substituted at exit.
+    ledger.observeStatus(logicalSaveID: "mh3g", cloudHead: "changed-elsewhere")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == "before-play")
+
+    let roundTrip = try JSONDecoder().decode(
+        SaveSessionLedger.self,
+        from: JSONEncoder().encode(ledger)
+    )
+    #expect(roundTrip.baseHeadForUpload(logicalSaveID: "mh3g") == "before-play")
+}
+
+@Test func missingLaunchObservationStaysUnknownAndSuccessfulSyncEstablishesHead() {
+    var ledger = SaveSessionLedger()
+    ledger.beginSession(logicalSaveID: "mh3g", observedCloudHead: nil)
+    ledger.observeStatus(logicalSaveID: "mh3g", cloudHead: "latest-at-exit")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == nil)
+
+    ledger.recordEstablishedHead(logicalSaveID: "mh3g", head: "fast-forwarded")
+    #expect(ledger.baseHeadForUpload(logicalSaveID: "mh3g") == "fast-forwarded")
 }
 
 @Test func statusUsesCompactChineseSummary() {

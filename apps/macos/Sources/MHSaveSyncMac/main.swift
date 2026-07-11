@@ -108,6 +108,24 @@ func configFileURL() -> URL {
     configDirectory().appendingPathComponent("config.json")
 }
 
+func sessionLedgerFileURL() -> URL {
+    configDirectory().appendingPathComponent("session-bases.json")
+}
+
+func loadSessionLedger() -> SaveSessionLedger {
+    guard let data = try? Data(contentsOf: sessionLedgerFileURL()) else {
+        return SaveSessionLedger()
+    }
+    return (try? JSONDecoder().decode(SaveSessionLedger.self, from: data)) ?? SaveSessionLedger()
+}
+
+func saveSessionLedger(_ ledger: SaveSessionLedger) throws {
+    try FileManager.default.createDirectory(at: configDirectory(), withIntermediateDirectories: true)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(ledger).write(to: sessionLedgerFileURL(), options: [.atomic])
+}
+
 
 func documentsSecretsDirectory() -> URL {
     let home = ProcessInfo.processInfo.environment["HOME"]
@@ -711,18 +729,26 @@ func printServerRestore(_ args: [String], context: MacSyncContext) throws {
     print(try runMHSave(cliArgs), terminator: "")
 }
 
-func configuredServerUpload(context: MacSyncContext, reason: String = "manual") throws -> String {
+func configuredServerUpload(
+    context: MacSyncContext,
+    reason: String = "manual",
+    baseHead: String? = nil
+) throws -> String {
     let serverURL = try serverURLOrThrow(context)
     let root = try saveRootOrThrow(context)
     let secret = try recoverySecretHexOrThrow(context)
-    return try runMHSave([
+    var arguments = [
         "server-upload",
         "--server-url", serverURL,
         "--root", root,
         "--secret-hex", secret,
         "--device-id", "macos-nemessix",
         "--logical-save-id", mh3gNemessixLogicalSaveID,
-    ]) + "\n触发来源：\(reason)。本地原始存档未移动；上传前由共享引擎创建稳定快照。\n"
+    ]
+    if let baseHead, !baseHead.isEmpty {
+        arguments += ["--base-head", baseHead]
+    }
+    return try runMHSave(arguments) + "\n触发来源：\(reason)。本地原始存档未移动；上传前由共享引擎创建稳定快照。\n"
 }
 
 func configuredReplaceCloudHead(context: MacSyncContext) throws -> String {
@@ -789,6 +815,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
     private var processTimer: Timer?
     private var wasNemessixRunning = false
     private var context: MacSyncContext
+    private var sessionLedger = loadSessionLedger()
 
     init(context: MacSyncContext) {
         self.context = context
@@ -942,6 +969,9 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     private func startProcessExitMonitor() {
         wasNemessixRunning = isNemessixRunning()
+        if wasNemessixRunning {
+            beginNemessixSession()
+        }
         processTimer?.invalidate()
         processTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -952,15 +982,51 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     private func pollNemessixProcess() {
         let running = isNemessixRunning()
+        if !wasNemessixRunning && running {
+            beginNemessixSession()
+        }
         if wasNemessixRunning && !running && context.autoUploadOnExit {
+            let sessionBase = sessionLedger.baseHeadForUpload(logicalSaveID: mh3gNemessixLogicalSaveID)
             performSyncAction(title: "Nemessix 已退出，开始自动上传", state: "退出后自动上传") {
-                presentSyncResult(
-                    try configuredServerUpload(context: self.context, reason: "Nemessix 退出后自动同步"),
-                    kind: .upload
+                let raw = try configuredServerUpload(
+                    context: self.context,
+                    reason: "Nemessix 退出后自动同步",
+                    baseHead: sessionBase
                 )
+                self.recordUploadResult(raw)
+                return presentSyncResult(raw, kind: .upload, sessionBaseHead: sessionBase)
             }
         }
         wasNemessixRunning = running
+    }
+
+    private func beginNemessixSession() {
+        refreshContext()
+        let observedHead: String?
+        do {
+            observedHead = headFromStatusResult(try configuredServerStatus(context: context))
+            setSyncState(observedHead == nil ? "游玩基线：云端尚无存档" : "已记录本次游玩基线")
+        } catch {
+            observedHead = nil
+            setSyncState("未取得游玩前云端基线")
+        }
+        sessionLedger.beginSession(
+            logicalSaveID: mh3gNemessixLogicalSaveID,
+            observedCloudHead: observedHead
+        )
+        try? saveSessionLedger(sessionLedger)
+    }
+
+    private func recordUploadResult(_ raw: String) {
+        guard let head = headEstablishedBySyncResult(raw) else { return }
+        sessionLedger.recordEstablishedHead(logicalSaveID: mh3gNemessixLogicalSaveID, head: head)
+        try? saveSessionLedger(sessionLedger)
+    }
+
+    private func recordRestoreResult(_ raw: String) {
+        guard let head = headEstablishedByRestoreResult(raw) else { return }
+        sessionLedger.recordEstablishedHead(logicalSaveID: mh3gNemessixLogicalSaveID, head: head)
+        try? saveSessionLedger(sessionLedger)
     }
 
     @objc private func promptSaveRoot() {
@@ -1048,11 +1114,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func uploadNow() {
+        let sessionBase = sessionLedger.baseHeadForUpload(logicalSaveID: mh3gNemessixLogicalSaveID)
         performSyncAction(title: "上传完成", state: "手动上传") {
-            presentSyncResult(
-                try configuredServerUpload(context: self.context, reason: "菜单栏手动同步"),
-                kind: .upload
+            let raw = try configuredServerUpload(
+                context: self.context,
+                reason: "菜单栏手动同步",
+                baseHead: sessionBase
             )
+            self.recordUploadResult(raw)
+            return presentSyncResult(raw, kind: .upload, sessionBaseHead: sessionBase)
         }
     }
 
@@ -1061,11 +1131,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
             showAlert(title: "Nemessix 仍在运行", message: "请先退出 MH3G/Nemessix。运行中不会上传正在写入的中间态，也不会从云端覆盖本地。")
             return
         }
+        let sessionBase = sessionLedger.baseHeadForUpload(logicalSaveID: mh3gNemessixLogicalSaveID)
         performSyncAction(title: "退出后对账上传", state: "退出后对账") {
-            presentSyncResult(
-                try configuredServerUpload(context: self.context, reason: "用户确认已退出 MH3G"),
-                kind: .upload
+            let raw = try configuredServerUpload(
+                context: self.context,
+                reason: "用户确认已退出 MH3G",
+                baseHead: sessionBase
             )
+            self.recordUploadResult(raw)
+            return presentSyncResult(raw, kind: .upload, sessionBaseHead: sessionBase)
         }
     }
 
@@ -1087,7 +1161,9 @@ final class MenuController: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "取消")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         performSyncAction(title: "云端覆盖本地", state: "云端恢复") {
-            presentSyncResult(try configuredServerRestore(context: self.context), kind: .restore)
+            let raw = try configuredServerRestore(context: self.context)
+            self.recordRestoreResult(raw)
+            return presentSyncResult(raw, kind: .restore)
         }
     }
 
@@ -1116,7 +1192,9 @@ final class MenuController: NSObject, NSApplicationDelegate {
         let response = choice.runModal()
         if response == .alertFirstButtonReturn {
             performSyncAction(title: "本地版本已设为云端最新", state: "替换云端版本") {
-                presentSyncResult(try configuredReplaceCloudHead(context: self.context), kind: .upload)
+                let raw = try configuredReplaceCloudHead(context: self.context)
+                self.recordUploadResult(raw)
+                return presentSyncResult(raw, kind: .upload)
             }
         } else if response == .alertSecondButtonReturn {
             restoreCloudToLocal()

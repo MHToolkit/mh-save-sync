@@ -37,16 +37,39 @@ public func shortSnapshotID(_ value: Any?) -> String? {
     return String(value.prefix(8))
 }
 
-public func presentSyncResult(_ raw: String, kind: SyncResultKind) -> String {
+private func resultJSON(_ raw: String) -> [String: Any]? {
     let jsonText: String
     if let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"), start <= end {
         jsonText = String(raw[start...end])
     } else {
         jsonText = raw
     }
-    guard let data = jsonText.data(using: .utf8),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else {
+    guard let data = jsonText.data(using: .utf8) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+public func headEstablishedBySyncResult(_ raw: String) -> String? {
+    guard let json = resultJSON(raw),
+          let outcome = json["outcome"] as? String,
+          ["first-snapshot", "fast-forward", "up-to-date"].contains(outcome)
+    else { return nil }
+    return json["snapshot_id"] as? String
+}
+
+public func headEstablishedByRestoreResult(_ raw: String) -> String? {
+    resultJSON(raw)?["snapshot_id"] as? String
+}
+
+public func headFromStatusResult(_ raw: String) -> String? {
+    resultJSON(raw)?["cloud_head"] as? String
+}
+
+public func presentSyncResult(
+    _ raw: String,
+    kind: SyncResultKind,
+    sessionBaseHead: String? = nil
+) -> String {
+    guard let json = resultJSON(raw) else {
         let firstUsefulLine = raw.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
@@ -55,7 +78,7 @@ public func presentSyncResult(_ raw: String, kind: SyncResultKind) -> String {
 
     switch kind {
     case .upload:
-        return uploadSummary(json)
+        return uploadSummary(json, sessionBaseHead: sessionBaseHead)
     case .status:
         return statusSummary(json)
     case .restore:
@@ -63,18 +86,32 @@ public func presentSyncResult(_ raw: String, kind: SyncResultKind) -> String {
     }
 }
 
-private func uploadSummary(_ json: [String: Any]) -> String {
+private func uploadSummary(_ json: [String: Any], sessionBaseHead: String?) -> String {
     let outcome = json["outcome"] as? String
     let files = json["file_count"] as? Int ?? 0
     let bytes = json["total_bytes"] as? Int ?? 0
     let snapshot = shortSnapshotID(json["snapshot_id"]) ?? "未知"
     if outcome == "conflict" {
         let cloud = shortSnapshotID(json["cloud_head"]) ?? "未知"
+        let cause: String
+        if let base = shortSnapshotID(sessionBaseHead) {
+            cause = """
+            本次游玩前的云端版本：\(base)…
+            云端后来变成：\(cloud)…
+            两边都从旧版本继续了，因此没有自动覆盖。
+            """
+        } else {
+            cause = """
+            当前云端版本：\(cloud)…
+            此 Mac 没有可信的游玩前基线，因此不会猜测哪边更新。
+            下次请先用云端恢复本地，再开始游戏。
+            """
+        }
         return """
         检测到冲突，云端版本没有被覆盖。
 
         本地版本：\(snapshot)…（已安全保存为分支）
-        云端版本：\(cloud)…（仍是当前版本）
+        \(cause)
         内容：\(files) 个文件 · \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
 
         下一步：打开“冲突与差异”，确认后再选择保留哪一边。
