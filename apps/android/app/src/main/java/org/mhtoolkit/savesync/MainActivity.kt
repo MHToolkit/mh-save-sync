@@ -3,6 +3,7 @@ package org.mhtoolkit.savesync
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -75,6 +76,37 @@ class MainActivity : ComponentActivity() {
                 RestoreRecovery.pending(restoreRoot).size,
             ).apply()
         SyncScheduler.ensurePeriodic(this)
+        if (
+            applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
+            intent.getBooleanExtra("probe_quiescence", false)
+        ) {
+            Thread {
+                var lease: NemessixQuiescenceLease? = null
+                var released = false
+                val result = runCatching {
+                    val client = NemessixQuiescenceClient(this)
+                    lease = client.acquire()
+                    client.validate(requireNotNull(lease))
+                    client.release(requireNotNull(lease), "ABORTED", requireNotNull(lease).challengeHex)
+                    released = true
+                    "available:${requireNotNull(lease).emulatorBuild}"
+                }.getOrElse {
+                    val origin = it.stackTrace.firstOrNull()
+                    "unavailable:${it.javaClass.simpleName}:${origin?.className?.substringAfterLast('.')}:${origin?.methodName}"
+                }.also {
+                    if (!released) {
+                        lease?.let { held ->
+                            runCatching {
+                                NemessixQuiescenceClient(this).release(held, "ABORTED", held.challengeHex)
+                            }
+                        }
+                    }
+                }
+                getSharedPreferences(SyncScheduler.PREFERENCES, MODE_PRIVATE).edit()
+                    .putString("nemessix_quiescence_probe", result)
+                    .apply()
+            }.start()
+        }
         setContent {
             MaterialTheme {
                 SaveSyncDashboard()

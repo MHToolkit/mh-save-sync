@@ -15,8 +15,8 @@ object SyncScheduler {
     // loaded and covered by device tests. The current Android Alpha is a UI shell.
     const val REAL_SYNC_PIPELINE_AVAILABLE = false
     const val LOCAL_REPLACE_PIPELINE_AVAILABLE = true
-    // Fail closed until Nemessix exposes the verified stopped-lease IPC contract.
-    const val CLOUD_RESTORE_PIPELINE_AVAILABLE = false
+    // Enabled only for Nemessix builds exposing the pinned SaveQuiescenceV1 lease.
+    const val CLOUD_RESTORE_PIPELINE_AVAILABLE = true
     const val CLOUD_DOWNLOAD_PIPELINE_AVAILABLE = true
     const val PENDING_RESTORE_RECOVERY_COUNT = "pending_restore_recovery_count"
     const val PREFERENCES = "mh_save_sync"

@@ -32,6 +32,7 @@ zeroize = "1.8"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

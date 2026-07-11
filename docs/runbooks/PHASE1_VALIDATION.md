@@ -1147,3 +1147,32 @@ Open Phase 1D gates:
   MHToolkit self-hosted runner is online but limited to one 2c4g host, so the
   workflow intentionally serializes heavy Rust and Android gates and status
   checks must remain low-frequency.
+
+## Real Android Nemessix stopped restore (2026-07-11)
+
+- Device: OnePlus Ace 5 (`PKG110`) over an already-authorized wireless ADB
+  session. Nemessix was force-stopped before every SAF mutation.
+- Nemessix PR `MHToolkit/nemessix#3` build `4311e99bf-vanilla` provided an
+  authenticated, certificate-pinned and crash-recoverable save-quiescence
+  lease. The phone proved an acquire/validate/ABORTED-release round trip as
+  `available:4311e99bf` without logging lease material.
+- The first restore attempt failed before mutation because OxygenOS blocked a
+  cold-started cross-package provider. No durable restore state was written and
+  no save file was changed. The emulator contract was then extended with a
+  no-display, user-initiated process warm-up activity; normal provider calls
+  remain mutually certificate-pinned.
+- The retry acquired the emulator lease, captured and encrypted the current SAF
+  save, downloaded and fully authenticated the cloud bundle, restored two files
+  through the journaled SAF transaction, verified the encrypted pre-restore
+  bundle by decrypting every manifest/chunk, committed the terminal receipt and
+  released the emulator lease. UI evidence reported `恢复完成` and `2 个文件`.
+- The encrypted pre-restore bundle is retained in app-private `restore-cas` as
+  `ded5f8b4...3e27a.mhsavebundle`. The operation journal directory was removed
+  only after receipt readback and CAS verification. No plaintext path, save
+  bytes, Recovery Secret or lease was copied into this ledger.
+- Nemessix accepted a post-restore launch and entered `EmulationActivity`; the
+  native core continued executing without an Android crash. The loading overlay
+  did not clear during the bounded observation window, so this is **real stopped
+  restore + core launch evidence**, not yet emulator-readable `Runtime Verified`
+  proof. Runtime promotion remains gated on reaching the in-game save selection
+  or loaded character state without exposing user save contents.

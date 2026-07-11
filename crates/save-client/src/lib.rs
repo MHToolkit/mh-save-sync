@@ -6,6 +6,8 @@ use save_crypto::{
 };
 use save_domain::{AdapterDescriptor, SnapshotId};
 use save_domain::{DeviceId, GameKey, LogicalSaveId};
+#[cfg(target_os = "android")]
+use save_engine::import_encrypted_bundle;
 use save_engine::{
     EmulatorState, EncryptedSnapshot, HeadUpdate, decide_head_update, decrypt_manifest,
     export_encrypted_bundle, restore_snapshot_to_folder,
@@ -1226,6 +1228,52 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_encryptStage
     let output = match result {
         Ok(Ok(json)) => json,
         Ok(Err(_)) | Err(_) => serde_json::json!({"error":"backup_encrypt_failed"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_verifyEncryptedBundle<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    bundle: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    expected_snapshot: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let bundle: String = env.get_string(&bundle)?.into();
+            let expected_snapshot: String = env.get_string(&expected_snapshot)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "invalid secret");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let snapshot = import_encrypted_bundle(Path::new(&bundle))?;
+            anyhow::ensure!(
+                snapshot.snapshot_id.0 == expected_snapshot,
+                "snapshot mismatch"
+            );
+            let parent = Path::new(&bundle)
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            let scratch = tempfile::tempdir_in(parent)?;
+            restore_snapshot_to_folder(
+                &key,
+                &snapshot,
+                &scratch.path().join("verified"),
+                EmulatorState::Stopped,
+            )?;
+            Ok(serde_json::json!({"snapshot_id":snapshot.snapshot_id.0}).to_string())
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"bundle_verify_failed"}).to_string(),
     };
     env.new_string(output)
         .map(|v| v.into_raw())
