@@ -1395,6 +1395,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_replacements_from_same_observed_head_keep_loser_as_conflict() {
+        let base = Some(SnapshotId(id(10)));
+        let current_after_winner = Some(SnapshotId(id(11)));
+        let losing_snapshot = SnapshotId(id(12));
+
+        let (outcome, preserved_head, conflict) =
+            cas_outcome(&base, &current_after_winner, &losing_snapshot);
+
+        assert!(matches!(outcome, CommitOutcomeKind::Conflict));
+        assert_eq!(preserved_head, SnapshotId(id(11)));
+        assert!(conflict);
+    }
+
+    #[tokio::test]
     async fn corrupt_payload_checksum_is_rejected() {
         let state = AppState::default();
         let begin = begin_snapshot(

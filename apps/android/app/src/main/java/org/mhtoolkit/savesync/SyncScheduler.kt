@@ -11,6 +11,9 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 object SyncScheduler {
+    // Flip only after a real SAF -> stable snapshot -> E2EE -> server pipeline is
+    // loaded and covered by device tests. The current Android Alpha is a UI shell.
+    const val REAL_SYNC_PIPELINE_AVAILABLE = false
     const val PREFERENCES = "mh_save_sync"
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"

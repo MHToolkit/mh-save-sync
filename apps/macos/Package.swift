@@ -8,6 +8,8 @@ let package = Package(
         .executable(name: "MHSaveSyncMac", targets: ["MHSaveSyncMac"]),
     ],
     targets: [
-        .executableTarget(name: "MHSaveSyncMac"),
+        .target(name: "MacPresentation"),
+        .executableTarget(name: "MHSaveSyncMac", dependencies: ["MacPresentation"]),
+        .testTarget(name: "MacPresentationTests", dependencies: ["MacPresentation"]),
     ]
 )

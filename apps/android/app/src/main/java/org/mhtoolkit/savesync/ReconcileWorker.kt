@@ -53,6 +53,21 @@ class ReconcileWorker(
             "MH3G / Android Nemessix",
         ) ?: "MH3G / Android Nemessix"
         val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
+        if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
+            preferences.edit()
+                .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+                .putString(
+                    SyncScheduler.LAST_SYNC_SUMMARY,
+                    "当前 Android Alpha 尚未接入真实同步引擎；本次没有读取、上传、下载或覆盖任何存档。",
+                )
+                .putString(SyncScheduler.LAST_SYNC_PHASE, "未执行同步")
+                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "请等待带真实同步引擎的测试版本。")
+                .putString(SyncScheduler.LAST_SYNC_ERROR, "真实同步引擎尚未接入")
+                .putString(SyncScheduler.LAST_SYNC_TARGET, target)
+                .apply()
+            return Result.success()
+        }
         val summary = SyncMessages.reconcileSummary(
             reason = reason,
             target = target,

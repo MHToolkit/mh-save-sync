@@ -70,6 +70,11 @@ enum Commands {
         secret_hex: String,
         #[arg(long)]
         base_head: Option<String>,
+        /// Explicitly make this stable local snapshot replace the HEAD observed
+        /// immediately before upload. The server still uses CAS, so a concurrent
+        /// HEAD change becomes a conflict branch instead of being overwritten.
+        #[arg(long, conflicts_with = "base_head")]
+        replace_cloud_head: bool,
         #[arg(long)]
         logical_save_id: Option<String>,
         #[arg(long, default_value = "cli-device")]
@@ -265,6 +270,7 @@ async fn run() -> anyhow::Result<()> {
             root,
             secret_hex,
             base_head,
+            replace_cloud_head,
             logical_save_id,
             device_id,
             account_handle,
@@ -275,6 +281,7 @@ async fn run() -> anyhow::Result<()> {
                 root,
                 secret_hex,
                 base_head,
+                replace_cloud_head,
                 logical_save_id,
                 device_id,
                 account_handle,
@@ -340,6 +347,7 @@ struct ServerUploadInput {
     root: PathBuf,
     secret_hex: String,
     base_head: Option<String>,
+    replace_cloud_head: bool,
     logical_save_id: Option<String>,
     device_id: String,
     account_handle: Option<String>,
@@ -494,7 +502,13 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
     let logical_save_id = input
         .logical_save_id
         .unwrap_or_else(|| stable_logical_save_id(&descriptor.emulator_id, &game_key).0);
-    let base_head = input.base_head.map(SnapshotId);
+    let client = reqwest::Client::new();
+    let cloud_head_before = get_head(&client, &server_url, &logical_save_id).await?;
+    let base_head = if input.replace_cloud_head {
+        cloud_head_before.clone()
+    } else {
+        input.base_head.map(SnapshotId)
+    };
     let mut parents = Vec::new();
     if let Some(base) = &base_head {
         parents.push(base.clone());
@@ -505,7 +519,6 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
     options.parents = parents.clone();
     options.created_unix_ms = unix_millis();
     let snapshot = create_snapshot_from_stable_folder(&input.root, &descriptor, &secret, options)?;
-    let client = reqwest::Client::new();
     let default_identity =
         ensure_account_device_registered(&client, &server_url, &keys, &computed_account_handle)
             .await?;
@@ -517,7 +530,6 @@ async fn server_upload(input: ServerUploadInput) -> anyhow::Result<ServerUploadR
         .device_cert_id
         .clone()
         .unwrap_or_else(|| default_identity.device_cert_id.clone());
-    let cloud_head_before = get_head(&client, &server_url, &logical_save_id).await?;
     if let Some(current_head) = &cloud_head_before
         && let Some(remote_fingerprint) =
             remote_snapshot_fingerprint(&client, &server_url, &secret, current_head).await?

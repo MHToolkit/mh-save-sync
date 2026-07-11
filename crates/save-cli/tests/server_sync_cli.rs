@@ -366,3 +366,60 @@ stderr={}",
 
     handle.abort();
 }
+
+#[tokio::test]
+async fn cli_explicit_replace_cloud_head_uses_observed_head_as_cas_base() {
+    let Some((server_url, handle)) = spawn_memory_server().await else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("save.bin"), b"cloud-old").unwrap();
+    let common = [
+        "--server-url".to_string(),
+        server_url.clone(),
+        "--root".into(),
+        source.to_string_lossy().into_owned(),
+        "--secret-hex".into(),
+        "5555555555555555555555555555555555555555555555555555555555555555".into(),
+    ];
+    let first = run_mh_save(
+        &[
+            vec!["server-upload".into()],
+            common.to_vec(),
+            vec!["--device-id".into(), "office-mac".into()],
+        ]
+        .concat(),
+    )
+    .await;
+    assert!(first.status.success());
+    let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
+
+    fs::write(source.join("save.bin"), b"android-authoritative").unwrap();
+    let replace = run_mh_save(
+        &[
+            vec!["server-upload".into()],
+            common.to_vec(),
+            vec![
+                "--device-id".into(),
+                "home-android".into(),
+                "--replace-cloud-head".into(),
+            ],
+        ]
+        .concat(),
+    )
+    .await;
+    assert!(
+        replace.status.success(),
+        "explicit replace failed: {}",
+        String::from_utf8_lossy(&replace.stderr)
+    );
+    let replace_json: Value = serde_json::from_slice(&replace.stdout).unwrap();
+    assert_eq!(replace_json["outcome"], "fast-forward");
+    assert_eq!(replace_json["cloud_head_before"], first_json["snapshot_id"]);
+    assert_eq!(replace_json["cloud_head"], replace_json["snapshot_id"]);
+    assert_eq!(replace_json["conflict_snapshot"], Value::Null);
+
+    handle.abort();
+}

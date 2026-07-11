@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MacPresentation
 
 struct MacConfig: Codable {
     var serverURL: String? = nil
@@ -419,15 +420,18 @@ func menuPreviewText(_ context: MacSyncContext) -> String {
     - Mac 存档目录：\(context.saveRootLabel)
     - 恢复密钥：\(context.hasRecoverySecretFile ? "已配置文件" : "未配置")
 
-    常用动作：
-    - 打开同步向导（告诉我下一步）
-    - 生成恢复密钥文件
-    - 启动前检查
-    - 立即上传 Mac 存档到服务器
-    - 我已退出 MH3G：立即对账上传
+    一级菜单：
+    - 立即同步…
+    - 仅上传本地存档
+    - 下载云端并恢复…
+    - 冲突与差异…
+      - 本地设为云端最新（显式选择，旧版保留）
+      - 云端恢复到本地（恢复前先备份）
     - 查看云端状态
-    - 云端覆盖本地（先备份，需停止 Nemessix）
     - 自动同步：退出 Nemessix 后上传
+
+    服务器、存档目录和恢复密钥放在「设置」；教程和启动前检查放在「帮助」。
+    「历史版本」尚未接入此界面，会明确显示为不可用，不会伪装成已实现。
     """
 }
 
@@ -721,6 +725,21 @@ func configuredServerUpload(context: MacSyncContext, reason: String = "manual") 
     ]) + "\n触发来源：\(reason)。本地原始存档未移动；上传前由共享引擎创建稳定快照。\n"
 }
 
+func configuredReplaceCloudHead(context: MacSyncContext) throws -> String {
+    let serverURL = try serverURLOrThrow(context)
+    let root = try saveRootOrThrow(context)
+    let secret = try recoverySecretHexOrThrow(context)
+    return try runMHSave([
+        "server-upload",
+        "--server-url", serverURL,
+        "--root", root,
+        "--secret-hex", secret,
+        "--device-id", "macos-nemessix",
+        "--logical-save-id", mh3gNemessixLogicalSaveID,
+        "--replace-cloud-head",
+    ])
+}
+
 func configuredServerStatus(context: MacSyncContext) throws -> String {
     let serverURL = try serverURLOrThrow(context)
     let secret = try recoverySecretHexOrThrow(context)
@@ -764,13 +783,9 @@ func isNemessixRunning() -> Bool {
 @MainActor
 final class MenuController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var serverMenuItem: NSMenuItem?
-    private var saveRootMenuItem: NSMenuItem?
-    private var secretMenuItem: NSMenuItem?
     private var autoUploadMenuItem: NSMenuItem?
     private var routeMenuItem: NSMenuItem?
     private var syncStateMenuItem: NSMenuItem?
-    private var nextActionMenuItem: NSMenuItem?
     private var processTimer: Timer?
     private var wasNemessixRunning = false
     private var context: MacSyncContext
@@ -785,53 +800,57 @@ final class MenuController: NSObject, NSApplicationDelegate {
         item.button?.title = context.menuBarTitle
         item.button?.toolTip = "MH 云存档同步 · macOS Alpha"
         let menu = NSMenu()
-        let routeItem = NSMenuItem(title: "同步路线：\(context.routeLabel)", action: nil, keyEquivalent: "")
+        let routeItem = NSMenuItem(title: "MH3G · macOS Nemessix", action: nil, keyEquivalent: "")
         menu.addItem(routeItem)
         routeMenuItem = routeItem
-        let serverItem = NSMenuItem(title: "服务器：\(context.serverLabel)", action: nil, keyEquivalent: "")
-        menu.addItem(serverItem)
-        serverMenuItem = serverItem
-        let saveRootItem = NSMenuItem(title: "Mac 存档目录：\(context.saveRootLabel)", action: nil, keyEquivalent: "")
-        menu.addItem(saveRootItem)
-        saveRootMenuItem = saveRootItem
-        let secretItem = NSMenuItem(title: "恢复密钥：\(context.recoverySecretFile == nil ? "未配置" : "已配置文件")", action: nil, keyEquivalent: "")
-        menu.addItem(secretItem)
-        secretMenuItem = secretItem
         let autoItem = NSMenuItem(title: "自动同步：\(context.autoUploadOnExit ? "退出后自动上传" : "关闭")", action: nil, keyEquivalent: "")
         menu.addItem(autoItem)
         autoUploadMenuItem = autoItem
         let stateItem = NSMenuItem(title: "状态：等待操作", action: nil, keyEquivalent: "")
         menu.addItem(stateItem)
         syncStateMenuItem = stateItem
-        let nextItem = NSMenuItem(title: "下一步：\(nextActionText(context))", action: #selector(showQuickGuide), keyEquivalent: "")
-        menu.addItem(nextItem)
-        nextActionMenuItem = nextItem
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "打开同步向导（告诉我下一步）", action: #selector(showQuickGuide), keyEquivalent: "g"))
-        menu.addItem(NSMenuItem(title: "设置服务器地址…", action: #selector(promptServerURL), keyEquivalent: "s"))
-        menu.addItem(NSMenuItem(title: "选择 Mac Nemessix 存档目录…", action: #selector(promptSaveRoot), keyEquivalent: "r"))
-        menu.addItem(NSMenuItem(title: "生成恢复密钥文件", action: #selector(generateRecoverySecretFromMenu), keyEquivalent: "n"))
-        menu.addItem(NSMenuItem(title: "选择恢复密钥文件…", action: #selector(promptRecoverySecretFile), keyEquivalent: "k"))
-        menu.addItem(NSMenuItem(title: "自动同步：退出 Nemessix 后上传", action: #selector(toggleAutoUploadOnExit), keyEquivalent: "a"))
+        menu.addItem(makeMenuItem("立即同步…", action: #selector(syncNow), key: "s"))
+        menu.addItem(makeMenuItem("仅上传本地存档", action: #selector(uploadNow), key: "u"))
+        menu.addItem(makeMenuItem("下载云端并恢复…", action: #selector(restoreCloudToLocal), key: "d"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "启动前检查", action: #selector(showPrelaunch), keyEquivalent: "p"))
-        menu.addItem(NSMenuItem(title: "立即上传 Mac 存档到服务器", action: #selector(uploadNow), keyEquivalent: "u"))
-        menu.addItem(NSMenuItem(title: "我已退出 MH3G：立即对账上传", action: #selector(reconcileAfterExit), keyEquivalent: "e"))
-        menu.addItem(NSMenuItem(title: "查看云端状态", action: #selector(showServerStatus), keyEquivalent: "h"))
-        menu.addItem(NSMenuItem(title: "云端覆盖本地（先备份，需停止 Nemessix）", action: #selector(restoreCloudToLocal), keyEquivalent: "d"))
+        menu.addItem(makeMenuItem("冲突与差异…", action: #selector(showConflict), key: "c"))
+        let historyItem = NSMenuItem(title: "历史版本（尚未接入此界面）", action: nil, keyEquivalent: "")
+        historyItem.isEnabled = false
+        menu.addItem(historyItem)
+        menu.addItem(makeMenuItem("查看云端状态", action: #selector(showServerStatus), key: "h"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "新手引导：办公室 Mac ↔ 回家 Android", action: #selector(showQuickGuide), keyEquivalent: "i"))
-        menu.addItem(NSMenuItem(title: "继续本地并打开 Nemessix", action: #selector(continueLocalAndOpenNemessix), keyEquivalent: "o"))
-        menu.addItem(NSMenuItem(title: "查看冲突处理", action: #selector(showConflict), keyEquivalent: "c"))
-        menu.addItem(NSMenuItem(title: "云端不可用策略", action: #selector(showCloudUnavailable), keyEquivalent: "y"))
+        menu.addItem(makeMenuItem("自动同步：退出 Nemessix 后上传", action: #selector(toggleAutoUploadOnExit), key: "a"))
+
+        let settingsItem = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
+        let settings = NSMenu()
+        settings.addItem(makeMenuItem("服务器地址…", action: #selector(promptServerURL)))
+        settings.addItem(makeMenuItem("Nemessix 存档目录…", action: #selector(promptSaveRoot)))
+        settings.addItem(makeMenuItem("生成恢复密钥文件", action: #selector(generateRecoverySecretFromMenu)))
+        settings.addItem(makeMenuItem("选择恢复密钥文件…", action: #selector(promptRecoverySecretFile)))
+        settingsItem.submenu = settings
+        menu.addItem(settingsItem)
+
+        let helpItem = NSMenuItem(title: "帮助", action: nil, keyEquivalent: "")
+        let help = NSMenu()
+        help.addItem(makeMenuItem("首次使用教程", action: #selector(showQuickGuide)))
+        help.addItem(makeMenuItem("启动前检查", action: #selector(showPrelaunch)))
+        help.addItem(makeMenuItem("云端不可用时怎么办", action: #selector(showCloudUnavailable)))
+        helpItem.submenu = help
+        menu.addItem(helpItem)
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
-        menu.items.forEach { $0.target = self }
+        menu.addItem(makeMenuItem("退出 MH 云存档", action: #selector(quit), key: "q"))
         item.menu = menu
         statusItem = item
         refreshMenuLabels()
         startProcessExitMonitor()
         showStartupGuideIfNeeded()
+    }
+
+    private func makeMenuItem(_ title: String, action: Selector, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
     }
 
     private func showStartupGuideIfNeeded() {
@@ -888,13 +907,9 @@ final class MenuController: NSObject, NSApplicationDelegate {
     private func refreshMenuLabels() {
         statusItem?.button?.title = context.menuBarTitle
         statusItem?.button?.toolTip = "下一步：\(nextActionText(context))"
-        routeMenuItem?.title = "同步路线：\(context.routeLabel)"
-        serverMenuItem?.title = "服务器：\(context.serverLabel)"
-        saveRootMenuItem?.title = "Mac 存档目录：\(context.saveRootLabel)"
-        secretMenuItem?.title = "恢复密钥：\(context.recoverySecretFile == nil ? "未配置" : "已配置文件")"
+        routeMenuItem?.title = context.onboardingComplete ? "MH3G · 配置完成" : "MH3G · 需要完成设置"
         autoUploadMenuItem?.title = "自动同步：\(context.autoUploadOnExit ? "退出后自动上传" : "关闭")"
         autoUploadMenuItem?.state = context.autoUploadOnExit ? .on : .off
-        nextActionMenuItem?.title = "下一步：\(nextActionText(context))"
     }
 
     private func setSyncState(_ message: String) {
@@ -914,6 +929,26 @@ final class MenuController: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func syncNow() {
+        refreshContext()
+        guard context.onboardingComplete else {
+            showAlert(title: "还不能同步", message: nextActionText(context))
+            return
+        }
+        let choice = NSAlert()
+        choice.messageText = "这次要使用哪一边？"
+        choice.informativeText = "如果两边不同，不会自动按时间覆盖；上传会保留冲突分支，下载恢复前会先备份本地。"
+        choice.addButton(withTitle: "上传本地存档")
+        choice.addButton(withTitle: "下载云端并恢复")
+        choice.addButton(withTitle: "取消")
+        let response = choice.runModal()
+        if response == .alertFirstButtonReturn {
+            uploadNow()
+        } else if response == .alertSecondButtonReturn {
+            restoreCloudToLocal()
+        }
+    }
+
     private func startProcessExitMonitor() {
         wasNemessixRunning = isNemessixRunning()
         processTimer?.invalidate()
@@ -928,7 +963,10 @@ final class MenuController: NSObject, NSApplicationDelegate {
         let running = isNemessixRunning()
         if wasNemessixRunning && !running && context.autoUploadOnExit {
             performSyncAction(title: "Nemessix 已退出，开始自动上传", state: "退出后自动上传") {
-                try configuredServerUpload(context: self.context, reason: "Nemessix 退出后自动同步")
+                presentSyncResult(
+                    try configuredServerUpload(context: self.context, reason: "Nemessix 退出后自动同步"),
+                    kind: .upload
+                )
             }
         }
         wasNemessixRunning = running
@@ -1025,7 +1063,10 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     @objc private func uploadNow() {
         performSyncAction(title: "立即上传 Mac 存档到服务器", state: "手动上传") {
-            try configuredServerUpload(context: self.context, reason: "菜单栏手动同步")
+            presentSyncResult(
+                try configuredServerUpload(context: self.context, reason: "菜单栏手动同步"),
+                kind: .upload
+            )
         }
     }
 
@@ -1035,13 +1076,16 @@ final class MenuController: NSObject, NSApplicationDelegate {
             return
         }
         performSyncAction(title: "退出后对账上传", state: "退出后对账") {
-            try configuredServerUpload(context: self.context, reason: "用户确认已退出 MH3G")
+            presentSyncResult(
+                try configuredServerUpload(context: self.context, reason: "用户确认已退出 MH3G"),
+                kind: .upload
+            )
         }
     }
 
     @objc private func showServerStatus() {
         performSyncAction(title: "云端状态", state: "查看云端") {
-            try configuredServerStatus(context: self.context)
+            presentSyncResult(try configuredServerStatus(context: self.context), kind: .status)
         }
     }
 
@@ -1057,7 +1101,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "取消")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         performSyncAction(title: "云端覆盖本地", state: "云端恢复") {
-            try configuredServerRestore(context: self.context)
+            presentSyncResult(try configuredServerRestore(context: self.context), kind: .restore)
         }
     }
 
@@ -1069,14 +1113,28 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showConflict() {
-        showAlert(
-            title: "冲突处理说明",
-            message: """
-            这是说明页，不会执行覆盖或上传。真正发生冲突时会列出本地与云端的设备、时间、上一版、大小和校验摘要。
-            当前 Alpha 已有 MH3G/3U 3DS 专用差异解析入口：先列出两边不同的文件、大小、校验摘要和变更字节段；暂不声称能语义解析猎人名、装备、道具或任务进度。后续每个游戏会独立增加解析器，不能通用猜。
-            可选：云端覆盖本地 / 本地替换云端 / 暂不处理。两边历史都会保留。
-            """
-        )
+        refreshContext()
+        let summary: String
+        do {
+            summary = presentSyncResult(try configuredServerStatus(context: context), kind: .status)
+        } catch {
+            showAlert(title: "无法读取冲突状态", message: "\(error)")
+            return
+        }
+        let choice = NSAlert()
+        choice.messageText = "冲突与差异"
+        choice.informativeText = summary + "\n\n请选择要继续使用的版本。旧版本和冲突分支会保留。"
+        choice.addButton(withTitle: "本地设为云端最新")
+        choice.addButton(withTitle: "云端恢复到本地")
+        choice.addButton(withTitle: "暂不处理")
+        let response = choice.runModal()
+        if response == .alertFirstButtonReturn {
+            performSyncAction(title: "本地版本已设为云端最新", state: "替换云端版本") {
+                presentSyncResult(try configuredReplaceCloudHead(context: self.context), kind: .upload)
+            }
+        } else if response == .alertSecondButtonReturn {
+            restoreCloudToLocal()
+        }
     }
 
     @objc private func showCloudUnavailable() {
@@ -1156,7 +1214,7 @@ do {
     } else if args.contains("--configured-restore") {
         print(try configuredServerRestore(context: context), terminator: "")
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--generate-recovery-secret-file] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app；双击后进入菜单栏模式，屏幕右上角会出现「MH 云存档 · 就绪/设服务器/选目录/选密钥」。菜单顶部会显示「同步路线」和「下一步」，配置后也会继续提示还缺什么；菜单内可点：打开同步向导（告诉我下一步）、设置服务器地址…、选择 Mac Nemessix 存档目录…、生成恢复密钥文件、选择恢复密钥文件…、启动前检查、立即上传 Mac 存档到服务器、我已退出 MH3G：立即对账上传、查看云端状态、云端覆盖本地（先备份，需停止 Nemessix）、自动同步：退出 Nemessix 后上传，并读取 ~/Library/Application Support/MH Save Sync/config.json。")
+        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--generate-recovery-secret-file] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app。一级菜单只保留：立即同步…、仅上传本地存档、下载云端并恢复…、冲突与差异…、查看云端状态、自动同步；服务器/目录/密钥放在「设置」，首次教程和启动前检查放在「帮助」。历史版本尚未接入此界面，会明确禁用。")
     } else {
         printStatus(context)
     }
