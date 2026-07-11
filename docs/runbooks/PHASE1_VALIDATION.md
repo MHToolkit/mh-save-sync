@@ -1184,3 +1184,10 @@ Open Phase 1D gates:
 - The restored phone save was then explicitly uploaded with “用本地替换云端”. The server CAS advanced from `…0f69f8` to `…f0f9f0`; prior versions remained in history/conflict branches.
 - An authenticated macOS status read independently observed full HEAD `550128a975b2a1f5cd4e24311a18c1c00a955d3bbc429608a1388b1484f0f9f0`, 16 history entries, and 11 retained conflict branches.
 - This proves backup-before-restore, encrypted local rollback, stopped-only commit, explicit local-to-cloud replacement, and independent authenticated readback. Emulator-readable gameplay validation remains pending and is not promoted to Runtime Verified.
+
+### 2026-07-11 post-recovery client refresh
+
+- Installed the reviewed Android debug artifact over the existing OnePlus Ace 5 app without clearing app data: `mh-save-sync-976256f-debug.apk`, SHA-256 `e21cc2a289912db46fae8d4625a3607e303074f9d650a991b574528166b105cf`. The temporary exported debug restore trigger used for the one-off recovery is absent from this build.
+- The local encrypted restore path now requires an explicit 64-hex snapshot ID, binds it to the decrypted manifest-derived content ID, and places every post-acquire durable write/capture under lease cleanup. A forged-ID regression test is included.
+- Rebuilt and installed `/Applications/MH Save Sync.app`. Five Swift presentation tests prove upload conflict, cloud status, restore, fallback, and diagnostic-suffix output are reduced to compact Chinese summaries without raw JSON, account handles, logical-save IDs, or local paths.
+- Re-ran no-server encrypted bundle export/restore and local authenticated server conflict E2E. Both preserved stopped-only restore behavior; the server flow retained the conflict branch and restored the selected cloud HEAD.
