@@ -41,4 +41,13 @@ class DashboardContentPolicyTest {
         assertEquals("可以同步", DashboardContentPolicy.status(true, true, true, false))
         assertEquals("MH3G 同步已暂停", DashboardContentPolicy.status(true, false, true, false))
     }
+
+    @Test
+    fun `launch status never exposes stale head or server details`() {
+        val remote = DashboardContentPolicy.launchStatus("prelaunch-remote-head")
+        assertEquals("云端有版本，请先确认同步方向", remote)
+        assertFalse(remote.contains("http"))
+        assertFalse(remote.contains("版本摘要"))
+        assertEquals("启动前会先检查云端", DashboardContentPolicy.launchStatus("not-checked"))
+    }
 }

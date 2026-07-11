@@ -157,12 +157,9 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty())
         }
         var launchGate by remember {
-            mutableStateOf(
-                preferences.getString(
-                    SyncScheduler.LAUNCH_GATE_SUMMARY,
-                    "未检查。启动 MH3G 前点「启动前检查」。",
-                ).orEmpty()
-            )
+            mutableStateOf(DashboardContentPolicy.launchStatus(
+                preferences.getString(SyncScheduler.LAUNCH_GATE_REASON, "not-checked").orEmpty()
+            ))
         }
         var launchGateReason by remember {
             mutableStateOf(
@@ -203,14 +200,11 @@ class MainActivity : ComponentActivity() {
                 "先填写服务器地址并授权存档目录，然后做启动前检查。",
             ).orEmpty()
             syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
-            launchGate = preferences.getString(
-                SyncScheduler.LAUNCH_GATE_SUMMARY,
-                "未检查。启动 MH3G 前点「启动前检查」。",
-            ).orEmpty()
             launchGateReason = preferences.getString(
                 SyncScheduler.LAUNCH_GATE_REASON,
                 "not-checked",
             ).orEmpty()
+            launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
         }
 
         DisposableEffect(preferences) {
@@ -411,8 +405,8 @@ class MainActivity : ComponentActivity() {
                     serverEndpoint = serverEndpoint,
                     emulatorRunning = sessionActive,
                 )
-                launchGate = result.summary
                 launchGateReason = result.reason
+                launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
                 lastSummary = result.summary
                 preferences.edit()
                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
@@ -656,8 +650,8 @@ class MainActivity : ComponentActivity() {
                                     serverEndpoint = serverEndpoint,
                                     emulatorRunning = sessionActive,
                                 )
-                                launchGate = result.summary
                                 launchGateReason = result.reason
+                                launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
                                 lastSummary = if (result.remoteHead != null) {
                                     "发现云端版本，请先选择上传或恢复。"
                                 } else if (!result.cloudReachable) {
