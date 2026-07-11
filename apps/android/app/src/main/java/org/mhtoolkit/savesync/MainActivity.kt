@@ -372,32 +372,27 @@ class MainActivity : ComponentActivity() {
                     "MH3G / Android Nemessix",
                 ).orEmpty()
                 if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
-                    CardSection("当前版本能力") {
-                        Text("仅可配置和检查云端。真实上传、下载和恢复尚未接入，因此不会改动存档。")
-                        Text("下方数据操作暂时禁用，避免把“已排队”误认为“已同步”。")
-                    }
+                    Text(
+                        "测试版 · 同步功能尚未启用",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
                 }
 
                 CardSection("当前状态和下一步") {
-                    StatusLine(
-                        "当前状态",
+                    val pipelineAvailable = SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE
+                    StatusLine("状态", if (pipelineAvailable) {
                         SyncMessages.dashboardStateSummary(
                             authorized = authorized,
                             gameEnabled = gameEnabled,
                             endpoint = serverEndpoint,
                             sessionActive = sessionActive,
-                        ),
-                    )
-                    StatusLine(
-                        "下一步",
-                        SyncMessages.dashboardNextAction(
-                            authorized = authorized,
-                            gameEnabled = gameEnabled,
-                            endpoint = serverEndpoint,
-                            sessionActive = sessionActive,
-                        ),
-                    )
+                        )
+                    } else {
+                        "可以配置服务器和目录；不会读写存档。"
+                    })
                     Button(
+                        enabled = pipelineAvailable || !gameEnabled || !authorized || serverEndpoint.isBlank(),
                         onClick = {
                             when {
                                 !gameEnabled -> {
@@ -425,12 +420,12 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            SyncMessages.dashboardPrimaryActionLabel(
+                            if (pipelineAvailable) SyncMessages.dashboardPrimaryActionLabel(
                                 authorized = authorized,
                                 gameEnabled = gameEnabled,
                                 endpoint = serverEndpoint,
                                 sessionActive = sessionActive,
-                            ),
+                            ) else "同步功能开发中",
                         )
                     }
                 }
