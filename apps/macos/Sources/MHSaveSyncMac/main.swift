@@ -1255,7 +1255,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
                     throw CommandFailure(
                         command: ["server-upload", "--replace-cloud-head"],
                         status: 2,
-                        stderr: "本地上传结果没有可验证的新 HEAD；冲突标记没有改动。请刷新云端状态后重试。\n"
+                        stderr: "本地上传结果无法确认新的云端版本；分支标记没有改动。请刷新云端状态后重试。\n"
                     )
                 }
                 try self.resolveCapturedConflictBranches(
@@ -1278,6 +1278,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
         chosenSnapshotID: String,
         resolution: String
     ) throws {
+        let totalBranches = conflictState.snapshotIDs.count
         for (index, conflictID) in conflictState.snapshotIDs.enumerated() {
             do {
                 _ = try configuredResolveConflict(
@@ -1290,7 +1291,7 @@ final class MenuController: NSObject, NSApplicationDelegate {
                 throw CommandFailure(
                     command: ["server-resolve-conflict"],
                     status: 2,
-                    stderr: "已完成存档方向选择，但只处理了 \(index)/\(conflictState.snapshotIDs.count) 个冲突标记。云端 HEAD 可能已被其他设备推进（CAS stale），或网络请求失败；不会谎称全部完成。历史版本仍保留。请刷新“处理冲突”后重试。底层错误：\(error)\n"
+                    stderr: "已完成存档方向选择，但只处理了 \(index)/\(totalBranches) 个分支标记。云端版本可能已被其他设备更新，或网络请求失败；不会谎称全部完成。历史版本仍保留。请刷新云端状态后重试。\n"
                 )
             }
         }
