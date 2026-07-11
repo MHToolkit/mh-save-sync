@@ -525,28 +525,28 @@ class MainActivity : ComponentActivity() {
                     SyncScheduler.LAST_SYNC_TARGET,
                     "MH3G / Android Nemessix",
                 ).orEmpty()
-                if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
-                    Text(
-                        "测试版 · 已开放“本地设为云端最新”；自动同步仍在验证",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
+                Text(
+                    if (authorized && hasRecoverySecret && serverEndpoint.isNotBlank()) {
+                        "手动上传、下载可用 · 自动同步尚在验证"
+                    } else {
+                        "完成服务器、密钥和目录设置后即可同步"
+                    },
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelLarge,
+                )
 
                 CardSection("当前状态和下一步") {
-                    val pipelineAvailable = SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE
-                    StatusLine("状态", if (pipelineAvailable) {
+                    StatusLine(
+                        "状态",
                         SyncMessages.dashboardStateSummary(
                             authorized = authorized,
                             gameEnabled = gameEnabled,
                             endpoint = serverEndpoint,
                             sessionActive = sessionActive,
-                        )
-                    } else {
-                        "可以配置服务器和目录；不会读写存档。"
-                    })
+                        ),
+                    )
                     Button(
-                        enabled = pipelineAvailable || !gameEnabled || !authorized || serverEndpoint.isBlank(),
+                        enabled = true,
                         onClick = {
                             when {
                                 !gameEnabled -> {
@@ -574,12 +574,16 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            if (pipelineAvailable) SyncMessages.dashboardPrimaryActionLabel(
-                                authorized = authorized,
-                                gameEnabled = gameEnabled,
-                                endpoint = serverEndpoint,
-                                sessionActive = sessionActive,
-                            ) else "同步功能开发中",
+                            if (authorized && gameEnabled && serverEndpoint.isNotBlank()) {
+                                "检查云端存档"
+                            } else {
+                                SyncMessages.dashboardPrimaryActionLabel(
+                                    authorized = authorized,
+                                    gameEnabled = gameEnabled,
+                                    endpoint = serverEndpoint,
+                                    sessionActive = sessionActive,
+                                )
+                            },
                         )
                     }
                 }
@@ -762,7 +766,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("同步动作") {
-                    Text("需要把手机最新进度带到 Mac 时，使用“本地设为云端最新”。云端旧版本会保留，可从历史恢复。")
+                    Text("把手机进度带到 Mac：点“用本地替换云端”。旧版本仍会保留。")
                     Button(
                         enabled = authorized && gameEnabled && hasRecoverySecret &&
                             SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
@@ -785,9 +789,9 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("上传本地存档")
+                        Text("自动上传（尚在验证）")
                     }
-                    OutlinedButton(
+                    Button(
                         enabled = authorized && gameEnabled && hasRecoverySecret &&
                             SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
                         onClick = {
@@ -844,7 +848,7 @@ class MainActivity : ComponentActivity() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("用本地替换云端")
+                        Text("用本地替换云端（手机进度最新）")
                     }
                     OutlinedButton(
                         enabled = authorized && gameEnabled && hasRecoverySecret &&
