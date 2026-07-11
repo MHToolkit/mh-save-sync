@@ -429,13 +429,15 @@ async fn authenticate_write_request(
     );
     if let Err(error) = verify_and_consume_challenge(
         &state,
-        &account,
-        &device,
-        challenge_id,
-        &nonce,
-        timestamp,
-        &signature,
-        &message,
+        ChallengeProof {
+            account_hex: &account,
+            device_hex: &device,
+            challenge_id,
+            nonce: &nonce,
+            timestamp,
+            signature_bytes: &signature,
+            message: &message,
+        },
     )
     .await
     {
@@ -449,16 +451,29 @@ async fn authenticate_write_request(
     next.run(request).await
 }
 
+struct ChallengeProof<'a> {
+    account_hex: &'a str,
+    device_hex: &'a str,
+    challenge_id: Uuid,
+    nonce: &'a [u8],
+    timestamp: u64,
+    signature_bytes: &'a [u8],
+    message: &'a [u8],
+}
+
 async fn verify_and_consume_challenge(
     state: &AppState,
-    account_hex: &str,
-    device_hex: &str,
-    challenge_id: Uuid,
-    nonce: &[u8],
-    timestamp: u64,
-    signature_bytes: &[u8],
-    message: &[u8],
+    proof: ChallengeProof<'_>,
 ) -> Result<(), ApiError> {
+    let ChallengeProof {
+        account_hex,
+        device_hex,
+        challenge_id,
+        nonce,
+        timestamp,
+        signature_bytes,
+        message,
+    } = proof;
     let now = unix_seconds();
     if timestamp.abs_diff(now) > 300 {
         return Err((StatusCode::UNAUTHORIZED, "request timestamp expired".into()));
@@ -1862,25 +1877,29 @@ mod tests {
         let signature = signing.sign(&message).to_bytes();
         verify_and_consume_challenge(
             &state,
-            &account,
-            &device,
-            challenge_id,
-            &nonce,
-            timestamp,
-            &signature,
-            &message,
+            ChallengeProof {
+                account_hex: &account,
+                device_hex: &device,
+                challenge_id,
+                nonce: &nonce,
+                timestamp,
+                signature_bytes: &signature,
+                message: &message,
+            },
         )
         .await
         .unwrap();
         let replay = verify_and_consume_challenge(
             &state,
-            &account,
-            &device,
-            challenge_id,
-            &nonce,
-            timestamp,
-            &signature,
-            &message,
+            ChallengeProof {
+                account_hex: &account,
+                device_hex: &device,
+                challenge_id,
+                nonce: &nonce,
+                timestamp,
+                signature_bytes: &signature,
+                message: &message,
+            },
         )
         .await;
         assert!(matches!(replay, Err((StatusCode::UNAUTHORIZED, _))));
@@ -1918,7 +1937,7 @@ mod tests {
     #[test]
     fn parent_shape_rejects_duplicates_and_requires_base_parent() {
         let parent = SnapshotId(id(1));
-        assert!(validate_parent_shape(Some(&parent), &[parent.clone()]).is_ok());
+        assert!(validate_parent_shape(Some(&parent), std::slice::from_ref(&parent)).is_ok());
         assert!(validate_parent_shape(Some(&parent), &[]).is_err());
         assert!(validate_parent_shape(None, &[parent.clone(), parent]).is_err());
     }
