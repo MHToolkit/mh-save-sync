@@ -327,6 +327,7 @@ class MainActivity : ComponentActivity() {
                 .apply()
             scope.launch {
                 val result = SyncServerProbe.checkPrelaunch(
+                    context = this@MainActivity,
                     serverEndpoint = serverEndpoint,
                     emulatorRunning = sessionActive,
                 )
@@ -480,7 +481,7 @@ class MainActivity : ComponentActivity() {
                 ).orEmpty()
                 if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
                     Text(
-                        "测试版 · 服务器认证升级中，存档写入暂未开放",
+                        "测试版 · 已开放“本地设为云端最新”；自动同步仍在验证",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelLarge,
                     )
@@ -621,6 +622,7 @@ class MainActivity : ComponentActivity() {
                                 .apply()
                             scope.launch {
                                 val result = SyncServerProbe.checkPrelaunch(
+                                    context = this@MainActivity,
                                     serverEndpoint = serverEndpoint,
                                     emulatorRunning = sessionActive,
                                 )
@@ -721,7 +723,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("同步动作") {
-                    Text("“本地设为云端最新”链路已接入安全确认，但服务端设备签名与账号隔离升级完成前保持关闭。")
+                    Text("需要把手机最新进度带到 Mac 时，使用“本地设为云端最新”。云端旧版本会保留，可从历史恢复。")
                     Button(
                         enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
                         onClick = {
@@ -781,7 +783,10 @@ class MainActivity : ComponentActivity() {
                                     runCatching {
                                         LocalReplacePolicy.requireSessionStopped(sessionActive)
                                         NemessixProcessGate(this@MainActivity).requireStopped()
-                                        SyncServerProbe.fetchHeadForReplace(serverEndpoint)
+                                        SyncServerProbe.fetchHeadForReplace(
+                                            this@MainActivity,
+                                            serverEndpoint,
+                                        )
                                     }.fold(
                                         onSuccess = {
                                             observedReplaceHead = it

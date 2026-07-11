@@ -54,6 +54,10 @@ class ReconcileWorker(
         ) ?: "MH3G / Android Nemessix"
         val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
         if (!SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE) {
+            // A periodic WorkManager request normally remains ENQUEUED between
+            // its 15-minute runs. That is scheduler state, not a pending user
+            // upload, so do not overwrite the dashboard with “排队中”.
+            if (reason == "periodic") return Result.success()
             preferences.edit()
                 .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)

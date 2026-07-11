@@ -11,6 +11,8 @@ use save_engine::{SnapshotOptions, create_snapshot_from_stable_folder};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::path::Path;
+#[cfg(target_os = "android")]
+use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
@@ -382,6 +384,11 @@ pub struct AndroidUploadReport {
     pub total_bytes: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloudHeadReport {
+    pub head: Option<String>,
+}
+
 #[derive(Serialize)]
 struct Bootstrap<'a> {
     account_handle: &'a str,
@@ -634,6 +641,25 @@ async fn signed_request<T: Serialize>(
     identity: &RequestIdentity<'_>,
     body: &T,
 ) -> anyhow::Result<reqwest::Response> {
+    signed_raw_request(
+        client,
+        reqwest::Method::POST,
+        url,
+        server,
+        identity,
+        serde_json::to_vec(body)?,
+    )
+    .await
+}
+
+async fn signed_raw_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+    body: Vec<u8>,
+) -> anyhow::Result<reqwest::Response> {
     let challenge: ChallengeReply = post_json_client(
         client,
         &format!("{server}/v1/accounts/challenge"),
@@ -650,7 +676,6 @@ async fn signed_request<T: Serialize>(
         challenge.expires_unix_seconds >= now,
         "expired auth challenge"
     );
-    let body = serde_json::to_vec(body)?;
     let parsed = reqwest::Url::parse(url)?;
     let path = parsed.path().to_owned()
         + parsed
@@ -660,7 +685,7 @@ async fn signed_request<T: Serialize>(
             .unwrap_or("");
     let signature = save_crypto::sign_http_request(
         identity.signing_key,
-        "POST",
+        method.as_str(),
         &path,
         &body,
         &challenge.challenge_id,
@@ -668,7 +693,7 @@ async fn signed_request<T: Serialize>(
         now,
     );
     Ok(client
-        .post(url)
+        .request(method, url)
         .header("content-type", "application/json")
         .header("x-mh-account", identity.account_handle)
         .header("x-mh-device-cert", identity.device_cert_id)
@@ -682,6 +707,126 @@ async fn signed_request<T: Serialize>(
         .body(body)
         .send()
         .await?)
+}
+
+async fn signed_get(
+    client: &reqwest::Client,
+    url: &str,
+    server: &str,
+    identity: &RequestIdentity<'_>,
+) -> anyhow::Result<reqwest::Response> {
+    signed_raw_request(
+        client,
+        reqwest::Method::GET,
+        url,
+        server,
+        identity,
+        Vec::new(),
+    )
+    .await
+}
+
+fn validate_logical_save_id(value: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "invalid logical save id"
+    );
+    Ok(())
+}
+
+/// Authenticates the account/device and fetches the exact server CAS HEAD.
+/// A missing logical save is represented as `head: null`; transport/auth errors
+/// remain errors and must never be collapsed into an empty cloud state.
+pub async fn fetch_android_cloud_head(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    device_id: &str,
+) -> anyhow::Result<CloudHeadReport> {
+    let server = server.trim_end_matches('/');
+    anyhow::ensure!(
+        server.starts_with("https://") || server.starts_with("http://"),
+        "invalid server endpoint"
+    );
+    validate_logical_save_id(logical_save_id)?;
+    anyhow::ensure!(
+        !device_id.is_empty() && device_id.len() <= 128,
+        "invalid device id"
+    );
+
+    let keys = derive_account_keys(secret)?;
+    let handle = account_handle(&keys);
+    let root = account_root_signing_key(&keys);
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-signing-seed/v1");
+    h.update(keys.auth);
+    h.update(device_id.as_bytes());
+    let device = SigningKey::from_bytes(&h.finalize().into());
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-cert-id/v1");
+    h.update(device.verifying_key().to_bytes());
+    let digest = h.finalize();
+    let mut cert_id = [0u8; 16];
+    cert_id.copy_from_slice(&digest[..16]);
+    let cert_hex = hex::encode(cert_id);
+    let cert = issue_device_certificate_with_id(
+        &root,
+        &device.verifying_key(),
+        cert_id,
+        1_700_000_000,
+        4_102_444_800,
+        1,
+    )?;
+    let identity = RequestIdentity {
+        account_handle: &handle,
+        device_cert_id: &cert_hex,
+        signing_key: &device,
+    };
+    let client = reqwest::Client::new();
+    post_empty(
+        &client,
+        &format!("{server}/v1/accounts/bootstrap"),
+        &Bootstrap {
+            account_handle: &handle,
+            root_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(root.verifying_key().to_bytes()),
+        },
+    )
+    .await?;
+    post_empty(
+        &client,
+        &format!("{server}/v1/devices/register"),
+        &Register {
+            account_handle: &handle,
+            cert_id: &cert_hex,
+            device_public_key_b64: base64::engine::general_purpose::STANDARD
+                .encode(device.verifying_key().to_bytes()),
+            certificate_b64: base64::engine::general_purpose::STANDARD
+                .encode(deterministic_cbor(&cert)?),
+        },
+    )
+    .await?;
+    let response = signed_get(
+        &client,
+        &format!("{server}/v1/heads/{logical_save_id}"),
+        server,
+        &identity,
+    )
+    .await?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(CloudHeadReport { head: None });
+    }
+    anyhow::ensure!(
+        response.status().is_success(),
+        "server request failed: {}",
+        response.status()
+    );
+    let head: SnapshotId = response.json().await?;
+    Ok(CloudHeadReport { head: Some(head.0) })
 }
 
 async fn signed_post_empty<T: Serialize>(
@@ -718,6 +863,44 @@ async fn signed_post_json_client<T: Serialize, R: for<'de> Deserialize<'de>>(
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_fetchCloudHead<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            let report =
+                runtime.block_on(fetch_android_cloud_head(&server, &key, &logical, &device))?;
+            Ok(serde_json::to_string(&report)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => {
+            // Never surface URLs, account identifiers, device identifiers,
+            // recovery material, response bodies, or native panic details.
+            serde_json::json!({"error":"cloud_head_failed"}).to_string()
+        }
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_bridgeHealth<'local>(
     env: jni::JNIEnv<'local>,
     _class: jni::objects::JClass<'local>,
@@ -739,39 +922,42 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_uploadStable
     base: jni::objects::JString<'local>,
     device: jni::objects::JString<'local>,
 ) -> jni::sys::jstring {
-    let result = (|| -> anyhow::Result<String> {
-        let staging: String = env.get_string(&staging)?.into();
-        let server: String = env.get_string(&server)?.into();
-        let logical: String = env.get_string(&logical)?.into();
-        let device: String = env.get_string(&device)?.into();
-        let base = if base.is_null() {
-            None
-        } else {
-            Some(String::from(env.get_string(&base)?))
-        };
-        let mut bytes = env.convert_byte_array(&secret)?;
-        anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&bytes);
-        bytes.fill(0);
-        let runtime = tokio::runtime::Runtime::new()?;
-        let report = runtime.block_on(upload_android_stable_stage(
-            Path::new(&staging),
-            &server,
-            &key,
-            &logical,
-            base.as_deref(),
-            &device,
-        ));
-        key.fill(0);
-        Ok(serde_json::to_string(&report?)?)
-    })();
-    let output = result.unwrap_or_else(|_error| {
-        // Native error chains may contain private staging paths. Keep the JNI
-        // boundary redacted; structured diagnostics belong in metadata-only
-        // audit events, never UI/logcat.
-        serde_json::json!({"error":"sync_failed","message_zh":"同步失败，未修改云端 HEAD 或本地原始存档"}).to_string()
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let staging: String = env.get_string(&staging)?.into();
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let base = if base.is_null() {
+                None
+            } else {
+                Some(String::from(env.get_string(&base)?))
+            };
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            let report = runtime.block_on(upload_android_stable_stage(
+                Path::new(&staging),
+                &server,
+                &key,
+                &logical,
+                base.as_deref(),
+                &device,
+            ));
+            Ok(serde_json::to_string(&report?)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => {
+            // Native error chains may contain private staging paths. Keep the JNI
+            // boundary redacted; structured diagnostics belong in metadata-only
+            // audit events, never UI/logcat.
+            serde_json::json!({"error":"sync_failed","message_zh":"同步失败，未修改云端 HEAD 或本地原始存档"}).to_string()
+        }
+    };
     env.new_string(output)
         .map(|v| v.into_raw())
         .unwrap_or(std::ptr::null_mut())
@@ -828,6 +1014,29 @@ impl SyncCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_head_json_is_strict_and_null_is_not_an_error() {
+        assert_eq!(
+            serde_json::to_string(&CloudHeadReport { head: None }).unwrap(),
+            r#"{"head":null}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&CloudHeadReport {
+                head: Some("abc123".into())
+            })
+            .unwrap(),
+            r#"{"head":"abc123"}"#
+        );
+    }
+
+    #[test]
+    fn cloud_head_rejects_path_injection_ids() {
+        assert!(validate_logical_save_id("mh3g-save_01").is_ok());
+        for invalid in ["", "../heads/other", "save/id", "save?id=x", "存档"] {
+            assert!(validate_logical_save_id(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn bridge_uses_shared_conflict_engine() {

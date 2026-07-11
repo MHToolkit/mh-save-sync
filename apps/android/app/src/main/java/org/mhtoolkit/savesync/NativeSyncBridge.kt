@@ -13,4 +13,11 @@ object NativeSyncBridge {
         baseHead: String?,
         deviceId: String,
     ): String
+
+    external fun fetchCloudHead(
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        deviceId: String,
+    ): String
 }

@@ -29,7 +29,7 @@ class LocalReplacePipeline(private val context: Context) {
         withContext(Dispatchers.IO) {
             LocalReplacePolicy.requireSessionStopped(sessionActive)
             NemessixProcessGate(context).requireStopped()
-            val current = SyncServerProbe.fetchHeadForReplace(server)
+            val current = SyncServerProbe.fetchHeadForReplace(context, server)
             val base = LocalReplacePolicy.requireObservedBase(observedBase, current)
             val stage = SafStableStager(context).capture(treeUri)
             var secret: ByteArray? = null

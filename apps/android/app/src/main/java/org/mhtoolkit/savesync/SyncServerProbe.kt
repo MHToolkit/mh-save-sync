@@ -1,10 +1,14 @@
 package org.mhtoolkit.savesync
 
+import android.content.Context
+import android.provider.Settings
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 data class PrelaunchProbeResult(
     val summary: String,
@@ -19,6 +23,7 @@ object SyncServerProbe {
         "243773e91e82488191606da57fbe807ae3c04958e4c571f5e9c7f3fdb29a41d2"
 
     suspend fun checkPrelaunch(
+        context: Context,
         serverEndpoint: String,
         emulatorRunning: Boolean,
     ): PrelaunchProbeResult = withContext(Dispatchers.IO) {
@@ -31,15 +36,22 @@ object SyncServerProbe {
                 remoteHead = null,
             )
         }
+        if (!AndroidSecretVault(context).hasSecret()) {
+            return@withContext PrelaunchProbeResult(
+                summary = "请先导入与 Mac 相同的恢复密钥，才能验证云端版本。此时不会读取或修改本地存档。",
+                reason = "prelaunch-key-required",
+                cloudReachable = false,
+                remoteHead = null,
+            )
+        }
         try {
             val ready = get("$server/ready")
             if (ready.status !in 200..299) {
                 return@withContext cloudUnavailable(server, "ready=${ready.status}")
             }
-            val head = get("$server/v1/heads/$MH3G_NEMESSIX_LOGICAL_SAVE_ID")
-            when (head.status) {
-                in 200..299 -> {
-                    val snapshot = head.body.trim().trim('"')
+            val snapshot = fetchHeadForReplace(context, server)
+            when {
+                snapshot != null -> {
                     val versionLabel = userVisibleRemoteVersion(snapshot)
                     PrelaunchProbeResult(
                         summary = if (emulatorRunning) {
@@ -53,13 +65,12 @@ object SyncServerProbe {
                         remoteVersionLabel = versionLabel,
                     )
                 }
-                404 -> PrelaunchProbeResult(
+                else -> PrelaunchProbeResult(
                     summary = "云端可用，但还没有 MH3G 云端版本。可以启动本地游戏；退出后本地稳定快照会上传到 $server。",
                     reason = "prelaunch-no-remote-head",
                     cloudReachable = true,
                     remoteHead = null,
                 )
-                else -> cloudUnavailable(server, "head=${head.status}")
             }
         } catch (error: IOException) {
             cloudUnavailable(server, error.javaClass.simpleName)
@@ -69,16 +80,40 @@ object SyncServerProbe {
     }
 
     /** Returns the exact CAS base. Network/protocol failures are never mapped to an empty head. */
-    suspend fun fetchHeadForReplace(serverEndpoint: String): String? = withContext(Dispatchers.IO) {
+    suspend fun fetchHeadForReplace(
+        context: Context,
+        serverEndpoint: String,
+    ): String? = withContext(Dispatchers.IO) {
         val server = normalizeServer(serverEndpoint)
         require(server.isNotBlank()) { "请先填写服务器地址" }
         val ready = get("$server/ready")
         check(ready.status in 200..299) { "服务器暂时不可用" }
-        val head = get("$server/v1/heads/$MH3G_NEMESSIX_LOGICAL_SAVE_ID")
-        when (head.status) {
-            404 -> null
-            in 200..299 -> head.body.trim().trim('"').ifBlank { null }
-            else -> error("无法读取云端版本")
+        var secret: ByteArray? = null
+        try {
+            secret = AndroidSecretVault(context).load()
+            val response = JSONObject(
+                NativeSyncBridge.fetchCloudHead(
+                    serverEndpoint = server,
+                    recoverySecret = secret,
+                    logicalSaveId = MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                    deviceId = deviceId(context),
+                ),
+            )
+            check(!response.has("error")) { "无法验证云端版本" }
+            if (response.isNull("head")) null else response.getString("head").ifBlank { null }
+        } finally {
+            secret?.fill(0)
+        }
+    }
+
+    private fun deviceId(context: Context): String {
+        val raw = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            .orEmpty().toByteArray()
+        return try {
+            "android-" + MessageDigest.getInstance("SHA-256").digest(raw)
+                .take(8).joinToString("") { "%02x".format(it) }
+        } finally {
+            raw.fill(0)
         }
     }
 
