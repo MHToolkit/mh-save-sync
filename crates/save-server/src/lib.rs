@@ -289,8 +289,16 @@ impl AppState {
         match &self.backend {
             Backend::Memory(inner) => {
                 let guard = inner.lock().unwrap();
-                for row in guard.snapshots.values() {
-                    if !guard.manifests.contains_key(&row.manifest_id) {
+                for (snapshot_key, row) in &guard.snapshots {
+                    let account = guard
+                        .snapshot_accounts
+                        .get(snapshot_key)
+                        .map(String::as_str)
+                        .unwrap_or_default();
+                    if !guard
+                        .manifests
+                        .contains_key(&scoped_key(account, &row.manifest_id))
+                    {
                         return Err(BackendError::Unavailable("missing-manifest".into()));
                     }
                 }
@@ -835,7 +843,7 @@ async fn begin_snapshot(
             let missing = req
                 .chunk_ids
                 .iter()
-                .filter(|id| !guard.chunks.contains_key(*id))
+                .filter(|id| !guard.chunks.contains_key(&scoped_key(account, id)))
                 .cloned()
                 .collect();
             guard.uploads.insert(
@@ -956,7 +964,8 @@ async fn put_chunk(
             {
                 return Err((StatusCode::NOT_FOUND, "upload not found".into()));
             }
-            if let Some(existing) = guard.chunks.get(&req.chunk_id)
+            let object_key = scoped_key(&auth.account_handle, &req.chunk_id);
+            if let Some(existing) = guard.chunks.get(&object_key)
                 && sha256_hex(existing) != req.sha256.to_lowercase()
             {
                 return Err(BackendError::Conflict(
@@ -964,7 +973,7 @@ async fn put_chunk(
                 )
                 .api());
             }
-            guard.chunks.entry(req.chunk_id.clone()).or_insert(bytes);
+            guard.chunks.entry(object_key).or_insert(bytes);
             guard
                 .uploads
                 .get_mut(&upload_id)
@@ -1019,7 +1028,8 @@ async fn put_manifest(
             if session.manifest_id.as_deref() != Some(&req.manifest_id) {
                 return Err(BackendError::Invalid("manifest id mismatch".into()).api());
             }
-            if let Some(existing) = guard.manifests.get(&req.manifest_id)
+            let object_key = scoped_key(&auth.account_handle, &req.manifest_id);
+            if let Some(existing) = guard.manifests.get(&object_key)
                 && sha256_hex(existing) != req.sha256.to_lowercase()
             {
                 return Err(BackendError::Conflict(
@@ -1027,7 +1037,7 @@ async fn put_manifest(
                 )
                 .api());
             }
-            guard.manifests.entry(req.manifest_id).or_insert(bytes);
+            guard.manifests.entry(object_key).or_insert(bytes);
         }
         Backend::Persistent(p) => {
             let auth = auth
@@ -1100,14 +1110,21 @@ fn commit_memory(
         return Err(BackendError::NotFound("upload".into()));
     }
     for chunk in &session.required_chunks {
-        if !guard.chunks.contains_key(chunk) && !session.uploaded_chunks.contains(chunk) {
+        if !guard
+            .chunks
+            .contains_key(&scoped_key(&auth.account_handle, chunk))
+            && !session.uploaded_chunks.contains(chunk)
+        {
             return Err(BackendError::Conflict(format!("missing chunk {chunk}")));
         }
     }
     let manifest_id = session
         .manifest_id
         .ok_or_else(|| BackendError::Conflict("missing manifest".into()))?;
-    if !guard.manifests.contains_key(&manifest_id) {
+    if !guard
+        .manifests
+        .contains_key(&scoped_key(&auth.account_handle, &manifest_id))
+    {
         return Err(BackendError::Conflict("manifest not durable".into()));
     }
     let account = session.account_handle.as_deref().unwrap_or_default();
@@ -1248,7 +1265,7 @@ async fn get_encrypted_bundle(
                 .ok_or_else(|| BackendError::NotFound("snapshot".into()).api())?;
             let manifest_bytes = guard
                 .manifests
-                .get(&row.manifest_id)
+                .get(&scoped_key(&auth.account_handle, &row.manifest_id))
                 .ok_or_else(|| BackendError::Unavailable("missing manifest object".into()).api())?;
             let mut chunks = Vec::new();
             for chunk_id in guard
@@ -1257,9 +1274,12 @@ async fn get_encrypted_bundle(
                 .cloned()
                 .unwrap_or_default()
             {
-                let bytes = guard.chunks.get(&chunk_id).ok_or_else(|| {
-                    BackendError::Unavailable(format!("missing chunk {chunk_id}")).api()
-                })?;
+                let bytes = guard
+                    .chunks
+                    .get(&scoped_key(&auth.account_handle, &chunk_id))
+                    .ok_or_else(|| {
+                        BackendError::Unavailable(format!("missing chunk {chunk_id}")).api()
+                    })?;
                 chunks.push(object_response(&chunk_id, bytes));
             }
             Ok(Json(SnapshotDownloadResponse {
@@ -2087,5 +2107,98 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err((StatusCode::BAD_REQUEST, _))));
+    }
+
+    #[tokio::test]
+    async fn memory_bundle_objects_are_isolated_by_account() {
+        let state = AppState::default();
+        let object_id = id(30);
+        let snapshot_id = id(31);
+        for (account_byte, device_byte, payload) in [
+            (0x11, 0x22, b"account-a".as_slice()),
+            (0x33, 0x44, b"account-b".as_slice()),
+        ] {
+            let auth = Some(Extension(AuthContext {
+                account_handle: hex::encode([account_byte; 20]),
+                device_cert_id: hex::encode([device_byte; 16]),
+            }));
+            let begin = begin_snapshot(
+                State(state.clone()),
+                auth.clone(),
+                Json(BeginSnapshotRequest {
+                    account_handle: Some(hex::encode([account_byte; 20])),
+                    device_cert_id: Some(hex::encode([device_byte; 16])),
+                    logical_save_id: "same-logical-id".into(),
+                    base_head: None,
+                    parents: vec![],
+                    encrypted_manifest_id: object_id.clone(),
+                    chunk_ids: vec![],
+                }),
+            )
+            .await
+            .unwrap()
+            .0;
+            let (sha, encoded) = sha_b64(payload);
+            put_manifest(
+                State(state.clone()),
+                auth.clone(),
+                Path(begin.upload_id),
+                Json(PutManifestRequest {
+                    manifest_id: object_id.clone(),
+                    sha256: sha,
+                    bytes_b64: encoded,
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = commit_snapshot(
+                State(state.clone()),
+                auth,
+                Path(begin.upload_id),
+                Json(CommitSnapshotRequest {
+                    snapshot_id: SnapshotId(snapshot_id.clone()),
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        let bundle_a = get_encrypted_bundle(
+            State(state.clone()),
+            Extension(AuthContext {
+                account_handle: hex::encode([0x11; 20]),
+                device_cert_id: hex::encode([0x22; 16]),
+            }),
+            Path(snapshot_id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        let bundle_b = get_encrypted_bundle(
+            State(state),
+            Extension(AuthContext {
+                account_handle: hex::encode([0x33; 20]),
+                device_cert_id: hex::encode([0x44; 16]),
+            }),
+            Path(snapshot_id),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_ne!(
+            bundle_a.encrypted_manifest.bytes_b64,
+            bundle_b.encrypted_manifest.bytes_b64
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(bundle_a.encrypted_manifest.bytes_b64)
+                .unwrap(),
+            b"account-a"
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(bundle_b.encrypted_manifest.bytes_b64)
+                .unwrap(),
+            b"account-b"
+        );
     }
 }

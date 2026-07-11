@@ -63,10 +63,16 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         }
         SyncScheduler.ensureDefaults(this)
+        val restoreRoot = java.io.File(noBackupFilesDir, "restore")
+        RestoreRecovery.cleanupNonMutating(this, restoreRoot)
         getSharedPreferences(SyncScheduler.PREFERENCES, MODE_PRIVATE).edit()
             .putString(
                 SyncScheduler.NATIVE_BRIDGE_HEALTH,
                 runCatching { NativeSyncBridge.bridgeHealth() }.getOrElse { "unavailable:${it.javaClass.simpleName}" },
+            )
+            .putInt(
+                SyncScheduler.PENDING_RESTORE_RECOVERY_COUNT,
+                RestoreRecovery.pending(restoreRoot).size,
             ).apply()
         SyncScheduler.ensurePeriodic(this)
         setContent {
@@ -286,12 +292,12 @@ class MainActivity : ComponentActivity() {
                             )
                             is LocalReplaceResult.Conflict -> persistSyncStatus(
                                 "user-use-local-conflict",
-                                "确认后云端版本仍发生竞争变化，本地快照已保留为冲突分支 …${upload.snapshotId.takeLast(6)}，云端 HEAD 仍为 …${upload.cloudHead.takeLast(6)}。",
+                                "确认后云端版本仍发生竞争变化，本地快照已保留为冲突分支 …${upload.snapshotId.takeLast(6)}，当前云端版本仍为 …${upload.cloudHead.takeLast(6)}。",
                                 "已保留冲突，未覆盖云端",
                                 "重新检查云端版本后再决定，不会静默覆盖。",
                             )
                             LocalReplaceResult.Failed -> persistSyncStatus(
-                                "user-use-local-failed", "上传失败；本地原始存档和云端 HEAD 均未被本应用声称修改。",
+                                "user-use-local-failed", "上传失败；本地原始存档和当前云端版本均未被本应用声称修改。",
                                 "上传失败", "检查网络、密钥和目录授权后重试。", "同步失败",
                             )
                         }
@@ -300,7 +306,7 @@ class MainActivity : ComponentActivity() {
                         persistSyncStatus(
                             "user-use-local-failed", "本地替换云端未完成；不会伪报成功。",
                             "上传失败", "确认 Nemessix 已退出、网络可用后重新检查。",
-                            it.message ?: "同步失败",
+                            "同步失败（代码：upload_failed）",
                         )
                     },
                 )
@@ -309,13 +315,53 @@ class MainActivity : ComponentActivity() {
 
         fun queueRestoreCloudHead() {
             val reason = "restore-cloud-head"
-            SyncScheduler.enqueueImmediate(this@MainActivity, reason)
             persistSyncStatus(
                 reason = reason,
-                summary = SyncMessages.restoreCloudHeadQueued(serverEndpoint),
-                phase = SyncMessages.queuedPhase(reason),
-                action = SyncMessages.queuedNextAction(reason, sessionActive),
+                summary = "正在验证云端版本并创建恢复前备份。",
+                phase = "正在安全恢复",
+                action = "请保持 Nemessix 关闭；失败会自动回滚。",
             )
+            scope.launch {
+                runCatching {
+                    val tree = preferences.getString(SyncScheduler.SAF_ROOT, null)
+                        ?: error("请先授权 Nemessix 存档目录")
+                    CloudRestorePipeline(this@MainActivity).execute(
+                        serverEndpoint,
+                        android.net.Uri.parse(tree),
+                        sessionActive,
+                        RestoreStopEvidence.confirmed(sessionActive),
+                    )
+                }.onSuccess { restored ->
+                    persistSyncStatus(
+                        reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留。",
+                        "恢复完成", "现在可以启动 Nemessix 检查存档。",
+                    )
+                }.onFailure {
+                    persistSyncStatus(
+                        "restore-cloud-head-failed", "云端恢复未完成；未静默覆盖，失败时已尝试回滚。",
+                        "恢复失败", "保持 Nemessix 关闭并重试；恢复前备份和日志仍保留。",
+                        "恢复失败（代码：restore_failed）",
+                    )
+                }
+            }
+        }
+
+        fun downloadCloudHeadToCache() {
+            persistSyncStatus(
+                "download-cache-only", "正在下载并验证云端版本；不会修改 Nemessix 存档。",
+                "正在下载", "完成后仍需等待安全停止证明才能恢复。",
+            )
+            scope.launch {
+                runCatching { CloudDownloadPipeline(this@MainActivity).execute(serverEndpoint) }
+                    .onSuccess { cached -> persistSyncStatus(
+                        "download-cache-only", "云端版本 …${cached.snapshotId.takeLast(6)} 已加密保存到本机。",
+                        "下载完成", "当前不会覆盖 Nemessix 存档。",
+                    ) }
+                    .onFailure { persistSyncStatus(
+                        "download-cache-failed", "云端版本下载或校验失败；本地存档未修改。",
+                        "下载失败", "检查网络、服务器和恢复密钥后重试。", "下载失败（代码：cloud_cache_failed）",
+                    ) }
+            }
         }
 
         fun runPrelaunchCheck() {
@@ -446,7 +492,7 @@ class MainActivity : ComponentActivity() {
                             recoverySecretVisible = false
                             recoverySecretError = ""
                         } catch (error: IllegalArgumentException) {
-                            recoverySecretError = error.message ?: "恢复密钥格式不正确"
+                            recoverySecretError = "恢复密钥格式不正确"
                         } finally {
                             decoded?.fill(0)
                         }
@@ -667,25 +713,18 @@ class MainActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall,
                         )
                         OutlinedButton(
-                            enabled = authorized && gameEnabled && serverEndpoint.isNotBlank() &&
-                                SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                            enabled = authorized && gameEnabled && hasRecoverySecret && serverEndpoint.isNotBlank() &&
+                                SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
                             onClick = {
-                                val reason = "download-cache-only"
-                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.downloadCacheQueued(serverEndpoint),
-                                    phase = SyncMessages.queuedPhase(reason),
-                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
-                                )
+                                downloadCloudHeadToCache()
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("先下载云端到本机缓存（不覆盖）")
                         }
                         OutlinedButton(
-                            enabled = authorized && gameEnabled && serverEndpoint.isNotBlank() &&
-                                SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                            enabled = authorized && gameEnabled && hasRecoverySecret && serverEndpoint.isNotBlank() &&
+                                SyncScheduler.CLOUD_RESTORE_PIPELINE_AVAILABLE,
                             onClick = { restoreCloudConfirmVisible = true },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -725,7 +764,8 @@ class MainActivity : ComponentActivity() {
                 CardSection("同步动作") {
                     Text("需要把手机最新进度带到 Mac 时，使用“本地设为云端最新”。云端旧版本会保留，可从历史恢复。")
                     Button(
-                        enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                        enabled = authorized && gameEnabled && hasRecoverySecret &&
+                            SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("manual-upload-no-server", "同步到服务器")
@@ -748,19 +788,13 @@ class MainActivity : ComponentActivity() {
                         Text("上传本地存档")
                     }
                     OutlinedButton(
-                        enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                        enabled = authorized && gameEnabled && hasRecoverySecret &&
+                            SyncScheduler.CLOUD_DOWNLOAD_PIPELINE_AVAILABLE,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("download-cache-no-server", "同步到本机缓存")
                             } else {
-                                val reason = "download-cache-only"
-                                SyncScheduler.enqueueImmediate(this@MainActivity, reason)
-                                persistSyncStatus(
-                                    reason = reason,
-                                    summary = SyncMessages.downloadCacheQueued(serverEndpoint),
-                                    phase = SyncMessages.queuedPhase(reason),
-                                    action = SyncMessages.queuedNextAction(reason, sessionActive),
-                                )
+                                downloadCloudHeadToCache()
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -792,7 +826,7 @@ class MainActivity : ComponentActivity() {
                                             observedReplaceHead = it
                                             localReplaceCloudConfirmVisible = true
                                             persistSyncStatus(
-                                                "user-use-local-confirm", "已锁定待确认的云端版本 ${it?.let { h -> "…${h.takeLast(6)}" } ?: "（尚无版本）"}。",
+                                                "user-use-local-confirm", "已记录待确认的云端版本 ${it?.let { h -> "…${h.takeLast(6)}" } ?: "（尚无版本）"}。",
                                                 "等待二次确认", "确认后将再次校验该版本，再创建稳定快照。",
                                             )
                                         },
@@ -800,7 +834,7 @@ class MainActivity : ComponentActivity() {
                                             persistSyncStatus(
                                                 "user-use-local-probe-failed", "无法安全开始本地替换云端。",
                                                 "检查失败", "确认 Nemessix 已退出、服务器可用后重试。",
-                                                it.message ?: "检查失败",
+                                                "检查失败（代码：cloud_probe_failed）",
                                             )
                                         },
                                     )
@@ -813,7 +847,8 @@ class MainActivity : ComponentActivity() {
                         Text("用本地替换云端")
                     }
                     OutlinedButton(
-                        enabled = authorized && gameEnabled && SyncScheduler.REAL_SYNC_PIPELINE_AVAILABLE,
+                        enabled = authorized && gameEnabled && hasRecoverySecret &&
+                            SyncScheduler.CLOUD_RESTORE_PIPELINE_AVAILABLE,
                         onClick = {
                             if (serverEndpoint.isBlank()) {
                                 persistNoServerStatus("restore-no-server", "云端覆盖本地")
@@ -950,7 +985,7 @@ class MainActivity : ComponentActivity() {
             title = { Text(SyncMessages.localReplaceCloudConfirmTitle()) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("已观察到云端版本：${observedHead?.let { "…${it.takeLast(6)}" } ?: "尚无云端版本"}。确认时会再次校验；若已变化则保留冲突，不覆盖 HEAD。")
+                    Text("已观察到云端版本：${observedHead?.let { "…${it.takeLast(6)}" } ?: "尚无云端版本"}。确认时会再次校验；若已变化则保留冲突，不覆盖当前云端版本。")
                     Text(SyncMessages.localReplaceCloudConfirmBody(
                         target = "MH3G / Android Nemessix",
                         serverEndpoint = serverEndpoint,

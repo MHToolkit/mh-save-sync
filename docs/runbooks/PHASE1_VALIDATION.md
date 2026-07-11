@@ -32,6 +32,13 @@
   place. Anonymous HEAD now returns HTTP 401; signed Android and macOS clients
   both read the preserved `2ab231` HEAD. `/ready` reports `postgres-s3` ready.
   No new port or Aliyun security-group change was required.
+- With macOS Nemessix stopped, the freshly installed signed macOS client
+  restored Android snapshot `2ab231` into the configured macOS save root after
+  preserving the previous Mac save as a backup. The restored tree had 2 files
+  and 47,616 bytes. A subsequent stable upload check returned `up-to-date`
+  against the same HEAD, proving file/fingerprint equivalence without creating
+  a duplicate snapshot. Emulator launch/readback remains a separate acceptance
+  step and is not inferred from this file-level proof.
 
 ## Local gates executed
 

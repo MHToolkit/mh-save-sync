@@ -33,6 +33,9 @@ zeroize = "1.8"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"

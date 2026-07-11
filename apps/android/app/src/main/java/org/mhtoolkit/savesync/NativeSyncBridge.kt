@@ -20,4 +20,28 @@ object NativeSyncBridge {
         logicalSaveId: String,
         deviceId: String,
     ): String
+
+    external fun downloadCloudSnapshotToStage(
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        snapshotId: String,
+        deviceId: String,
+        privateStageTarget: String,
+    ): String
+
+    external fun encryptStageBackup(
+        privateStageRoot: String,
+        recoverySecret: ByteArray,
+        destinationBundle: String,
+    ): String
+
+    external fun downloadCloudSnapshotToCache(
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        snapshotId: String,
+        deviceId: String,
+        destinationBundle: String,
+    ): String
 }

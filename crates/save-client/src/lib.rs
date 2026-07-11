@@ -1,15 +1,19 @@
 use base64::Engine;
 use ed25519_dalek::SigningKey;
 use save_crypto::{
-    account_handle, account_root_signing_key, derive_account_keys, deterministic_cbor,
-    issue_device_certificate_with_id,
+    EncryptedBlob, account_handle, account_root_signing_key, derive_account_keys,
+    deterministic_cbor, issue_device_certificate_with_id,
 };
 use save_domain::{AdapterDescriptor, SnapshotId};
 use save_domain::{DeviceId, GameKey, LogicalSaveId};
-use save_engine::{HeadUpdate, decide_head_update};
+use save_engine::{
+    EmulatorState, EncryptedSnapshot, HeadUpdate, decide_head_update, decrypt_manifest,
+    export_encrypted_bundle, restore_snapshot_to_folder,
+};
 use save_engine::{SnapshotOptions, create_snapshot_from_stable_folder};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::path::Path;
 #[cfg(target_os = "android")]
 use zeroize::Zeroizing;
@@ -387,6 +391,56 @@ pub struct AndroidUploadReport {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudHeadReport {
     pub head: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AndroidRestoreStageReport {
+    pub snapshot_id: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DownloadObject {
+    object_id: String,
+    sha256: String,
+    bytes_b64: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DownloadBundle {
+    snapshot_id: SnapshotId,
+    encrypted_manifest: DownloadObject,
+    chunks: Vec<DownloadObject>,
+}
+
+const MAX_BUNDLE_RESPONSE_BYTES: usize = 192 * 1024 * 1024;
+const MAX_BUNDLE_OBJECTS: usize = 10_001;
+const MAX_ENCODED_OBJECT_BYTES: usize = 180 * 1024 * 1024;
+
+fn validate_encoded_object_size(length: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(length <= MAX_ENCODED_OBJECT_BYTES, "object too large");
+    Ok(())
+}
+
+async fn bounded_json_response<T: for<'de> Deserialize<'de>>(
+    mut response: reqwest::Response,
+) -> anyhow::Result<T> {
+    if let Some(length) = response.content_length() {
+        anyhow::ensure!(
+            length <= MAX_BUNDLE_RESPONSE_BYTES as u64,
+            "response too large"
+        );
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        anyhow::ensure!(
+            bytes.len() + chunk.len() <= MAX_BUNDLE_RESPONSE_BYTES,
+            "response too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 #[derive(Serialize)]
@@ -829,6 +883,203 @@ pub async fn fetch_android_cloud_head(
     Ok(CloudHeadReport { head: Some(head.0) })
 }
 
+fn decode_download_bundle(
+    secret: &[u8; 32],
+    expected_snapshot_id: &str,
+    bundle: DownloadBundle,
+) -> anyhow::Result<EncryptedSnapshot> {
+    anyhow::ensure!(
+        bundle.snapshot_id.0 == expected_snapshot_id,
+        "snapshot mismatch"
+    );
+    anyhow::ensure!(
+        bundle.chunks.len() <= MAX_BUNDLE_OBJECTS,
+        "too many objects"
+    );
+    let decode = |object: &DownloadObject| -> anyhow::Result<Vec<u8>> {
+        validate_encoded_object_size(object.bytes_b64.len())?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&object.bytes_b64)?;
+        anyhow::ensure!(
+            hex::encode(sha2::Sha256::digest(&bytes)) == object.sha256,
+            "object checksum mismatch"
+        );
+        Ok(bytes)
+    };
+    let manifest_bytes = decode(&bundle.encrypted_manifest)?;
+    anyhow::ensure!(
+        hex::encode(sha2::Sha256::digest(&manifest_bytes)) == bundle.encrypted_manifest.object_id,
+        "manifest object id mismatch"
+    );
+    let encrypted_manifest: EncryptedBlob = serde_json::from_slice(&manifest_bytes)?;
+    let mut chunks = BTreeMap::new();
+    for object in bundle.chunks {
+        anyhow::ensure!(!chunks.contains_key(&object.object_id), "duplicate chunk");
+        let bytes = decode(&object)?;
+        let blob: EncryptedBlob = serde_json::from_slice(&bytes)?;
+        chunks.insert(object.object_id, blob);
+    }
+    let mut snapshot = EncryptedSnapshot {
+        snapshot_id: bundle.snapshot_id,
+        encrypted_manifest,
+        chunks,
+        fingerprint: save_domain::TreeFingerprint {
+            file_count: 0,
+            total_bytes: 0,
+            sha256: String::new(),
+        },
+    };
+    let manifest = decrypt_manifest(secret, &snapshot)?;
+    save_domain::validate_manifest_entries(&manifest.entries, 10_000, 128 * 1024 * 1024)?;
+    let mut referenced = std::collections::BTreeSet::new();
+    for entry in &manifest.entries {
+        let mut chunk_total = 0u64;
+        for chunk in &entry.chunks {
+            anyhow::ensure!(
+                chunk.id.len() == 64 && chunk.id.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid chunk id"
+            );
+            chunk_total = chunk_total
+                .checked_add(chunk.plaintext_size)
+                .ok_or_else(|| anyhow::anyhow!("chunk size overflow"))?;
+            anyhow::ensure!(chunk_total <= entry.size, "chunk size exceeds file size");
+            referenced.insert(chunk.id.clone());
+        }
+        if entry.kind != save_domain::FileKind::Tombstone {
+            anyhow::ensure!(
+                chunk_total == entry.size,
+                "chunk sizes do not match file size"
+            );
+        }
+    }
+    anyhow::ensure!(
+        referenced == snapshot.chunks.keys().cloned().collect(),
+        "bundle chunk set mismatch"
+    );
+    let parent_bytes: Vec<Vec<u8>> = manifest
+        .parents
+        .iter()
+        .map(|p| p.0.as_bytes().to_vec())
+        .collect();
+    let mut parts: Vec<&[u8]> = vec![b"v1", &snapshot.encrypted_manifest.ciphertext];
+    for parent in &parent_bytes {
+        parts.push(parent);
+    }
+    anyhow::ensure!(
+        SnapshotId::from_parts(&parts) == snapshot.snapshot_id,
+        "snapshot integrity mismatch"
+    );
+    snapshot.fingerprint.file_count = manifest
+        .entries
+        .iter()
+        .filter(|e| e.kind != save_domain::FileKind::Tombstone)
+        .count() as u64;
+    snapshot.fingerprint.total_bytes = manifest
+        .entries
+        .iter()
+        .filter(|e| e.kind != save_domain::FileKind::Tombstone)
+        .map(|e| e.size)
+        .sum();
+    Ok(snapshot)
+}
+
+async fn fetch_android_encrypted_snapshot(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    snapshot_id: &str,
+    device_id: &str,
+) -> anyhow::Result<EncryptedSnapshot> {
+    anyhow::ensure!(
+        snapshot_id.len() == 64 && snapshot_id.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid snapshot id"
+    );
+    let server = server.trim_end_matches('/');
+    let observed = fetch_android_cloud_head(server, secret, logical_save_id, device_id).await?;
+    anyhow::ensure!(
+        observed.head.as_deref() == Some(snapshot_id),
+        "cloud head changed"
+    );
+    let keys = derive_account_keys(secret)?;
+    let handle = account_handle(&keys);
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-signing-seed/v1");
+    h.update(keys.auth);
+    h.update(device_id.as_bytes());
+    let device = SigningKey::from_bytes(&h.finalize().into());
+    let mut h = sha2::Sha256::new();
+    h.update(b"mh-save-sync/android-device-cert-id/v1");
+    h.update(device.verifying_key().to_bytes());
+    let digest = h.finalize();
+    let mut cert_id = [0u8; 16];
+    cert_id.copy_from_slice(&digest[..16]);
+    let cert_hex = hex::encode(cert_id);
+    let identity = RequestIdentity {
+        account_handle: &handle,
+        device_cert_id: &cert_hex,
+        signing_key: &device,
+    };
+    let client = reqwest::Client::new();
+    let response = signed_get(
+        &client,
+        &format!("{server}/v1/snapshots/{snapshot_id}/encrypted-bundle"),
+        server,
+        &identity,
+    )
+    .await?;
+    anyhow::ensure!(response.status().is_success(), "bundle request failed");
+    decode_download_bundle(secret, snapshot_id, bounded_json_response(response).await?)
+}
+
+/// Downloads an authenticated opaque cloud snapshot, verifies every stored
+/// object, decrypts it client-side, and materializes it only under the caller's
+/// private staging directory. It never writes to an emulator SAF tree.
+pub async fn download_android_snapshot_to_stage(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    snapshot_id: &str,
+    device_id: &str,
+    stage_target: &Path,
+) -> anyhow::Result<AndroidRestoreStageReport> {
+    anyhow::ensure!(!stage_target.exists(), "staging target already exists");
+    let snapshot =
+        fetch_android_encrypted_snapshot(server, secret, logical_save_id, snapshot_id, device_id)
+            .await?;
+    let report = AndroidRestoreStageReport {
+        snapshot_id: snapshot.snapshot_id.0.clone(),
+        file_count: snapshot.fingerprint.file_count,
+        total_bytes: snapshot.fingerprint.total_bytes,
+    };
+    if let Err(error) =
+        restore_snapshot_to_folder(secret, &snapshot, stage_target, EmulatorState::Stopped)
+    {
+        let _ = std::fs::remove_dir_all(stage_target);
+        return Err(error.into());
+    }
+    Ok(report)
+}
+
+pub async fn download_android_snapshot_to_cache(
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    snapshot_id: &str,
+    device_id: &str,
+    destination: &Path,
+) -> anyhow::Result<AndroidRestoreStageReport> {
+    anyhow::ensure!(!destination.exists(), "cache target already exists");
+    let snapshot =
+        fetch_android_encrypted_snapshot(server, secret, logical_save_id, snapshot_id, device_id)
+            .await?;
+    let report = AndroidRestoreStageReport {
+        snapshot_id: snapshot.snapshot_id.0.clone(),
+        file_count: snapshot.fingerprint.file_count,
+        total_bytes: snapshot.fingerprint.total_bytes,
+    };
+    export_encrypted_bundle(&snapshot, destination)?;
+    Ok(report)
+}
+
 async fn signed_post_empty<T: Serialize>(
     client: &reqwest::Client,
     url: &str,
@@ -893,6 +1144,134 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_fetchCloudHe
             // recovery material, response bodies, or native panic details.
             serde_json::json!({"error":"cloud_head_failed"}).to_string()
         }
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_downloadCloudSnapshotToStage<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    snapshot: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+    stage: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let snapshot: String = env.get_string(&snapshot)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let stage: String = env.get_string(&stage)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "invalid secret");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            let report = runtime.block_on(download_android_snapshot_to_stage(
+                &server,
+                &key,
+                &logical,
+                &snapshot,
+                &device,
+                Path::new(&stage),
+            ))?;
+            Ok(serde_json::to_string(&report)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"restore_stage_failed","message_zh":"云端版本下载或完整性校验失败，未修改本地存档"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_encryptStageBackup<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    stage: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    destination: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let stage: String = env.get_string(&stage)?.into();
+            let destination: String = env.get_string(&destination)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "invalid secret");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let snapshot = create_snapshot_from_stable_folder(
+                Path::new(&stage),
+                &save_adapters::nemessix_android(),
+                &key,
+                SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "pre-restore")),
+            )?;
+            export_encrypted_bundle(&snapshot, Path::new(&destination))?;
+            Ok(serde_json::json!({"snapshot_id":snapshot.snapshot_id.0}).to_string())
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"backup_encrypt_failed"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|v| v.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_downloadCloudSnapshotToCache<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    snapshot: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+    destination: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let snapshot: String = env.get_string(&snapshot)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let destination: String = env.get_string(&destination)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "invalid secret");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            let report = runtime.block_on(download_android_snapshot_to_cache(
+                &server,
+                &key,
+                &logical,
+                &snapshot,
+                &device,
+                Path::new(&destination),
+            ))?;
+            Ok(serde_json::to_string(&report)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"cloud_cache_failed","message_zh":"云端版本下载或完整性校验失败"}).to_string(),
     };
     env.new_string(output)
         .map(|v| v.into_raw())
@@ -1123,5 +1502,63 @@ mod tests {
         assert!(!decision.restore_allowed);
         assert!(!decision.upload_allowed);
         assert!(decision.summary_zh.contains("禁止云端覆盖本地"));
+    }
+
+    #[test]
+    fn downloaded_bundle_is_verified_before_restore_staging() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("system"), b"fixture-save").unwrap();
+        let secret = [9u8; 32];
+        let snapshot = create_snapshot_from_stable_folder(
+            source.path(),
+            &save_adapters::nemessix_android(),
+            &secret,
+            SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "slot1")),
+        )
+        .unwrap();
+        let manifest_bytes = serde_json::to_vec(&snapshot.encrypted_manifest).unwrap();
+        let object = |id: String, bytes: Vec<u8>| DownloadObject {
+            object_id: id,
+            sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+            bytes_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        };
+        let bundle = DownloadBundle {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            encrypted_manifest: object(
+                hex::encode(sha2::Sha256::digest(&manifest_bytes)),
+                manifest_bytes,
+            ),
+            chunks: snapshot
+                .chunks
+                .iter()
+                .map(|(id, blob)| object(id.clone(), serde_json::to_vec(blob).unwrap()))
+                .collect(),
+        };
+        assert_eq!(
+            decode_download_bundle(&secret, &snapshot.snapshot_id.0, bundle.clone())
+                .unwrap()
+                .snapshot_id,
+            snapshot.snapshot_id
+        );
+        let mut corrupt = bundle.clone();
+        corrupt.chunks[0].sha256 = "00".repeat(32);
+        assert!(decode_download_bundle(&secret, &snapshot.snapshot_id.0, corrupt).is_err());
+        let mut duplicate = bundle.clone();
+        duplicate.chunks.push(duplicate.chunks[0].clone());
+        assert!(decode_download_bundle(&secret, &snapshot.snapshot_id.0, duplicate).is_err());
+        let mut wrong_nonce = bundle;
+        let mut blob: EncryptedBlob = base64::engine::general_purpose::STANDARD
+            .decode(&wrong_nonce.encrypted_manifest.bytes_b64)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap();
+        blob.nonce[0] ^= 1;
+        let bytes = serde_json::to_vec(&blob).unwrap();
+        wrong_nonce.encrypted_manifest.object_id = hex::encode(sha2::Sha256::digest(&bytes));
+        wrong_nonce.encrypted_manifest.sha256 = wrong_nonce.encrypted_manifest.object_id.clone();
+        wrong_nonce.encrypted_manifest.bytes_b64 =
+            base64::engine::general_purpose::STANDARD.encode(bytes);
+        assert!(decode_download_bundle(&secret, &snapshot.snapshot_id.0, wrong_nonce).is_err());
+        assert!(validate_encoded_object_size(MAX_ENCODED_OBJECT_BYTES + 1).is_err());
     }
 }
