@@ -326,6 +326,14 @@ internal object RestoreRecovery {
 
     fun pending(root: File): List<File> = root.listFiles().orEmpty().filter(RestoreLeaseStore::exists)
 
+    fun pendingCount(root: File): Int = pending(root).size
+
+    fun refreshPendingCount(context: Context, root: File) {
+        context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putInt(SyncScheduler.PENDING_RESTORE_RECOVERY_COUNT, pendingCount(root))
+            .apply()
+    }
+
     fun recoverPending(
         context: Context,
         root: File,
@@ -471,15 +479,26 @@ class CloudRestorePipeline(private val context: Context) {
         treeUri: Uri,
         sessionActive: Boolean,
         stopEvidence: RestoreStopEvidence,
+    ): CloudRestoreResult {
+        val restoreRoot = File(context.noBackupFilesDir, "restore").apply { mkdirs() }
+        return try {
+            executeWithRoot(server, treeUri, sessionActive, stopEvidence, restoreRoot)
+        } finally {
+            RestoreRecovery.refreshPendingCount(context, restoreRoot)
+        }
+    }
+
+    private suspend fun executeWithRoot(
+        server: String,
+        treeUri: Uri,
+        sessionActive: Boolean,
+        stopEvidence: RestoreStopEvidence,
+        restoreRoot: File,
     ): CloudRestoreResult =
         withContext(Dispatchers.IO) {
             LocalReplacePolicy.requireSessionStopped(sessionActive)
             RestoreStopGate.requireFreshConfirmation(stopEvidence)
-            // ActivityManager is only supplementary: Android 15 can hide other
-            // UID processes, so absence here never grants restore capability.
-            NemessixProcessGate(context).requireStopped()
             val quiescence = NemessixQuiescenceClient(context)
-            val restoreRoot = File(context.noBackupFilesDir, "restore").apply { mkdirs() }
             RestoreRecovery.recoverPending(context, restoreRoot, treeUri, quiescence) { op ->
                 SafJournalRestorer(context, treeUri, File(op, "actions.log"))
             }
@@ -533,7 +552,8 @@ class CloudRestorePipeline(private val context: Context) {
                 val confirmedHead = SyncServerProbe.fetchHeadForReplace(context, server)
                 check(confirmedHead == head) { "restore_cloud_version_changed" }
                 RestoreStopGate.requireFreshConfirmation(stopEvidence)
-                NemessixProcessGate(context).requireStopped()
+                // Starting the signed provider keeps the app process alive;
+                // the quiescence lease is the authoritative restore gate.
                 quiescence.validate(lease)
                 val transaction = RestoreTransaction(
                     DurableRestoreState(operation),
@@ -583,13 +603,24 @@ class CloudRestorePipeline(private val context: Context) {
 }
 
 class LocalBackupRestorePipeline(private val context: Context) {
-    suspend fun execute(treeUri: Uri, snapshotId: String): CloudRestoreResult = withContext(Dispatchers.IO) {
-        NemessixProcessGate(context).requireStopped()
+    suspend fun execute(treeUri: Uri, snapshotId: String): CloudRestoreResult {
+        val restoreRoot = File(context.noBackupFilesDir, "restore").apply { mkdirs() }
+        return try {
+            executeWithRoot(treeUri, snapshotId, restoreRoot)
+        } finally {
+            RestoreRecovery.refreshPendingCount(context, restoreRoot)
+        }
+    }
+
+    private suspend fun executeWithRoot(
+        treeUri: Uri,
+        snapshotId: String,
+        restoreRoot: File,
+    ): CloudRestoreResult = withContext(Dispatchers.IO) {
         require(snapshotId.matches(Regex("[0-9a-f]{64}"))) { "local_backup_id_invalid" }
         val sourceBundle = File(context.noBackupFilesDir, "restore-cas/$snapshotId.mhsavebundle")
         require(sourceBundle.isFile) { "local_backup_missing" }
         val quiescence = NemessixQuiescenceClient(context)
-        val restoreRoot = File(context.noBackupFilesDir, "restore").apply { mkdirs() }
         RestoreRecovery.recoverPending(context, restoreRoot, treeUri, quiescence) { op ->
             SafJournalRestorer(context, treeUri, File(op, "actions.log"))
         }

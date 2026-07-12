@@ -148,6 +148,21 @@ class RestorePathPolicyTest {
         }
     }
 
+    @Test
+    fun pendingRestoreCountTracksOnlyDurableLeaseFiles() {
+        val root = Files.createTempDirectory("restore-pending-count").toFile()
+        root.resolve("finished").mkdirs()
+        root.resolve("pending-a").apply { mkdirs(); resolve("lease.json").writeText("fixture") }
+        root.resolve("pending-b").apply { mkdirs(); resolve("lease.json").writeText("fixture") }
+
+        assertEquals(2, RestoreRecovery.pendingCount(root))
+        root.resolve("pending-a/lease.json").delete()
+        assertEquals(1, RestoreRecovery.pendingCount(root))
+        root.resolve("pending-b").deleteRecursively()
+        assertEquals(0, RestoreRecovery.pendingCount(root))
+        root.deleteRecursively()
+    }
+
     private class SimulatedProcessDeath : Error()
 
     private fun expectRejected(block: () -> Unit) {

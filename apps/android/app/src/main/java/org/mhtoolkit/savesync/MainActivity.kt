@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
             )
             .putInt(
                 SyncScheduler.PENDING_RESTORE_RECOVERY_COUNT,
-                RestoreRecovery.pending(restoreRoot).size,
+                RestoreRecovery.pendingCount(restoreRoot),
             ).apply()
         SyncScheduler.ensurePeriodic(this)
         if (
@@ -398,11 +398,10 @@ class MainActivity : ComponentActivity() {
                         reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留$resolution。",
                         "恢复完成", "现在可以启动 Nemessix 检查存档。",
                     )
-                }.onFailure {
+                }.onFailure { failure ->
+                    val guidance = DashboardContentPolicy.restoreFailureGuidance(failure)
                     persistSyncStatus(
-                        "restore-cloud-head-failed", "云端恢复未完成；未静默覆盖，失败时已尝试回滚。",
-                        "恢复失败", "保持 Nemessix 关闭并重试；恢复前备份和日志仍保留。",
-                        "恢复失败（代码：restore_failed）",
+                        guidance.reason, guidance.summary, guidance.phase, guidance.action, guidance.error,
                     )
                 }
             }

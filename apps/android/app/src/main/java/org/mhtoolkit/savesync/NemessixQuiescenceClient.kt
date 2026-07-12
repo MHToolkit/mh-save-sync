@@ -27,6 +27,25 @@ sealed interface NemessixQuiescenceStatus {
     data object Unknown : NemessixQuiescenceStatus
 }
 
+internal enum class NemessixQuiescenceDenial(private val errorCode: String) {
+    EMULATOR_RUNNING("nemessix_quiescence_emulator_running"),
+    UNAUTHORIZED("nemessix_quiescence_unauthorized"),
+    UNKNOWN_OPERATION("nemessix_quiescence_unknown_operation"),
+    OTHER("nemessix_quiescence_denied"),
+    ;
+
+    fun fail(): Nothing = error(errorCode)
+
+    companion object {
+        fun fromProtocol(reason: String?): NemessixQuiescenceDenial = when (reason) {
+            "NOT_QUIESCENT" -> EMULATOR_RUNNING
+            "UNAUTHORIZED" -> UNAUTHORIZED
+            "UNKNOWN_OPERATION" -> UNKNOWN_OPERATION
+            else -> OTHER
+        }
+    }
+}
+
 class NemessixQuiescenceClient(private val context: Context) {
     fun acquire(
         operation: String = UUID.randomUUID().toString(),
@@ -36,6 +55,7 @@ class NemessixQuiescenceClient(private val context: Context) {
             putString("operation_id", operation)
             putString("challenge_hex", challenge)
         })
+        response.denial()?.fail()
         check(response.getInt("protocol") == 1 && response.getString("state") == "QUIESCENT") {
             "nemessix_quiescence_denied"
         }
@@ -56,8 +76,11 @@ class NemessixQuiescenceClient(private val context: Context) {
             putString("operation_id", operationId)
             putString("challenge_hex", challengeHex)
         })
-        if (response.getString("state") == "DENIED" && response.getString("reason") == "UNKNOWN_OPERATION") {
-            return NemessixQuiescenceStatus.Unknown
+        response.denial()?.let { denial ->
+            if (denial == NemessixQuiescenceDenial.UNKNOWN_OPERATION) {
+                return NemessixQuiescenceStatus.Unknown
+            }
+            denial.fail()
         }
         check(response.getInt("protocol") == 1) { "nemessix_quiescence_protocol_mismatch" }
         val lease = NemessixQuiescenceLease(
@@ -85,6 +108,7 @@ class NemessixQuiescenceClient(private val context: Context) {
             putString("lease_id", lease.leaseId)
             putString("challenge_hex", lease.challengeHex)
         })
+        response.denial()?.fail()
         check(response.getInt("protocol") == 1 && response.getString("state") == "QUIESCENT") {
             "nemessix_quiescence_lease_lost"
         }
@@ -139,6 +163,10 @@ class NemessixQuiescenceClient(private val context: Context) {
             error("nemessix_quiescence_unavailable")
         }
     }
+
+    private fun Bundle.denial(): NemessixQuiescenceDenial? =
+        takeIf { getString("state") == "DENIED" }
+            ?.let { NemessixQuiescenceDenial.fromProtocol(it.getString("reason")) }
 
     @Suppress("DEPRECATION")
     private fun verifyInstalledNemessixCertificate() {
