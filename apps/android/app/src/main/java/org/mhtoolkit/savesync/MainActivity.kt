@@ -345,7 +345,12 @@ class MainActivity : ComponentActivity() {
                                 "user-use-local",
                                 "本地存档已设为云端最新（版本 …${upload.cloudHead.takeLast(6)}，${upload.fileCount} 个文件）" +
                                     runCatching { resolveDisplayedConflicts(upload.cloudHead, true) }
-                                        .getOrElse { "；冲突状态更新失败，仍保留待处理" } + "。",
+                                        .getOrElse { "；冲突状态更新失败，仍保留待处理" } +
+                                    if (upload.consistencyEstablished) {
+                                        "。"
+                                    } else {
+                                        "；上传成功，但本机未能记录可信基线，下次启动前需要再次确认方向。"
+                                    },
                                 "上传完成",
                                 "Mac 端启动前检查后即可看到该版本。",
                             )
@@ -395,7 +400,12 @@ class MainActivity : ComponentActivity() {
                         resolveDisplayedConflicts(restored.snapshotId, false)
                     }.getOrElse { "；冲突状态更新失败，仍保留待处理" }
                     persistSyncStatus(
-                        reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留$resolution。",
+                        reason, "已从云端恢复版本 …${restored.snapshotId.takeLast(6)}（${restored.fileCount} 个文件），恢复前备份已保留$resolution" +
+                            if (restored.consistencyEstablished) {
+                                "。"
+                            } else {
+                                "；恢复成功，但本机未能记录可信基线，下次启动前需要再次确认方向。"
+                            },
                         "恢复完成", "现在可以启动 Nemessix 检查存档。",
                     )
                 }.onFailure { failure ->
@@ -437,6 +447,7 @@ class MainActivity : ComponentActivity() {
                     context = this@MainActivity,
                     serverEndpoint = serverEndpoint,
                     emulatorRunning = sessionActive,
+                    treeUri = preferences.getString(SyncScheduler.SAF_ROOT, null),
                 )
                 launchGateReason = result.reason
                 launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
@@ -691,15 +702,14 @@ class MainActivity : ComponentActivity() {
                                     context = this@MainActivity,
                                     serverEndpoint = serverEndpoint,
                                     emulatorRunning = sessionActive,
+                                    treeUri = preferences.getString(SyncScheduler.SAF_ROOT, null),
                                 )
                                 launchGateReason = result.reason
                                 launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
-                                lastSummary = if (result.remoteHead != null) {
-                                    "发现云端版本，请先选择上传或恢复。"
-                                } else if (!result.cloudReachable) {
-                                    SyncMessages.launchPausedForCloudUnavailable()
-                                } else {
+                                lastSummary = if (PrelaunchLaunchPolicy.launchAutomatically(result.state)) {
                                     launchNemessixOrExplain()
+                                } else {
+                                    result.summary
                                 }
                                 preferences.edit()
                                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
@@ -712,7 +722,9 @@ class MainActivity : ComponentActivity() {
                     ) { Text(DashboardContentPolicy.launchLabel) }
                     Text(launchGate, style = MaterialTheme.typography.bodySmall)
                     val canContinueLocal = launchGateReason in setOf(
-                        "prelaunch-no-server", "prelaunch-cloud-unavailable", "prelaunch-remote-head",
+                        "prelaunch-no-server", "prelaunch-key-required", "prelaunch-cloud-unavailable",
+                        "prelaunch-remote-advanced", "prelaunch-local-changed", "prelaunch-diverged",
+                        "prelaunch-unknown", "prelaunch-local-unavailable",
                     )
                     if (canContinueLocal) {
                         OutlinedButton(

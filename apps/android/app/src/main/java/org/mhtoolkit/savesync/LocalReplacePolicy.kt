@@ -17,6 +17,7 @@ sealed interface LocalReplaceResult {
         val cloudHead: String,
         val fileCount: Int,
         val totalBytes: Long,
+        val consistencyEstablished: Boolean = false,
     ) : LocalReplaceResult
 
     data class Conflict(

@@ -44,10 +44,13 @@ class DashboardContentPolicyTest {
 
     @Test
     fun `launch status never exposes stale head or server details`() {
-        val remote = DashboardContentPolicy.launchStatus("prelaunch-remote-head")
-        assertEquals("云端有版本，请先确认同步方向", remote)
+        val remote = DashboardContentPolicy.launchStatus("prelaunch-unknown")
+        assertEquals("首次检查，请选择使用手机或云端版本", remote)
         assertFalse(remote.contains("http"))
         assertFalse(remote.contains("版本摘要"))
+        assertFalse(remote.contains("冲突"))
+        assertEquals("手机与云端都有新进度，请选择方向", DashboardContentPolicy.launchStatus("prelaunch-diverged"))
+        assertFalse(DashboardContentPolicy.launchStatus("prelaunch-diverged").contains("冲突"))
         assertEquals("启动前会先检查云端", DashboardContentPolicy.launchStatus("not-checked"))
     }
 

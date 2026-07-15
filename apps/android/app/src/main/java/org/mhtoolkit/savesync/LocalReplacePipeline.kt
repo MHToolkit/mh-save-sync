@@ -34,16 +34,44 @@ class LocalReplacePipeline(private val context: Context) {
             val stage = SafStableStager(context).capture(treeUri)
             var secret: ByteArray? = null
             try {
+                val normalizedServer = SyncServerProbe.normalizeServer(server)
+                val device = deviceId()
                 secret = AndroidSecretVault(context).load()
                 val output = NativeSyncBridge.uploadStableStage(
                     stagingRoot = stage.root.absolutePath,
-                    serverEndpoint = SyncServerProbe.normalizeServer(server),
+                    serverEndpoint = normalizedServer,
                     recoverySecret = secret,
                     logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
                     baseHead = base,
-                    deviceId = deviceId(),
+                    deviceId = device,
                 )
-                LocalReplaceResult.parse(output)
+                val result = LocalReplaceResult.parse(output)
+                if (SyncLedgerWritePolicy.shouldEstablishAfterUpload(result)) {
+                    result as LocalReplaceResult.Uploaded
+                        val confirmedHead = runCatching {
+                            SyncServerProbe.fetchHeadForReplace(context, normalizedServer)
+                        }.getOrNull()
+                        // The uploaded immutable snapshot was built from this exact stable stage.
+                        // A ledger failure must not turn a completed cloud commit into a false
+                        // upload failure; the old baseline remains conservative on next check.
+                        val established = UploadConsistencyPolicy.canEstablish(result, confirmedHead) && runCatching {
+                            SyncConsistencyLedgerStore(context).establish(
+                                binding = SyncConsistencyBinding(
+                                    serverEndpoint = normalizedServer,
+                                    logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                                    treeUri = treeUri.toString(),
+                                    deviceId = device,
+                                ),
+                                remoteHead = result.cloudHead,
+                                localFingerprint = stage.fingerprint,
+                                mode = SyncEstablishmentMode.UPLOAD,
+                            )
+                            true
+                        }.getOrDefault(false)
+                        result.copy(consistencyEstablished = established)
+                } else {
+                    result
+                }
             } finally {
                 secret?.fill(0)
                 stage.root.deleteRecursively()

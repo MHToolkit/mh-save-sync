@@ -1,6 +1,7 @@
 package org.mhtoolkit.savesync
 
 import android.content.Context
+import android.net.Uri
 import android.provider.Settings
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -16,6 +17,7 @@ data class PrelaunchProbeResult(
     val cloudReachable: Boolean,
     val remoteHead: String?,
     val remoteVersionLabel: String? = null,
+    val state: PrelaunchConsistencyState,
 )
 
 object SyncServerProbe {
@@ -26,6 +28,7 @@ object SyncServerProbe {
         context: Context,
         serverEndpoint: String,
         emulatorRunning: Boolean,
+        treeUri: String?,
     ): PrelaunchProbeResult = withContext(Dispatchers.IO) {
         val server = normalizeServer(serverEndpoint)
         if (server.isBlank()) {
@@ -34,6 +37,7 @@ object SyncServerProbe {
                 reason = "prelaunch-no-server",
                 cloudReachable = false,
                 remoteHead = null,
+                state = PrelaunchConsistencyState.NO_SERVER,
             )
         }
         if (!AndroidSecretVault(context).hasSecret()) {
@@ -42,6 +46,7 @@ object SyncServerProbe {
                 reason = "prelaunch-key-required",
                 cloudReachable = false,
                 remoteHead = null,
+                state = PrelaunchConsistencyState.KEY_REQUIRED,
             )
         }
         try {
@@ -50,28 +55,54 @@ object SyncServerProbe {
                 return@withContext cloudUnavailable(server, "ready=${ready.status}")
             }
             val snapshot = fetchHeadForReplace(context, server)
-            when {
-                snapshot != null -> {
-                    val versionLabel = userVisibleRemoteVersion(snapshot)
-                    PrelaunchProbeResult(
-                        summary = if (emulatorRunning) {
-                            "云端可用，且 $versionLabel。Nemessix 正在运行，当前只会下载到本机缓存；请退出游戏后再执行云端覆盖本地。服务器：$server。"
-                        } else {
-                            "云端可用，且 $versionLabel。若本地不是同一版本，请先下载到本机缓存并确认后恢复；不会按最新时间自动覆盖。服务器：$server。"
-                        },
-                        reason = "prelaunch-remote-head",
-                        cloudReachable = true,
-                        remoteHead = snapshot.ifBlank { null },
-                        remoteVersionLabel = versionLabel,
-                    )
-                }
-                else -> PrelaunchProbeResult(
-                    summary = "云端可用，但还没有 MH3G 云端版本。可以启动本地游戏；退出后本地稳定快照会上传到 $server。",
-                    reason = "prelaunch-no-remote-head",
+            if (!PrelaunchCapturePolicy.shouldCaptureLocal(emulatorRunning)) {
+                val state = PrelaunchConsistencyState.EMULATOR_RUNNING
+                return@withContext PrelaunchProbeResult(
+                    summary = summaryFor(state),
+                    reason = state.reason,
                     cloudReachable = true,
-                    remoteHead = null,
+                    remoteHead = snapshot,
+                    remoteVersionLabel = snapshot?.let(::userVisibleRemoteVersion),
+                    state = state,
                 )
             }
+            if (treeUri.isNullOrBlank()) {
+                return@withContext localUnavailable(snapshot, "尚未授权 Nemessix 存档目录")
+            }
+            val observation = try {
+                PrelaunchObservationCoordinator.captureThenRefetch(
+                    captureLocal = {
+                        SafStableStager(context).capture(Uri.parse(treeUri)).let { stage ->
+                            try { stage.fingerprint } finally { stage.root.deleteRecursively() }
+                        }
+                    },
+                    refetchRemoteHead = { fetchHeadForReplace(context, server) },
+                )
+            } catch (_: LocalCaptureUnavailableException) {
+                return@withContext localUnavailable(snapshot, "无法稳定读取已授权的存档目录")
+            }
+            val binding = SyncConsistencyBinding(
+                serverEndpoint = server,
+                logicalSaveId = MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                treeUri = treeUri,
+                deviceId = deviceId(context),
+            )
+            val state = PrelaunchConsistencyPolicy.classify(
+                binding = binding,
+                baseline = SyncConsistencyLedgerStore(context).read(),
+                localFingerprint = LocalFingerprintObservation.Available(observation.localFingerprint),
+                remoteHead = observation.remoteHead,
+                emulatorRunning = emulatorRunning,
+            )
+            val versionLabel = observation.remoteHead?.let(::userVisibleRemoteVersion)
+            PrelaunchProbeResult(
+                summary = summaryFor(state),
+                reason = state.reason,
+                cloudReachable = true,
+                remoteHead = observation.remoteHead,
+                remoteVersionLabel = versionLabel,
+                state = state,
+            )
         } catch (error: IOException) {
             cloudUnavailable(server, error.javaClass.simpleName)
         } catch (error: RuntimeException) {
@@ -135,7 +166,28 @@ object SyncServerProbe {
             reason = "prelaunch-cloud-unavailable",
             cloudReachable = false,
             remoteHead = null,
+            state = PrelaunchConsistencyState.CLOUD_UNAVAILABLE,
         )
+
+    private fun localUnavailable(remoteHead: String?, detail: String) = PrelaunchProbeResult(
+        summary = "$detail。未读取出可信指纹，因此不会判断手机与云端是否一致；可明确选择仅使用本地存档启动。",
+        reason = PrelaunchConsistencyState.LOCAL_UNAVAILABLE.reason,
+        cloudReachable = true,
+        remoteHead = remoteHead,
+        remoteVersionLabel = remoteHead?.let(::userVisibleRemoteVersion),
+        state = PrelaunchConsistencyState.LOCAL_UNAVAILABLE,
+    )
+
+    private fun summaryFor(state: PrelaunchConsistencyState): String = when (state) {
+        PrelaunchConsistencyState.SYNCED -> "手机存档与已验证的云端版本一致，可以直接启动 Nemessix。"
+        PrelaunchConsistencyState.REMOTE_ADVANCED -> "手机存档未变，但云端已有其他设备的新进度；建议恢复云端版本后再启动。"
+        PrelaunchConsistencyState.LOCAL_CHANGED -> "云端版本未变，但手机存档有新进度；建议先上传手机存档。"
+        PrelaunchConsistencyState.DIVERGED -> "手机与云端都从上次确认的版本继续产生了新进度，请选择保留方向；不会自动覆盖。"
+        PrelaunchConsistencyState.UNKNOWN -> "这是当前服务器、账号目录或设备的首次可信检查，无法证明两边相同；请选择使用手机或云端版本。"
+        PrelaunchConsistencyState.NO_REMOTE -> "云端还没有此游戏的存档，可以启动 Nemessix；退出后再上传稳定快照。"
+        PrelaunchConsistencyState.EMULATOR_RUNNING -> "Nemessix 正在运行；不会恢复或覆盖正在使用的存档。"
+        else -> "启动前检查尚未建立可信结论。"
+    }
 
     private fun get(url: String): HttpResult {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {

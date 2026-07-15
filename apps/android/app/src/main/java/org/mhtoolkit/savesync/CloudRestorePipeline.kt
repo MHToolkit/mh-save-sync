@@ -13,7 +13,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-data class CloudRestoreResult(val snapshotId: String, val fileCount: Long, val totalBytes: Long)
+data class CloudRestoreResult(
+    val snapshotId: String,
+    val fileCount: Long,
+    val totalBytes: Long,
+    val consistencyEstablished: Boolean = false,
+)
 
 class CloudDownloadPipeline(private val context: Context) {
     suspend fun execute(server: String): CloudRestoreResult = withContext(Dispatchers.IO) {
@@ -564,10 +569,40 @@ class CloudRestorePipeline(private val context: Context) {
                     context, operation, encryptedBackup, backupSnapshotId,
                     deleteOperation = false,
                 )
-                quiescence.release(lease, "COMMITTED", desiredSnapshotId)
-                leaseReleased = true
+                // Establish equality only from a fresh stable capture of the SAF tree after
+                // journal commit while the signed quiescence lease still excludes emulator
+                // writes. Never trust a post-release capture or the downloaded manifest.
+                val consistencyEstablished = RestoreConsistencyCoordinator.complete(
+                    captureAndEstablish = {
+                        val committedStage = SafStableStager(context).capture(treeUri)
+                        try {
+                            SyncConsistencyLedgerStore(context).establish(
+                                binding = SyncConsistencyBinding(
+                                    serverEndpoint = SyncServerProbe.normalizeServer(server),
+                                    logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                                    treeUri = treeUri.toString(),
+                                    deviceId = androidDeviceId(context),
+                                ),
+                                remoteHead = head,
+                                localFingerprint = committedStage.fingerprint,
+                                mode = SyncEstablishmentMode.RESTORE,
+                            )
+                        } finally {
+                            committedStage.root.deleteRecursively()
+                        }
+                    },
+                    releaseLease = {
+                        quiescence.release(lease, "COMMITTED", desiredSnapshotId)
+                        leaseReleased = true
+                    },
+                )
                 operation.deleteRecursively()
-                CloudRestoreResult(desiredSnapshotId, response.getLong("file_count"), response.getLong("total_bytes"))
+                CloudRestoreResult(
+                    desiredSnapshotId,
+                    response.getLong("file_count"),
+                    response.getLong("total_bytes"),
+                    consistencyEstablished,
+                )
             } finally {
                 secret?.fill(0)
                 desired.deleteRecursively()

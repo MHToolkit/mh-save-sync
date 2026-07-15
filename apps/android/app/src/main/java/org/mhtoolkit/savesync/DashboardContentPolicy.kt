@@ -27,9 +27,17 @@ object DashboardContentPolicy {
 
     fun launchStatus(reason: String): String = when (reason) {
         "prelaunch-checking" -> "正在检查云端…"
-        "prelaunch-remote-head" -> "云端有版本，请先确认同步方向"
+        "prelaunch-synced" -> "手机与云端一致，可以启动"
+        "prelaunch-remote-advanced" -> "云端有新进度，建议先恢复"
+        "prelaunch-local-changed" -> "手机有新进度，建议先上传"
+        "prelaunch-diverged" -> "手机与云端都有新进度，请选择方向"
+        "prelaunch-unknown" -> "首次检查，请选择使用手机或云端版本"
+        "prelaunch-local-unavailable" -> "无法读取手机存档，请检查目录授权"
+        "prelaunch-emulator-running" -> "Nemessix 正在运行，不执行恢复"
         "prelaunch-cloud-unavailable" -> "云端暂不可用，可继续使用本地"
         "prelaunch-no-server" -> "未设置服务器，可继续使用本地"
+        "prelaunch-key-required" -> "未导入恢复密钥，可继续使用本地"
+        "prelaunch-no-remote-head" -> "云端暂无存档，可以启动"
         "prelaunch-up-to-date" -> "云端已检查，可以启动"
         else -> "启动前会先检查云端"
     }
