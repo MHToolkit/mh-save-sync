@@ -97,7 +97,7 @@ swift run --package-path apps/macos MHSaveSyncMac --prelaunch-check \
   > "$tmp/prelaunch.txt"
 grep -q "服务器：$server_url" "$tmp/prelaunch.txt"
 grep -q "云端连通" "$tmp/prelaunch.txt"
-grep -Eq "云端还没有 MH3G 版本|云端已有 MH3G 版本" "$tmp/prelaunch.txt"
+grep -Eq "云端还没有 MH3G 版本|云端已有 MH3G 版本|云端版本查询失败" "$tmp/prelaunch.txt"
 
 swift run --package-path apps/macos MHSaveSyncMac --continue-local \
   > "$tmp/continue-local.txt"
