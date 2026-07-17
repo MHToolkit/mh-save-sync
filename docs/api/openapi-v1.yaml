@@ -1,0 +1,145 @@
+openapi: 3.1.0
+info:
+  title: MH Save Sync API
+  version: 0.1.0-alpha.1
+  summary: E2EE save snapshot coordination API; server stores opaque graph metadata and encrypted objects only.
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: Process is alive }
+  /ready:
+    get:
+      responses:
+        '200': { description: Graph/object readiness verified }
+        '503': { description: A committed reference is not durable }
+  /version:
+    get:
+      responses:
+        '200': { description: Server version }
+  /v1/accounts/bootstrap:
+    post:
+      summary: Create an opaque account handle from a client-signed root public key.
+      responses:
+        '201': { description: Account created }
+  /v1/accounts/challenge:
+    post:
+      summary: Issue a short-lived nonce for device request signing.
+      responses:
+        '200': { description: Challenge issued }
+  /v1/devices/register:
+    post:
+      summary: Register an account-root-signed device certificate.
+      responses:
+        '201': { description: Device registered }
+  /v1/devices/{cert_id}/revoke:
+    post:
+      summary: Revoke future server access for a device certificate.
+      parameters:
+        - name: cert_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Revoked }
+  /v1/profiles:
+    get:
+      responses:
+        '200': { description: Encrypted profile metadata list }
+  /v1/heads/{logical_save_id}:
+    get:
+      parameters:
+        - name: logical_save_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Current head and conflict branches }
+  /v1/snapshots/begin:
+    post:
+      summary: Begin a publish-last snapshot commit.
+      description: Client supplies base_head, parent snapshot IDs, encrypted manifest object ID and chunk IDs. Server returns missing chunks only.
+      responses:
+        '200': { description: Upload session created }
+  /v1/snapshots/{upload_id}/chunks:
+    post:
+      summary: Upload one encrypted chunk with checksum.
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Chunk durable }
+  /v1/snapshots/{upload_id}/manifest:
+    post:
+      summary: Upload encrypted manifest after chunks.
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Manifest durable }
+  /v1/snapshots/{upload_id}/commit:
+    post:
+      summary: Insert immutable snapshot row and CAS the logical HEAD.
+      description: If base_head is stale, the snapshot is retained as a conflict branch and HEAD is not overwritten.
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Fast-forward, first snapshot or conflict outcome }
+        '409': { description: Referenced object missing or session invalid }
+  /v1/snapshots/{snapshot_id}/encrypted-bundle:
+    get:
+      summary: Download encrypted manifest and chunk objects for client-side restore/export.
+      description: Server returns only opaque encrypted object bytes plus checksums; clients decrypt, verify and restore locally.
+      parameters:
+        - name: snapshot_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Encrypted manifest and encrypted chunks }
+        '404': { description: Snapshot or object not found }
+        '503': { description: Referenced object is missing from durable storage }
+  /v1/history/{logical_save_id}:
+    get:
+      responses:
+        '200': { description: Snapshot DAG history }
+  /v1/conflicts/{logical_save_id}:
+    get:
+      responses:
+        '200': { description: Unresolved conflict branches; resolved branches remain in history }
+  /v1/conflicts/{logical_save_id}/{snapshot_id}/resolve:
+    post:
+      description: Explicitly marks a conflict handled without deleting history or applying last-write-wins. The chosen snapshot must be the current HEAD.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chosen_snapshot_id, resolution]
+              properties:
+                chosen_snapshot_id: { type: string }
+                resolution:
+                  type: string
+                  enum: [keep-cloud-head, replace-with-local]
+      responses:
+        '200': { description: Conflict marked resolved and retained in history }
+        '404': { description: Conflict snapshot not found }
+        '409': { description: Chosen snapshot is no longer current HEAD }
+  /v1/retention/{logical_save_id}:
+    put:
+      responses:
+        '204': { description: Retention policy stored }
+  /v1/export/{snapshot_id}:
+    post:
+      responses:
+        '202': { description: Encrypted export generation accepted }

@@ -1,0 +1,49 @@
+[workspace]
+members = [
+  "crates/save-domain",
+  "crates/save-crypto",
+  "crates/save-engine",
+  "crates/save-adapters",
+  "crates/save-client",
+  "crates/save-server",
+  "crates/save-cli",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MHToolkit/mh-save-sync"
+rust-version = "1.95"
+
+[workspace.dependencies]
+anyhow = "1.0"
+axum = "0.8"
+base64 = "0.22"
+bip39 = { version = "2.2", default-features = false, features = ["std"] }
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+ciborium = "0.2"
+ed25519-dalek = { version = "2.2", features = ["rand_core", "serde", "zeroize"] }
+hex = "0.4"
+hkdf = "0.12"
+hmac = "0.12"
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros", "json"] }
+tempfile = "3.20"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uniffi = "0.32.0"
+uuid = { version = "1.17", features = ["v4", "serde"] }
+walkdir = "2.5"
+zstd = "0.13"

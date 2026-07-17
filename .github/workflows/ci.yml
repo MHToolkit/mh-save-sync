@@ -1,0 +1,225 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # The MHToolkit org currently has one 2c4g self-hosted ci-general runner.
+    # Do not burn Rust+Android capacity on documentation-only PR updates.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # MHToolkit currently exposes a single 2c4g self-hosted runner for ci-general.
+  # Keep heavy jobs serialized so Rust+Android do not contend for CPU/RAM on the
+  # same limited host; the workflow-level concurrency above still cancels stale
+  # pushes before they consume runner time.
+  dependency-review:
+    # Private repositories require GitHub Advanced Security for dependency review.
+    # Opt in only after GHAS is enabled to avoid a permanently failing PR check.
+    if: github.event_name == 'pull_request' && vars.DEPENDENCY_REVIEW_ENABLED == 'true'
+    runs-on: [self-hosted, Linux, X64, ci-general]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: critical
+
+  rust:
+    runs-on: [self-hosted, Linux, X64, ci-general]
+    timeout-minutes: 60
+    env:
+      RUSTUP_DIST_SERVER: https://rsproxy.cn
+      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 8
+        continue-on-error: true
+      - run: cargo fmt --all -- --check
+      - name: Audit dependencies, enforce deny policy and generate SBOM
+        env:
+          MH_SAVE_SYNC_INSTALL_SUPPLY_CHAIN_TOOLS: "1"
+        run: ./scripts/supply-chain-gate.sh
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --bins
+      - name: Verify offline encrypted bundle recovery
+        run: ./scripts/offline-bundle-e2e.sh
+      - name: Verify visible server sync and conflict branch CLI
+        env:
+          MH_SAVE_SYNC_REQUIRE_NETWORK_E2E: "1"
+        run: ./scripts/server-sync-e2e.sh
+      - name: Verify dirty-only automation policy
+        run: ./scripts/automation-policy-e2e.sh
+      - name: Verify Chinese-first UX copy does not expose internal sync jargon
+        run: python3 scripts/ux-copy-guard.py
+      - name: Verify Android handoff shell scripts parse
+        run: |
+          bash -n scripts/android-package-alpha.sh
+          bash -n scripts/android-latest-alpha-apk.sh
+          bash -n scripts/android-home-device-preflight.sh
+          bash -n scripts/android-runtime-evidence-bundle.sh
+      - name: Verify compose persistent-sync runtime selection
+        run: ./scripts/compose-server-sync-e2e-runtime-test.sh
+      - name: Verify compose project-aware backup volumes
+        run: ./scripts/compose-project-volume-test.sh
+      - name: Verify optional TLS reverse proxy compose config
+        run: ./scripts/compose-tls-config-test.sh
+      - run: cargo run -p save-cli --bin mh-save -- crypto-vector
+      - name: Verify deterministic device certificate fixture
+        run: |
+          cargo run -q -p save-cli --bin mh-save -- crypto-device-fixture > /tmp/device-identity-public.json
+          python3 - <<'PY'
+          import json
+          with open("tests/fixtures/device-identity-public.json", "r", encoding="utf-8") as fh:
+              expected = json.load(fh)
+          with open("/tmp/device-identity-public.json", "r", encoding="utf-8") as fh:
+              actual = json.load(fh)
+          if actual != expected:
+              raise SystemExit("device identity fixture drifted")
+          PY
+      - run: cargo run -p save-cli --bin mh-save -- snapshot-fixture tests/fixtures/generic-save
+      - name: Generate UniFFI Kotlin and Swift bindings
+        run: |
+          cargo build --release -p save-client
+          mkdir -p /tmp/uniffi/kotlin /tmp/uniffi/swift
+          cargo run -p save-client --features bindgen --bin uniffi-bindgen -- \
+            generate target/release/libsave_client.so --library --crate save_client \
+            --language kotlin --out-dir /tmp/uniffi/kotlin --no-format
+          cargo run -p save-client --features bindgen --bin uniffi-bindgen -- \
+            generate target/release/libsave_client.so --library --crate save_client \
+            --language swift --out-dir /tmp/uniffi/swift
+          test -s /tmp/uniffi/kotlin/uniffi/save_client/save_client.kt
+          test -s /tmp/uniffi/swift/save_client.swift
+      - name: Generate Rust artifact checksums
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            target/debug/mh-save \
+            target/debug/mh-save-server \
+            target/release/libsave_client.so \
+            > artifacts/checksums/rust.sha256
+          test -s artifacts/checksums/rust.sha256
+      - run: ./scripts/secret-scan.sh
+      - uses: actions/upload-artifact@v5
+        with:
+          name: rust-sbom-and-checksums
+          path: |
+            artifacts/sbom/mh-save-sync.cdx.json
+            artifacts/checksums/rust.sha256
+
+  android:
+    needs: rust
+    runs-on: [self-hosted, Linux, X64, ci-general]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use runner-provided Java 17
+        run: |
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          java -version
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Install pinned Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Build, unit test, lint and package Android Alpha evidence
+        env:
+          MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha
+          MH_SAVE_SYNC_RUN_ADB_SMOKE: "false"
+        run: ./scripts/android-package-alpha.sh
+      - name: Verify Android latest Alpha resolver
+        env:
+          MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha
+          MH_SAVE_SYNC_APK_FORMAT: json
+        run: ./scripts/android-latest-alpha-apk.sh
+      - name: Generate Android artifact checksums
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            apps/android/app/build/outputs/apk/debug/app-debug.apk \
+            artifacts/android-alpha/*.apk \
+            artifacts/android-alpha/*.evidence.json \
+            > artifacts/checksums/android.sha256
+          test -s artifacts/checksums/android.sha256
+      - uses: actions/upload-artifact@v5
+        with:
+          name: android-debug-apk
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            artifacts/android-alpha/*
+            artifacts/checksums/android.sha256
+
+  macos-smoke:
+    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift build --package-path apps/macos
+      - run: swift run --package-path apps/macos MHSaveSyncMac
+      - name: Generate macOS smoke artifact checksum
+        run: |
+          mkdir -p artifacts/checksums
+          ./scripts/artifact-checksums.sh \
+            apps/macos/.build/debug/MHSaveSyncMac \
+            > artifacts/checksums/macos.sha256
+          test -s artifacts/checksums/macos.sha256
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos-smoke-checksums
+          path: artifacts/checksums/macos.sha256
+
+  compose-e2e:
+    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start self-hosted stack
+        run: |
+          mkdir -p deploy/compose/secrets
+          printf 'local-postgres-password' > deploy/compose/secrets/postgres_password.txt
+          printf 'minioadmin' > deploy/compose/secrets/minio_root_user.txt
+          printf 'local-minio-password' > deploy/compose/secrets/minio_root_password.txt
+          chmod 600 deploy/compose/secrets/*.txt
+          docker compose -f deploy/compose/compose.yaml config --quiet
+          docker compose -f deploy/compose/compose.yaml up -d --build --wait
+          curl -fsS http://127.0.0.1:18080/ready
+      - name: Run commit-ordering, conflict and resume E2E
+        run: |
+          python3 scripts/compose-e2e.py
+          python3 scripts/compose-resume-e2e.py prepare artifacts/ci-compose-resume-state.json
+          docker compose -f deploy/compose/compose.yaml restart server
+          curl -fsS --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/ready
+          python3 scripts/compose-resume-e2e.py finish artifacts/ci-compose-resume-state.json
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose/compose.yaml logs --no-color --tail=200
+      - name: Stop self-hosted stack
+        if: always()
+        run: docker compose -f deploy/compose/compose.yaml down -v

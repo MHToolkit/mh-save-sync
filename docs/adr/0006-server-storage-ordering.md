@@ -1,0 +1,70 @@
+# ADR 0006: PostgreSQL graph truth and S3-compatible encrypted objects
+
+- Status: Accepted for phase1-alpha
+- Date: 2026-07-04
+- Owners: MHToolkit maintainers
+- Review date: 2026-10-04
+
+## Decision
+
+PostgreSQL is the production truth for accounts, devices, profiles, logical
+saves, snapshot graph, upload sessions, quotas, retention and audit. An
+S3-compatible store contains encrypted chunks, manifests and exports. Redis is
+not required and is never a save truth source.
+
+Commit ordering is:
+
+1. upload and checksum every missing encrypted chunk;
+2. upload and checksum the encrypted manifest;
+3. in a PostgreSQL transaction, verify the upload session and insert immutable
+   snapshot/parent rows;
+4. compare-and-swap the logical-save HEAD from `base_head`.
+
+HEAD never references absent objects. A failed CAS records the immutable
+snapshot as a conflict branch. Missing-set queries make uploads resumable.
+Uncommitted objects are orphan candidates and are reclaimed only after a grace
+period and a graph mark pass.
+
+The phase1-alpha implementation uses the Rust `object_store` S3 backend with
+S3 SHA256 upload checksums enabled. Compose initializes and versions the MinIO
+bucket before the API starts. Multipart upload, incomplete-upload lifecycle
+cleanup and production bucket policy are still required before a hosted stable
+service.
+
+## Backup and rollback
+
+Recovery needs a transactionally consistent PostgreSQL backup plus versioned
+object backup. Restore tooling verifies every referenced object before exposing
+readiness.
+## Phase1-alpha evidence
+
+`save-server` now has both an in-memory test backend and a persistent
+PostgreSQL/S3-compatible backend. Local Podman runs on 2026-07-05 proved:
+
+- encrypted fixture objects were checksum-verified by the request body hash and
+  stored through `object_store` with S3 SHA256 upload checksums before the
+  snapshot transaction;
+- the SQL transaction inserted snapshot, parent and object-reference rows
+  before conditionally advancing HEAD;
+- two sessions with the same base produced one fast-forward and one retained
+  conflict branch;
+- an upload resumed after the server container restarted;
+- destructive PostgreSQL plus MinIO volume restore recovered the prior HEAD,
+  and repository verification reported zero dangling object references.
+
+Latest black-box evidence:
+
+```text
+ready: {"status":"ready","version":"0.1.0","backend":"postgres-s3"}
+compose-e2e: account_root_immutable=true, certificate_fail_closed=true,
+  checksum_fail_closed=true, history_count=3, conflict_count=1,
+  dedupe_missing_count=1
+restart-resume: resumed_after_restart=true,
+  head=119beee8ef738ddf81cceba508a7ef8801b6e5cc572e9ecf44302bfc43e20fc1
+backup: PostgreSQL sha256=7d4b439072fd79fd9ad012dee9b1eba589140b5857381116d66b4c47c6f0f7f3
+backup: MinIO tar sha256=b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f
+restore: readiness 200 and dangling_snapshot_objects=0
+```
+
+Multipart upload, quota enforcement, lifecycle cleanup and remote-host
+validation remain Phase 1B/1D gates.

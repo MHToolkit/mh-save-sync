@@ -1,0 +1,20 @@
+[package]
+name = "save-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hex.workspace = true
+save-crypto = { path = "../save-crypto" }
+save-domain = { path = "../save-domain" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+zstd.workspace = true
