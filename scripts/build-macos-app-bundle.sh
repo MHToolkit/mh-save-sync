@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-swift build --package-path apps/macos
-cargo build -q -p save-cli --bin mh-save
+swift build -c release --package-path apps/macos
+cargo build --release -q -p save-cli --bin mh-save
 
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
   if [[ "${CARGO_TARGET_DIR}" = /* ]]; then
@@ -16,7 +16,7 @@ if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 else
   cargo_target_dir="${repo_root}/target"
 fi
-cli_bin="${cargo_target_dir}/debug/mh-save"
+cli_bin="${cargo_target_dir}/release/mh-save"
 test -x "$cli_bin"
 
 app_dir="${repo_root}/artifacts/macos/MH Save Sync.app"
@@ -26,7 +26,7 @@ resources="${contents}/Resources"
 rm -rf "$app_dir"
 mkdir -p "$macos" "$resources"
 
-cp "${repo_root}/apps/macos/.build/debug/MHSaveSyncMac" "${macos}/MHSaveSyncMac"
+cp "${repo_root}/apps/macos/.build/release/MHSaveSyncMac" "${macos}/MHSaveSyncMac"
 cp "$cli_bin" "${macos}/mh-save"
 chmod 755 "${macos}/MHSaveSyncMac" "${macos}/mh-save"
 
@@ -51,9 +51,9 @@ cat > "${contents}/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0-alpha</string>
+  <string>0.1.0-alpha.1</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>
@@ -69,5 +69,8 @@ test -x "${macos}/MHSaveSyncMac"
 test -x "${macos}/mh-save"
 "${macos}/MHSaveSyncMac" --prelaunch-check >/dev/null
 "${macos}/mh-save" --help >/dev/null
+
+codesign --force --sign - --timestamp=none "$app_dir" >/dev/null
+codesign --verify --deep --strict "$app_dir"
 
 printf '{"macos_app_bundle":true,"bundled_cli":true,"path":"%s"}\n' "$app_dir"

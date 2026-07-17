@@ -15,7 +15,7 @@ adb_bin="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
 run_adb_smoke="${MH_SAVE_SYNC_RUN_ADB_SMOKE:-auto}"
 package_name="${MH_SAVE_SYNC_ANDROID_PACKAGE:-org.mhtoolkit.savesync}"
 app_label="MH 云存档"
-version_name="0.1.0-alpha"
+version_name="0.1.0-alpha.1"
 
 blocked() {
   echo "BLOCKED: $*" >&2

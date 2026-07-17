@@ -134,7 +134,7 @@ def build_bom() -> dict[str, Any]:
             "component": {
                 "type": "application",
                 "name": "mh-save-sync",
-                "version": "0.1.0-alpha",
+                "version": "0.1.0-alpha.1",
                 "bom-ref": "pkg:github/MHToolkit/mh-save-sync",
                 "externalReferences": [
                     {

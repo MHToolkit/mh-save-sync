@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MH Save Sync API
-  version: 0.1.0-alpha
+  version: 0.1.0-alpha.1
   summary: E2EE save snapshot coordination API; server stores opaque graph metadata and encrypted objects only.
 servers:
   - url: http://127.0.0.1:18080
