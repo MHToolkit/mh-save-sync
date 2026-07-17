@@ -70,6 +70,11 @@ services:
       dockerfile: deploy/compose/server.Dockerfile
     environment:
       MH_SAVE_SYNC_BIND: 0.0.0.0:8080
+      # Read 0600 file-backed secrets before Tokio starts, then permanently
+      # drop the server process to the distroless nonroot identity.
+      MH_SAVE_SYNC_RUNTIME_UID: "65532"
+      MH_SAVE_SYNC_RUNTIME_GID: "65532"
+      MH_SAVE_SYNC_RUNTIME_IDENTITY_FILE: /tmp/mh-save-sync-runtime-identity
       DATABASE_HOST: postgres
       DATABASE_PORT: "5432"
       DATABASE_USER: mh_save_sync

@@ -2329,6 +2329,7 @@ dependencies = [
  "ciborium",
  "ed25519-dalek",
  "hex",
+ "libc",
  "object_store",
  "save-crypto",
  "save-domain",

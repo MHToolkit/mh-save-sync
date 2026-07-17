@@ -34,4 +34,5 @@ fi
 ./scripts/compose-server-sync-e2e-runtime-test.sh
 ./scripts/compose-project-volume-test.sh
 ./scripts/compose-tls-config-test.sh
+./scripts/compose-runtime-identity-test.sh
 ./scripts/secret-scan.sh

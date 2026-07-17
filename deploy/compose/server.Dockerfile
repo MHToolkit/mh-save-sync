@@ -13,6 +13,6 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 WORKDIR /app
 COPY --from=build /src/target/release/mh-save-server /app/mh-save-server
 ENV MH_SAVE_SYNC_BIND=0.0.0.0:8080
-USER nonroot:nonroot
+USER root:root
 EXPOSE 8080
 ENTRYPOINT ["/app/mh-save-server"]
