@@ -1374,7 +1374,7 @@ do {
     } else if args.contains("--configured-restore") {
         print(try configuredServerRestore(context: context), terminator: "")
     } else if args.contains("--help") {
-        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--generate-recovery-secret-file] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app。一级菜单只保留：立即同步…、仅上传本地存档、下载云端并恢复…、冲突与差异…、查看云端状态、自动同步；服务器/目录/密钥放在「设置」，首次教程和启动前检查放在「帮助」。历史版本尚未接入此界面，会明确禁用。")
+        print("用法：MHSaveSyncMac [--status] [--menu-preview] [--set-server-url <url>] [--set-save-root <path>] [--set-recovery-secret-file <path>] [--generate-recovery-secret-file] [--auto-upload-on-exit on|off] [--prelaunch-check] [--configured-upload] [--configured-status] [--configured-restore] [--continue-local] [--conflict-demo] [--cloud-unavailable] [--server-upload --root <path> --secret-hex <hex>] [--server-status --secret-hex <hex>] [--server-restore --target <path> --secret-hex <hex> --emulator-state stopped|running] [--app]\n运行 ./scripts/install-macos-app.sh 可安装 /Applications/MH Save Sync.app。一级菜单只保留：同步存档…、上传本地存档、用云端恢复本地…、处理冲突…、云端状态、自动同步；服务器、存档目录和恢复密钥放在「设置」，首次教程和启动前检查放在「帮助」。历史版本尚未接入此界面，会明确禁用。")
     } else {
         printStatus(context)
     }
