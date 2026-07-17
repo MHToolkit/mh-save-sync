@@ -36,7 +36,11 @@ tmp="$(mktemp -d)"
 log="${tmp}/server.log"
 trap 'status=$?; if [[ -n "${server_pid:-}" ]]; then kill "$server_pid" >/dev/null 2>&1 || true; wait "$server_pid" >/dev/null 2>&1 || true; fi; if [[ $status -ne 0 ]]; then echo "--- mh-save-server log ---" >&2; tail -200 "$log" >&2 || true; fi; rm -rf "$tmp"; exit $status' EXIT
 
-MH_SAVE_SYNC_BIND="127.0.0.1:${port}" cargo run -q -p save-server --bin mh-save-server >"$log" 2>&1 &
+server_bin="${MH_SAVE_SYNC_SERVER_BIN:-$repo_root/target/debug/mh-save-server}"
+if [[ ! -x "$server_bin" ]]; then
+  cargo build -q -p save-server --bin mh-save-server
+fi
+MH_SAVE_SYNC_BIND="127.0.0.1:${port}" "$server_bin" >"$log" 2>&1 &
 server_pid="$!"
 
 for _ in $(seq 1 120); do

@@ -184,6 +184,14 @@ if ready.get("backend") != "postgres-s3":
     raise SystemExit(f"persistent postgres-s3 backend required, got {ready}")
 PY
 
+if [[ $started_compose -eq 1 ]]; then
+  if ! compose exec -T server /app/mh-save-server --runtime-identity-check; then
+    echo "server did not prove the expected post-secret runtime identity marker" >&2
+    exit 1
+  fi
+  printf '%s\n' '{"runtime_identity_gate":true,"runtime_uid":65532,"runtime_gid":65532}'
+fi
+
 run_id="$(python3 - <<'PY'
 import time
 print(time.time_ns())

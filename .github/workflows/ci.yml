@@ -85,6 +85,8 @@ jobs:
         run: ./scripts/compose-project-volume-test.sh
       - name: Verify optional TLS reverse proxy compose config
         run: ./scripts/compose-tls-config-test.sh
+      - name: Verify file-secret privilege-drop deployment contract
+        run: ./scripts/compose-runtime-identity-test.sh
       - run: cargo run -p save-cli --bin mh-save -- crypto-vector
       - name: Verify deterministic device certificate fixture
         run: |
