@@ -44,7 +44,7 @@ object SyncScheduler {
         val defaultLastSyncSummary =
             "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。"
         val defaultLaunchGateSummary =
-            "未检查。启动 MH3G 前点「启动前检查」。"
+            "启动前会重新核对手机与云端版本。"
         val defaultPhase = "暂无后台任务"
         val defaultNextAction = "先填写服务器地址并授权存档目录，然后做启动前检查。"
         if (!preferences.contains(LAST_SYNC_TARGET)) {
@@ -60,21 +60,36 @@ object SyncScheduler {
                 .putString(LAUNCH_GATE_REASON, "not-checked")
                 .apply()
         }
-        val cleanLastSyncSummary = SyncMessages.sanitizeLegacyUserCopy(
-            preferences.getString(LAST_SYNC_SUMMARY, null),
-            defaultLastSyncSummary,
-        )
-        val cleanLaunchGateSummary = SyncMessages.sanitizeLegacyUserCopy(
-            preferences.getString(LAUNCH_GATE_SUMMARY, null),
-            defaultLaunchGateSummary,
-        )
+        val oldLastReason = preferences.getString(LAST_SYNC_REASON, null)
+        val oldLaunchReason = preferences.getString(LAUNCH_GATE_REASON, null)
+        val cleanLastReason = SyncMessages.sanitizeLegacyPrelaunchReason(oldLastReason)
+        val cleanLaunchReason = SyncMessages.sanitizeLegacyPrelaunchReason(oldLaunchReason)
+        val cleanLastSyncSummary = if (oldLastReason == "prelaunch-remote-head") {
+            defaultLastSyncSummary
+        } else {
+            SyncMessages.sanitizeLegacyUserCopy(
+                preferences.getString(LAST_SYNC_SUMMARY, null),
+                defaultLastSyncSummary,
+            )
+        }
+        val cleanLaunchGateSummary = if (oldLaunchReason == "prelaunch-remote-head") {
+            defaultLaunchGateSummary
+        } else {
+            SyncMessages.sanitizeLegacyUserCopy(
+                preferences.getString(LAUNCH_GATE_SUMMARY, null),
+                defaultLaunchGateSummary,
+            )
+        }
         if (
             cleanLastSyncSummary != preferences.getString(LAST_SYNC_SUMMARY, null) ||
-            cleanLaunchGateSummary != preferences.getString(LAUNCH_GATE_SUMMARY, null)
+            cleanLaunchGateSummary != preferences.getString(LAUNCH_GATE_SUMMARY, null) ||
+            cleanLastReason != oldLastReason || cleanLaunchReason != oldLaunchReason
         ) {
             preferences.edit()
                 .putString(LAST_SYNC_SUMMARY, cleanLastSyncSummary)
                 .putString(LAUNCH_GATE_SUMMARY, cleanLaunchGateSummary)
+                .putString(LAST_SYNC_REASON, cleanLastReason)
+                .putString(LAUNCH_GATE_REASON, cleanLaunchReason)
                 .apply()
         }
     }

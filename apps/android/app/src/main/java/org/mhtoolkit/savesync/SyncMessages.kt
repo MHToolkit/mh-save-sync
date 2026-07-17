@@ -27,18 +27,30 @@ object SyncMessages {
         legacyTerm(0x6807, 0x8bb0, 0x4f1a, 0x8bdd),
         legacyTerm(0x540c, 0x6b65, 0x4f1a, 0x8bdd),
     )
+    private val legacyMisleadingPhrases = listOf(
+        "发现云端版本，请先选择上传或恢复",
+        "云端有版本，请先确认同步方向",
+        "发现云端版本后，请先选一个动作",
+    )
 
     fun serverLabel(endpoint: String?): String =
         endpoint.orEmpty().trim().trimEnd('/').ifBlank { "未配置服务器" }
 
     fun sanitizeLegacyUserCopy(value: String?, fallback: String): String {
         val text = value.orEmpty()
-        return if (text.isBlank() || legacyInternalTerms.any { term -> term in text }) {
+        return if (
+            text.isBlank() ||
+            legacyInternalTerms.any { term -> term in text } ||
+            legacyMisleadingPhrases.any { phrase -> phrase in text }
+        ) {
             fallback
         } else {
             text
         }
     }
+
+    fun sanitizeLegacyPrelaunchReason(value: String?): String =
+        if (value.isNullOrBlank() || value == "prelaunch-remote-head") "not-checked" else value
 
     fun syncRoute(target: String, endpoint: String?): String =
         "同步路线：$target → 本机安全缓存 → ${serverLabel(endpoint)}。服务器只接收端到端加密快照；原始存档仍留在模拟器原目录。"

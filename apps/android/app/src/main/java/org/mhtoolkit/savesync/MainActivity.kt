@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(
                 preferences.getString(
                     SyncScheduler.LAST_SYNC_NEXT_ACTION,
-                    "先填写服务器地址并授权存档目录，然后做启动前检查。",
+                    "先完成设置，再点“检查并打开 Nemessix”。",
                 ).orEmpty()
             )
         }
@@ -226,7 +226,7 @@ class MainActivity : ComponentActivity() {
             syncPhase = preferences.getString(SyncScheduler.LAST_SYNC_PHASE, "暂无后台任务").orEmpty()
             nextAction = preferences.getString(
                 SyncScheduler.LAST_SYNC_NEXT_ACTION,
-                "先填写服务器地址并授权存档目录，然后做启动前检查。",
+                "先完成设置，再点“检查并打开 Nemessix”。",
             ).orEmpty()
             syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
             launchGateReason = preferences.getString(
@@ -352,7 +352,7 @@ class MainActivity : ComponentActivity() {
                                         "；上传成功，但本机未能记录可信基线，下次启动前需要再次确认方向。"
                                     },
                                 "上传完成",
-                                "Mac 端启动前检查后即可看到该版本。",
+                                "Mac 端下次打开游戏前核对后即可看到该版本。",
                             )
                             is LocalReplaceResult.Conflict -> persistSyncStatus(
                                 "user-use-local-conflict",

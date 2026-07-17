@@ -1,5 +1,6 @@
 package org.mhtoolkit.savesync
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -177,6 +178,30 @@ class SyncMessagesTest {
                 fallback = fallback,
             ).contains("本机安全缓存"),
         )
+        val neutral = "启动前会重新核对手机与云端版本。"
+        assertEquals(
+            neutral,
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "发现云端版本，请先选择上传或恢复。",
+                fallback = neutral,
+            ),
+        )
+        assertEquals(
+            neutral,
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "云端有版本，请先确认同步方向",
+                fallback = neutral,
+            ),
+        )
+        val successful = "本地存档已设为云端最新（2 个文件）。"
+        assertEquals(successful, SyncMessages.sanitizeLegacyUserCopy(successful, neutral))
+    }
+
+    @Test
+    fun legacyPrelaunchReasonIsResetForFreshConsistencyCheck() {
+        assertEquals("not-checked", SyncMessages.sanitizeLegacyPrelaunchReason("prelaunch-remote-head"))
+        assertEquals("prelaunch-synced", SyncMessages.sanitizeLegacyPrelaunchReason("prelaunch-synced"))
+        assertEquals("not-checked", SyncMessages.sanitizeLegacyPrelaunchReason(null))
     }
 
     @Test
