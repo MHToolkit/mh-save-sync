@@ -1983,6 +1983,26 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(bytes),
         )
     }
+
+    async fn insert_persistent_identity(pool: &PgPool, account_byte: u8, devices: &[u8]) {
+        let account = vec![account_byte; 20];
+        sqlx::query("INSERT INTO accounts(account_handle,root_public_key) VALUES ($1,$2)")
+            .bind(&account)
+            .bind(vec![account_byte; 32])
+            .execute(pool)
+            .await
+            .unwrap();
+        for device_byte in devices {
+            sqlx::query("INSERT INTO devices(cert_id,account_handle,device_public_key,certificate) VALUES ($1,$2,$3,$4)")
+                .bind(vec![*device_byte; 16])
+                .bind(&account)
+                .bind(vec![*device_byte; 32])
+                .bind(vec![*device_byte; 64])
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
     fn test_auth() -> Option<Extension<AuthContext>> {
         Some(Extension(AuthContext {
             account_handle: hex::encode([0x11; 20]),
@@ -1991,8 +2011,12 @@ mod tests {
     }
 
     fn fixture_auth(device_byte: u8) -> Option<Extension<AuthContext>> {
+        fixture_auth_for(0x11, device_byte)
+    }
+
+    fn fixture_auth_for(account_byte: u8, device_byte: u8) -> Option<Extension<AuthContext>> {
         Some(Extension(AuthContext {
-            account_handle: hex::encode([0x11; 20]),
+            account_handle: hex::encode([account_byte; 20]),
             device_cert_id: hex::encode([device_byte; 16]),
         }))
     }
@@ -2012,15 +2036,41 @@ mod tests {
         created_unix_ms: u64,
         mutation: &str,
     ) -> Result<CommitSnapshotResponse, ApiError> {
+        commit_fixture_snapshot_for(
+            state,
+            0x11,
+            "three-device-save",
+            snapshot_byte,
+            device_byte,
+            base,
+            parents,
+            created_unix_ms,
+            mutation,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_fixture_snapshot_for(
+        state: &AppState,
+        account_byte: u8,
+        logical_save_id: &str,
+        snapshot_byte: u8,
+        device_byte: u8,
+        base: Option<u8>,
+        parents: &[u8],
+        created_unix_ms: u64,
+        mutation: &str,
+    ) -> Result<CommitSnapshotResponse, ApiError> {
         let manifest_id = id(snapshot_byte.wrapping_add(100));
-        let auth = fixture_auth(device_byte);
+        let auth = fixture_auth_for(account_byte, device_byte);
         let begin = begin_snapshot(
             State(state.clone()),
             auth.clone(),
             Json(BeginSnapshotRequest {
-                account_handle: Some(hex::encode([0x11; 20])),
+                account_handle: Some(hex::encode([account_byte; 20])),
                 device_cert_id: Some(hex::encode([device_byte; 16])),
-                logical_save_id: "three-device-save".into(),
+                logical_save_id: logical_save_id.into(),
                 base_head: base.map(|byte| SnapshotId(id(byte))),
                 parents: parents.iter().map(|byte| SnapshotId(id(*byte))).collect(),
                 encrypted_manifest_id: manifest_id.clone(),
@@ -2406,6 +2456,228 @@ mod tests {
         assert!(READINESS_OBJECT_PAGE_SQL.contains("ORDER BY o.storage_key"));
         assert!(READINESS_OBJECT_PAGE_SQL.contains("LIMIT $2"));
         assert!(!READINESS_OBJECT_PAGE_SQL.contains("LIMIT 2000"));
+    }
+
+    #[sqlx::test(migrations = "../../deploy/compose/migrations")]
+    #[ignore = "requires PostgreSQL; run scripts/postgres-dag-contract-test.sh"]
+    async fn persistent_backend_enforces_multi_device_dag_contract(pool: PgPool) {
+        use object_store::memory::InMemory;
+
+        insert_persistent_identity(&pool, 0x11, &[0x31, 0x32, 0x33]).await;
+        insert_persistent_identity(&pool, 0x44, &[0x41]).await;
+        let state = AppState {
+            backend: Backend::Persistent(Arc::new(PersistentState {
+                pool,
+                object_store: Arc::new(InMemory::new()),
+            })),
+        };
+
+        let a = commit_fixture_snapshot(&state, 10, 0x31, None, &[], 1_000, "initial")
+            .await
+            .unwrap();
+        let b = commit_fixture_snapshot(&state, 11, 0x32, Some(10), &[10], 2_000, "modify")
+            .await
+            .unwrap();
+        let c = commit_fixture_snapshot(&state, 12, 0x33, Some(10), &[10], 1_500, "modify")
+            .await
+            .unwrap();
+        let a_branch = commit_fixture_snapshot(&state, 13, 0x31, Some(10), &[10], 3_000, "modify")
+            .await
+            .unwrap();
+        let c_branch = commit_fixture_snapshot(&state, 14, 0x33, Some(12), &[12], 4_000, "modify")
+            .await
+            .unwrap();
+
+        assert!(matches!(a.outcome, CommitOutcomeKind::FirstSnapshot));
+        assert!(matches!(b.outcome, CommitOutcomeKind::FastForward));
+        assert!(matches!(c.outcome, CommitOutcomeKind::Conflict));
+        assert!(matches!(a_branch.outcome, CommitOutcomeKind::Conflict));
+        assert!(matches!(c_branch.outcome, CommitOutcomeKind::Conflict));
+        assert_eq!(b.head, SnapshotId(id(11)));
+        for branch in [&c, &a_branch, &c_branch] {
+            assert_eq!(branch.head, SnapshotId(id(11)));
+        }
+
+        let auth = fixture_auth(0x31).unwrap().0;
+        let rows = history(&state, &auth.account_handle, "three-device-save", false)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 5, "PostgreSQL must retain every branch");
+        for (snapshot, parent) in [(11, 10), (12, 10), (13, 10), (14, 12)] {
+            assert!(rows.iter().any(|row| {
+                row.snapshot_id == SnapshotId(id(snapshot))
+                    && row.parents == vec![SnapshotId(id(parent))]
+            }));
+        }
+
+        commit_fixture_snapshot_for(
+            &state,
+            0x11,
+            "delete-save",
+            20,
+            0x31,
+            None,
+            &[],
+            10,
+            "initial",
+        )
+        .await
+        .unwrap();
+        let delete = commit_fixture_snapshot_for(
+            &state,
+            0x11,
+            "delete-save",
+            21,
+            0x32,
+            Some(20),
+            &[20],
+            20,
+            "tombstone",
+        )
+        .await
+        .unwrap();
+        let modify = commit_fixture_snapshot_for(
+            &state,
+            0x11,
+            "delete-save",
+            22,
+            0x33,
+            Some(20),
+            &[20],
+            30,
+            "modify",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(delete.outcome, CommitOutcomeKind::FastForward));
+        assert!(matches!(modify.outcome, CommitOutcomeKind::Conflict));
+        assert_eq!(modify.head, SnapshotId(id(21)));
+        assert_eq!(modify.conflict_snapshot, Some(SnapshotId(id(22))));
+
+        async fn clock_topology(
+            state: &AppState,
+            logical_save_id: &str,
+            ids: [u8; 3],
+            timestamps: [u64; 3],
+        ) -> [bool; 3] {
+            let first = commit_fixture_snapshot_for(
+                state,
+                0x11,
+                logical_save_id,
+                ids[0],
+                0x31,
+                None,
+                &[],
+                timestamps[0],
+                "initial",
+            )
+            .await
+            .unwrap();
+            let fast_forward = commit_fixture_snapshot_for(
+                state,
+                0x11,
+                logical_save_id,
+                ids[1],
+                0x32,
+                Some(ids[0]),
+                &[ids[0]],
+                timestamps[1],
+                "modify",
+            )
+            .await
+            .unwrap();
+            let conflict = commit_fixture_snapshot_for(
+                state,
+                0x11,
+                logical_save_id,
+                ids[2],
+                0x33,
+                Some(ids[0]),
+                &[ids[0]],
+                timestamps[2],
+                "modify",
+            )
+            .await
+            .unwrap();
+            [
+                matches!(first.outcome, CommitOutcomeKind::FirstSnapshot),
+                matches!(fast_forward.outcome, CommitOutcomeKind::FastForward),
+                matches!(conflict.outcome, CommitOutcomeKind::Conflict)
+                    && conflict.head == SnapshotId(id(ids[1])),
+            ]
+        }
+        assert_eq!(
+            clock_topology(&state, "clock-normal", [30, 31, 32], [1_000, 2_000, 1_500]).await,
+            clock_topology(
+                &state,
+                "clock-drift",
+                [40, 41, 42],
+                [u64::MAX, 0, u64::MAX - 1],
+            )
+            .await
+        );
+
+        let cross_account = begin_snapshot(
+            State(state.clone()),
+            fixture_auth_for(0x44, 0x41),
+            Json(BeginSnapshotRequest {
+                account_handle: Some(hex::encode([0x44; 20])),
+                device_cert_id: Some(hex::encode([0x41; 16])),
+                logical_save_id: "three-device-save".into(),
+                base_head: Some(SnapshotId(id(10))),
+                parents: vec![SnapshotId(id(10))],
+                encrypted_manifest_id: id(250),
+                chunk_ids: vec![],
+            }),
+        )
+        .await;
+        assert!(matches!(
+            cross_account,
+            Err((StatusCode::BAD_REQUEST, message))
+                if message == "parent does not belong to this account and logical save"
+        ));
+
+        let cross_logical_save = begin_snapshot(
+            State(state.clone()),
+            fixture_auth(0x31),
+            Json(BeginSnapshotRequest {
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([0x31; 16])),
+                logical_save_id: "other-save".into(),
+                base_head: Some(SnapshotId(id(10))),
+                parents: vec![SnapshotId(id(10))],
+                encrypted_manifest_id: id(251),
+                chunk_ids: vec![],
+            }),
+        )
+        .await;
+        assert!(matches!(
+            cross_logical_save,
+            Err((StatusCode::BAD_REQUEST, message))
+                if message == "parent does not belong to this account and logical save"
+        ));
+
+        let merge = commit_fixture_snapshot(
+            &state,
+            15,
+            0x31,
+            Some(11),
+            &[11, 12],
+            u64::MAX,
+            "explicit-merge",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(merge.outcome, CommitOutcomeKind::FastForward));
+        assert_eq!(merge.head, SnapshotId(id(15)));
+        let merged_history = history(&state, &auth.account_handle, "three-device-save", false)
+            .await
+            .unwrap();
+        assert_eq!(merged_history.len(), 6);
+        assert!(merged_history.iter().any(|row| {
+            row.snapshot_id == SnapshotId(id(15))
+                && row.parents == vec![SnapshotId(id(11)), SnapshotId(id(12))]
+        }));
     }
 
     #[sqlx::test(migrations = "../../deploy/compose/migrations")]
