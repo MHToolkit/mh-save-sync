@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use walkdir::WalkDir;
 
 #[derive(Debug, thiserror::Error)]
@@ -367,31 +368,121 @@ pub fn restore_snapshot_to_folder(
     target: &Path,
     emulator_state: EmulatorState,
 ) -> Result<PathBuf, EngineError> {
+    restore_snapshot_to_folder_with_failpoint(secret, snapshot, target, emulator_state, None)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RestorePhase {
+    StageComplete,
+    TargetBackedUp,
+    StageInstalled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RestoreJournal {
+    version: u16,
+    phase: RestorePhase,
+    target_name: String,
+    original_target_existed: bool,
+    expected_fingerprint: TreeFingerprint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreFailpoint {
+    StageComplete,
+    TargetBackedUp,
+    StageInstalled,
+    ReceiptLost,
+}
+
+#[derive(Debug)]
+struct RestorePaths {
+    parent: PathBuf,
+    target: PathBuf,
+    backup: PathBuf,
+    stage: PathBuf,
+    journal: PathBuf,
+    journal_tmp: PathBuf,
+    target_name: String,
+}
+
+static RESTORE_PROCESS_LOCK: Mutex<()> = Mutex::new(());
+
+struct RestoreLockGuard {
+    _process_guard: MutexGuard<'static, ()>,
+    #[cfg(unix)]
+    directory: fs::File,
+}
+
+#[cfg(unix)]
+impl Drop for RestoreLockGuard {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        const LOCK_UN: i32 = 8;
+        // SAFETY: `directory` owns a valid open descriptor for the lifetime of this guard.
+        let _ = unsafe { flock(self.directory.as_raw_fd(), LOCK_UN) };
+    }
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+
+impl RestorePaths {
+    fn for_target(target: &Path) -> Result<Self, EngineError> {
+        let target_name = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+            .ok_or_else(|| EngineError::RejectedFile(target.display().to_string()))?
+            .to_string();
+        let parent = target
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        Ok(Self {
+            target: target.to_path_buf(),
+            backup: parent.join(format!("{target_name}.mhsave-backup")),
+            stage: parent.join(format!(".{target_name}.mhsave-restore-stage")),
+            journal: parent.join(format!(".{target_name}.mhsave-restore-journal.json")),
+            journal_tmp: parent.join(format!(".{target_name}.mhsave-restore-journal.tmp")),
+            parent,
+            target_name,
+        })
+    }
+}
+
+fn restore_snapshot_to_folder_with_failpoint(
+    secret: &[u8; 32],
+    snapshot: &EncryptedSnapshot,
+    target: &Path,
+    emulator_state: EmulatorState,
+    failpoint: Option<RestoreFailpoint>,
+) -> Result<PathBuf, EngineError> {
     if emulator_state != EmulatorState::Stopped {
         return Err(EngineError::EmulatorRunning);
     }
+    let paths = RestorePaths::for_target(target)?;
+    fs::create_dir_all(&paths.parent)?;
+    reject_symlink_or_wrong_kind(&paths.parent, true)?;
+    let _restore_lock = acquire_restore_lock(target)?;
+    recover_interrupted_restore_locked(&paths)?;
+    reject_symlink_or_wrong_kind(&paths.target, true)?;
+
     let keys = derive_account_keys(secret)?;
     let manifest = decrypt_manifest(secret, snapshot)?;
     validate_manifest_entries(&manifest.entries, 10_000, 128 * 1024 * 1024)?;
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let backup = parent.join(format!(
-        "{}.mhsave-backup",
-        target.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    if backup.exists() {
-        fs::remove_dir_all(&backup)?;
-    }
-    if target.exists() {
-        fs::rename(target, &backup)?;
-    }
-    let stage = tempfile::tempdir_in(parent)?;
-    let result = (|| -> Result<(), EngineError> {
+
+    remove_restore_dir_if_present(&paths.stage)?;
+    fs::create_dir(&paths.stage)?;
+    let stage_result = (|| -> Result<(), EngineError> {
         for entry in &manifest.entries {
             if entry.kind == FileKind::Tombstone {
                 continue;
             }
-            let out = stage.path().join(&entry.path);
+            let out = checked_restore_path(&paths.stage, &entry.path)?;
             if let Some(parent) = out.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -418,19 +509,334 @@ pub fn restore_snapshot_to_folder(
                 return Err(EngineError::MissingChunk(entry.path.clone()));
             }
         }
+        sync_tree(&paths.stage)?;
         Ok(())
     })();
-    if let Err(e) = result {
-        if target.exists() {
-            let _ = fs::remove_dir_all(target);
-        }
-        if backup.exists() {
-            let _ = fs::rename(&backup, target);
-        }
+    if let Err(e) = stage_result {
+        let _ = remove_restore_dir_if_present(&paths.stage);
         return Err(e);
     }
-    fs::rename(stage.path(), target)?;
-    Ok(backup)
+
+    let journal = RestoreJournal {
+        version: 1,
+        phase: RestorePhase::StageComplete,
+        target_name: paths.target_name.clone(),
+        original_target_existed: paths.target.exists(),
+        expected_fingerprint: fingerprint_tree(&paths.stage, &[])?,
+    };
+    write_restore_journal(&paths, &journal)?;
+    interrupt_if(failpoint, RestoreFailpoint::StageComplete, "stage-complete")?;
+
+    remove_restore_dir_if_present(&paths.backup)?;
+    if paths.target.exists() {
+        fs::rename(&paths.target, &paths.backup)?;
+        sync_dir(&paths.parent)?;
+    }
+    interrupt_if(
+        failpoint,
+        RestoreFailpoint::TargetBackedUp,
+        "target-backed-up",
+    )?;
+    let mut journal = journal;
+    journal.phase = RestorePhase::TargetBackedUp;
+    write_restore_journal(&paths, &journal)?;
+
+    fs::rename(&paths.stage, &paths.target)?;
+    sync_dir(&paths.parent)?;
+    interrupt_if(
+        failpoint,
+        RestoreFailpoint::StageInstalled,
+        "stage-installed",
+    )?;
+    journal.phase = RestorePhase::StageInstalled;
+    write_restore_journal(&paths, &journal)?;
+
+    remove_restore_file_if_present(&paths.journal)?;
+    sync_dir(&paths.parent)?;
+    interrupt_if(failpoint, RestoreFailpoint::ReceiptLost, "receipt-lost")?;
+    Ok(paths.backup)
+}
+
+/// Recovers one native-folder restore transaction after process or power loss.
+///
+/// Clients must call this for every configured native save target during startup, before allowing
+/// an emulator launch. `restore_snapshot_to_folder` also calls it while holding the same
+/// transaction lock, so retrying a restore remains safe and idempotent.
+pub fn recover_interrupted_restore(target: &Path) -> Result<(), EngineError> {
+    let paths = RestorePaths::for_target(target)?;
+    if !paths.parent.exists() {
+        return Ok(());
+    }
+    let _restore_lock = acquire_restore_lock(target)?;
+    recover_interrupted_restore_locked(&paths)
+}
+
+fn recover_interrupted_restore_locked(paths: &RestorePaths) -> Result<(), EngineError> {
+    reject_symlink_or_wrong_kind(&paths.parent, true)?;
+    reject_symlink_or_wrong_kind(&paths.target, true)?;
+    reject_symlink_or_wrong_kind(&paths.backup, true)?;
+    reject_symlink_or_wrong_kind(&paths.stage, true)?;
+    reject_symlink_or_wrong_kind(&paths.journal, false)?;
+    reject_symlink_or_wrong_kind(&paths.journal_tmp, false)?;
+
+    remove_restore_file_if_present(&paths.journal_tmp)?;
+    if !paths.journal.exists() {
+        remove_restore_dir_if_present(&paths.stage)?;
+        return Ok(());
+    }
+
+    let bytes = fs::read(&paths.journal)?;
+    let journal: RestoreJournal = match serde_json::from_slice(&bytes) {
+        Ok(journal) => journal,
+        Err(_error) if paths.backup.exists() => {
+            recover_from_corrupt_journal(paths)?;
+            remove_restore_dir_if_present(&paths.stage)?;
+            remove_restore_file_if_present(&paths.journal)?;
+            sync_dir(&paths.parent)?;
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if journal.version != 1 || journal.target_name != paths.target_name {
+        if paths.backup.exists() {
+            recover_from_corrupt_journal(paths)?;
+            remove_restore_dir_if_present(&paths.stage)?;
+            remove_restore_file_if_present(&paths.journal)?;
+            sync_dir(&paths.parent)?;
+            return Ok(());
+        }
+        return Err(EngineError::RejectedFile(
+            "restore journal does not match target".into(),
+        ));
+    }
+
+    let installed_new_tree = paths.target.exists()
+        && !paths.stage.exists()
+        && fingerprint_tree(&paths.target, &[])? == journal.expected_fingerprint;
+    match journal.phase {
+        RestorePhase::StageComplete => recover_stage_complete(paths, &journal)?,
+        RestorePhase::StageInstalled if installed_new_tree => {}
+        RestorePhase::TargetBackedUp if installed_new_tree => {}
+        _ => rollback_interrupted_restore(paths, journal.original_target_existed)?,
+    }
+    remove_restore_dir_if_present(&paths.stage)?;
+    remove_restore_file_if_present(&paths.journal)?;
+    sync_dir(&paths.parent)?;
+    Ok(())
+}
+
+fn acquire_restore_lock(target: &Path) -> Result<RestoreLockGuard, EngineError> {
+    let paths = RestorePaths::for_target(target)?;
+    let process_guard = RESTORE_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        const LOCK_EX: i32 = 2;
+        let directory = fs::File::open(&paths.parent)?;
+        loop {
+            // SAFETY: `directory` remains open in the returned guard and `LOCK_EX` is a valid
+            // `flock(2)` operation on macOS, Linux, and Android.
+            if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } == 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+        Ok(RestoreLockGuard {
+            _process_guard: process_guard,
+            directory,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(RestoreLockGuard {
+            _process_guard: process_guard,
+        })
+    }
+}
+
+fn recover_stage_complete(
+    paths: &RestorePaths,
+    journal: &RestoreJournal,
+) -> Result<(), EngineError> {
+    if journal.original_target_existed {
+        if paths.target.exists() {
+            return Ok(());
+        }
+        if paths.backup.exists() {
+            fs::rename(&paths.backup, &paths.target)?;
+            sync_dir(&paths.parent)?;
+            return Ok(());
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "restore journal expected original target but neither target nor backup exists",
+        )
+        .into());
+    }
+    if paths.target.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "restore journal expected absent original target but target exists",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn rollback_interrupted_restore(
+    paths: &RestorePaths,
+    original_target_existed: bool,
+) -> Result<(), EngineError> {
+    if original_target_existed && paths.backup.exists() {
+        remove_restore_dir_if_present(&paths.target)?;
+        fs::rename(&paths.backup, &paths.target)?;
+        sync_dir(&paths.parent)?;
+    } else if original_target_existed {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "restore rollback requires the original backup",
+        )
+        .into());
+    } else if paths.target.exists() {
+        remove_restore_dir_if_present(&paths.target)?;
+        sync_dir(&paths.parent)?;
+    }
+    Ok(())
+}
+
+fn recover_from_corrupt_journal(paths: &RestorePaths) -> Result<(), EngineError> {
+    if paths.target.exists() && paths.stage.exists() {
+        return Ok(());
+    }
+    if paths.backup.exists() {
+        remove_restore_dir_if_present(&paths.target)?;
+        fs::rename(&paths.backup, &paths.target)?;
+        sync_dir(&paths.parent)?;
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "corrupt restore journal has no complete rollback source",
+    )
+    .into())
+}
+
+fn checked_restore_path(stage: &Path, manifest_path: &str) -> Result<PathBuf, EngineError> {
+    let relative = Path::new(manifest_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(EngineError::RejectedFile(manifest_path.to_string()));
+    }
+    Ok(stage.join(relative))
+}
+
+fn reject_symlink_or_wrong_kind(path: &Path, expect_directory: bool) -> Result<(), EngineError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink()
+        || (expect_directory && !metadata.is_dir())
+        || (!expect_directory && !metadata.is_file())
+    {
+        return Err(EngineError::RejectedFile(path.display().to_string()));
+    }
+    Ok(())
+}
+
+fn remove_restore_dir_if_present(path: &Path) -> Result<(), EngineError> {
+    reject_symlink_or_wrong_kind(path, true)?;
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn remove_restore_file_if_present(path: &Path) -> Result<(), EngineError> {
+    reject_symlink_or_wrong_kind(path, false)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_restore_journal(
+    paths: &RestorePaths,
+    journal: &RestoreJournal,
+) -> Result<(), EngineError> {
+    remove_restore_file_if_present(&paths.journal_tmp)?;
+    let bytes = serde_json::to_vec(journal)?;
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&paths.journal_tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+    }
+    fs::rename(&paths.journal_tmp, &paths.journal)?;
+    sync_dir(&paths.parent)?;
+    Ok(())
+}
+
+fn sync_tree(root: &Path) -> Result<(), EngineError> {
+    let mut directories = Vec::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_symlink() {
+            return Err(EngineError::RejectedFile(
+                entry.path().display().to_string(),
+            ));
+        }
+        if entry.file_type().is_file() {
+            fs::File::open(entry.path())?.sync_all()?;
+        } else if entry.file_type().is_dir() {
+            directories.push(entry.path().to_path_buf());
+        } else {
+            return Err(EngineError::RejectedFile(
+                entry.path().display().to_string(),
+            ));
+        }
+    }
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for directory in directories {
+        sync_dir(&directory)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_dir(path: &Path) -> Result<(), EngineError> {
+    fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_path: &Path) -> Result<(), EngineError> {
+    Ok(())
+}
+
+fn interrupt_if(
+    actual: Option<RestoreFailpoint>,
+    expected: RestoreFailpoint,
+    label: &'static str,
+) -> Result<(), EngineError> {
+    if actual == Some(expected) {
+        Err(std::io::Error::new(std::io::ErrorKind::Interrupted, label).into())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn diff_manifests_for_game(
@@ -957,6 +1363,289 @@ mod tests {
             support_level: SupportLevel::FixtureVerified,
             evidence_fingerprint: "unit-test".into(),
         }
+    }
+
+    fn snapshot_with_new_tree(secret: &[u8; 32]) -> (tempfile::TempDir, EncryptedSnapshot) {
+        let source = tempfile::tempdir().unwrap();
+        fs::create_dir_all(source.path().join("slot")).unwrap();
+        fs::write(source.path().join("slot/main.bin"), b"new-main").unwrap();
+        fs::write(source.path().join("slot/extra.bin"), b"new-extra").unwrap();
+        let snapshot = create_snapshot_from_stable_folder(
+            source.path(),
+            &descriptor(),
+            secret,
+            SnapshotOptions::fixture(GameKey::new("generic", "fixture", "none", "slot1")),
+        )
+        .unwrap();
+        (source, snapshot)
+    }
+
+    fn write_old_tree(target: &Path) {
+        fs::create_dir_all(target.join("slot")).unwrap();
+        fs::write(target.join("slot/main.bin"), b"old-main").unwrap();
+        fs::write(target.join("slot/legacy.bin"), b"old-legacy").unwrap();
+    }
+
+    fn assert_old_tree(target: &Path) {
+        assert_eq!(fs::read(target.join("slot/main.bin")).unwrap(), b"old-main");
+        assert_eq!(
+            fs::read(target.join("slot/legacy.bin")).unwrap(),
+            b"old-legacy"
+        );
+        assert!(!target.join("slot/extra.bin").exists());
+    }
+
+    fn assert_new_tree(target: &Path) {
+        assert_eq!(fs::read(target.join("slot/main.bin")).unwrap(), b"new-main");
+        assert_eq!(
+            fs::read(target.join("slot/extra.bin")).unwrap(),
+            b"new-extra"
+        );
+        assert!(!target.join("slot/legacy.bin").exists());
+    }
+
+    fn crash_restore_at(failpoint: RestoreFailpoint) -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [42u8; 32];
+        let (_source, snapshot) = snapshot_with_new_tree(&secret);
+        let error = restore_snapshot_to_folder_with_failpoint(
+            &secret,
+            &snapshot,
+            &target,
+            EmulatorState::Stopped,
+            Some(failpoint),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            EngineError::Io(ref source) if source.kind() == std::io::ErrorKind::Interrupted
+        ));
+        (root, target)
+    }
+
+    #[test]
+    fn restore_recovers_old_tree_after_crash_when_stage_is_complete() {
+        let (_root, target) = crash_restore_at(RestoreFailpoint::StageComplete);
+        recover_interrupted_restore(&target).unwrap();
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn stage_complete_recovery_preserves_old_target_when_stage_is_lost() {
+        let (_root, target) = crash_restore_at(RestoreFailpoint::StageComplete);
+        let paths = RestorePaths::for_target(&target).unwrap();
+        fs::remove_dir_all(&paths.stage).unwrap();
+
+        recover_interrupted_restore(&target).unwrap();
+
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn stage_complete_recovery_ignores_stale_backup_when_old_target_still_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let backup = root.path().join("active-save.mhsave-backup");
+        fs::create_dir_all(backup.join("slot")).unwrap();
+        fs::write(backup.join("slot/main.bin"), b"ancient-main").unwrap();
+        let secret = [46u8; 32];
+        let (_source, snapshot) = snapshot_with_new_tree(&secret);
+        restore_snapshot_to_folder_with_failpoint(
+            &secret,
+            &snapshot,
+            &target,
+            EmulatorState::Stopped,
+            Some(RestoreFailpoint::StageComplete),
+        )
+        .unwrap_err();
+
+        recover_interrupted_restore(&target).unwrap();
+
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_recovers_old_tree_after_crash_when_target_is_backed_up() {
+        let (_root, target) = crash_restore_at(RestoreFailpoint::TargetBackedUp);
+        recover_interrupted_restore(&target).unwrap();
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_recovers_complete_tree_after_crash_when_stage_is_installed() {
+        let (_root, target) = crash_restore_at(RestoreFailpoint::StageInstalled);
+        recover_interrupted_restore(&target).unwrap();
+        assert_new_tree(&target);
+    }
+
+    #[test]
+    fn restore_recovers_new_tree_when_terminal_receipt_is_lost() {
+        let (_root, target) = crash_restore_at(RestoreFailpoint::ReceiptLost);
+        recover_interrupted_restore(&target).unwrap();
+        assert_new_tree(&target);
+    }
+
+    #[test]
+    fn recovery_without_journal_does_not_resurrect_stale_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        let backup = root.path().join("active-save.mhsave-backup");
+        write_old_tree(&backup);
+
+        recover_interrupted_restore(&target).unwrap();
+
+        assert!(!target.exists());
+        assert_old_tree(&backup);
+    }
+
+    #[test]
+    fn corrupt_journal_with_complete_backup_rolls_back_old_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        let paths = RestorePaths::for_target(&target).unwrap();
+        write_old_tree(&paths.backup);
+        fs::create_dir_all(paths.stage.join("slot")).unwrap();
+        fs::write(paths.stage.join("slot/main.bin"), b"partial-new").unwrap();
+        fs::write(&paths.journal, b"{truncated").unwrap();
+
+        recover_interrupted_restore(&target).unwrap();
+
+        assert_old_tree(&target);
+        assert!(!paths.stage.exists());
+        assert!(!paths.journal.exists());
+    }
+
+    #[test]
+    fn restore_waits_for_existing_same_parent_transaction_lock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [45u8; 32];
+        let (_source, snapshot) = snapshot_with_new_tree(&secret);
+        let held_lock = acquire_restore_lock(&target).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let thread_target = target.clone();
+        std::thread::spawn(move || {
+            tx.send(restore_snapshot_to_folder(
+                &secret,
+                &snapshot,
+                &thread_target,
+                EmulatorState::Stopped,
+            ))
+            .unwrap();
+        });
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(held_lock);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_new_tree(&target);
+    }
+
+    #[test]
+    fn restore_restart_recovery_is_idempotent() {
+        for failpoint in [
+            RestoreFailpoint::StageComplete,
+            RestoreFailpoint::TargetBackedUp,
+            RestoreFailpoint::StageInstalled,
+            RestoreFailpoint::ReceiptLost,
+        ] {
+            let (_root, target) = crash_restore_at(failpoint);
+            recover_interrupted_restore(&target).unwrap();
+            recover_interrupted_restore(&target).unwrap();
+            let main = fs::read(target.join("slot/main.bin")).unwrap();
+            assert!(main == b"old-main" || main == b"new-main");
+            if main == b"old-main" {
+                assert_old_tree(&target);
+            } else {
+                assert_new_tree(&target);
+            }
+        }
+    }
+
+    #[test]
+    fn restore_with_initially_absent_target_recovers_absent_or_complete_new_tree() {
+        for failpoint in [
+            RestoreFailpoint::StageComplete,
+            RestoreFailpoint::TargetBackedUp,
+            RestoreFailpoint::StageInstalled,
+            RestoreFailpoint::ReceiptLost,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let target = root.path().join("active-save");
+            let secret = [47u8; 32];
+            let (_source, snapshot) = snapshot_with_new_tree(&secret);
+            restore_snapshot_to_folder_with_failpoint(
+                &secret,
+                &snapshot,
+                &target,
+                EmulatorState::Stopped,
+                Some(failpoint),
+            )
+            .unwrap_err();
+
+            recover_interrupted_restore(&target).unwrap();
+
+            match failpoint {
+                RestoreFailpoint::StageComplete | RestoreFailpoint::TargetBackedUp => {
+                    assert!(!target.exists());
+                }
+                RestoreFailpoint::StageInstalled | RestoreFailpoint::ReceiptLost => {
+                    assert_new_tree(&target);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_rejects_symlink_target_without_touching_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("real-save");
+        write_old_tree(&destination);
+        let target = root.path().join("linked-save");
+        std::os::unix::fs::symlink(&destination, &target).unwrap();
+        let secret = [43u8; 32];
+        let (_source, snapshot) = snapshot_with_new_tree(&secret);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::RejectedFile(_)));
+        assert_old_tree(&destination);
+    }
+
+    #[test]
+    fn restore_rejects_manifest_path_traversal_before_moving_target() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [44u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        manifest.entries[0].path = "../escaped.bin".into();
+        let keys = derive_account_keys(&secret).unwrap();
+        snapshot.encrypted_manifest = encrypt_bytes(
+            &keys,
+            b"mh-save-sync/manifest/v1",
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped,)
+                .is_err()
+        );
+        assert_old_tree(&target);
+        assert!(!root.path().join("escaped.bin").exists());
     }
 
     #[test]
