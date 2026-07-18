@@ -134,11 +134,11 @@ struct UploadSession {
 
 #[derive(Debug, Clone)]
 struct CommitReceipt {
-    upload_id: Uuid,
     account_handle: String,
     device_cert_id: String,
     snapshot_id: SnapshotId,
     logical_save_id: String,
+    base_head: Option<SnapshotId>,
     parents: Vec<SnapshotId>,
     manifest_id: String,
     required_chunks: Vec<String>,
@@ -1670,11 +1670,11 @@ fn commit_memory(
     guard.commit_receipts.insert(
         snapshot_key.clone(),
         CommitReceipt {
-            upload_id,
             account_handle: auth.account_handle.clone(),
             device_cert_id: auth.device_cert_id.clone(),
             snapshot_id: req.snapshot_id,
             logical_save_id: session.logical_save_id,
+            base_head: session.base_head,
             parents,
             manifest_id,
             required_chunks,
@@ -1691,7 +1691,7 @@ fn commit_memory(
 
 fn memory_receipt_matches(
     receipt: &CommitReceipt,
-    upload_id: Uuid,
+    _upload_id: Uuid,
     session: &UploadSession,
     req: &CommitSnapshotRequest,
     auth: &AuthContext,
@@ -1700,10 +1700,10 @@ fn memory_receipt_matches(
         && receipt.device_cert_id == auth.device_cert_id
         && receipt.snapshot_id == req.snapshot_id
         && receipt.logical_save_id == session.logical_save_id
+        && receipt.base_head == session.base_head
         && receipt.manifest_id == session.manifest_id.as_deref().unwrap_or_default()
         && normalized_snapshot_ids(&receipt.parents) == normalized_snapshot_ids(&session.parents)
         && receipt.required_chunks == normalized_strings(session.required_chunks.iter().cloned())
-        && (receipt.upload_id == upload_id || receipt.snapshot_id == req.snapshot_id)
 }
 
 async fn commit_persistent(
@@ -1844,7 +1844,7 @@ async fn commit_persistent_with_failpoint(
     let normalized_parents = normalized_strings(parents.clone());
     let normalized_chunks = normalized_strings(chunks.clone());
     let existing = sqlx::query(
-        "SELECT device_cert_id,logical_save_id,manifest_id,parents,required_chunks,\
+        "SELECT device_cert_id,logical_save_id,base_head,manifest_id,parents,required_chunks,\
                 outcome,outcome_head,conflict_snapshot_id \
          FROM snapshot_commit_receipts WHERE account_handle=$1 AND snapshot_id=$2",
     )
@@ -1856,6 +1856,7 @@ async fn commit_persistent_with_failpoint(
     if let Some(existing) = existing {
         let existing_device: Vec<u8> = existing.get("device_cert_id");
         let existing_logical: String = existing.get("logical_save_id");
+        let existing_base: Option<String> = existing.get("base_head");
         let existing_manifest: String = existing.get("manifest_id");
         let existing_parents = normalized_strings(json_string_array(
             &existing.get::<serde_json::Value, _>("parents"),
@@ -1865,6 +1866,7 @@ async fn commit_persistent_with_failpoint(
         ));
         if existing_device != device
             || existing_logical != logical_save_id
+            || existing_base != base_head
             || existing_manifest != manifest_id
             || existing_parents != normalized_parents
             || existing_chunks != normalized_chunks
@@ -1920,7 +1922,7 @@ async fn commit_persistent_with_failpoint(
     }
     if !conflict {
         let affected = match base_head {
-            Some(base) => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND account_handle=$3 AND head_snapshot_id=$4")
+            Some(ref base) => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND account_handle=$3 AND head_snapshot_id=$4")
                 .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(&account).bind(base).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
             None => sqlx::query("UPDATE logical_saves SET head_snapshot_id=$1,updated_at=now() WHERE id=$2 AND account_handle=$3 AND head_snapshot_id IS NULL")
                 .bind(&req.snapshot_id.0).bind(&logical_save_id).bind(&account).execute(&mut *tx).await.map_err(db_unavailable)?.rows_affected(),
@@ -1938,15 +1940,16 @@ async fn commit_persistent_with_failpoint(
     };
     sqlx::query(
         "INSERT INTO snapshot_commit_receipts(\
-            account_handle,upload_id,snapshot_id,device_cert_id,logical_save_id,manifest_id,\
+            account_handle,upload_id,snapshot_id,device_cert_id,logical_save_id,base_head,manifest_id,\
             parents,required_chunks,outcome,outcome_head,conflict_snapshot_id\
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
     )
     .bind(&account)
     .bind(upload_id)
     .bind(&req.snapshot_id.0)
     .bind(&device)
     .bind(&logical_save_id)
+    .bind(&base_head)
     .bind(&manifest_id)
     .bind(serde_json::json!(normalized_parents))
     .bind(serde_json::json!(normalized_chunks))
@@ -3106,6 +3109,28 @@ mod tests {
         assert_eq!(replay.head, first.head);
         assert!(matches!(replay.outcome, CommitOutcomeKind::FirstSnapshot));
 
+        let different_base_upload = Uuid::new_v4();
+        {
+            let mut guard = inner.lock().unwrap();
+            guard.uploads.insert(
+                different_base_upload,
+                UploadSession {
+                    account_handle: Some(account.clone()),
+                    device_cert_id: Some(device.clone()),
+                    logical_save_id: "save-a".into(),
+                    base_head: Some(SnapshotId("different-base".into())),
+                    parents: vec![SnapshotId("different-base".into())],
+                    required_chunks: BTreeSet::new(),
+                    uploaded_chunks: BTreeSet::new(),
+                    manifest_id: Some("manifest-a".into()),
+                },
+            );
+        }
+        assert!(matches!(
+            commit_memory(&inner, different_base_upload, request.clone(), &auth),
+            Err(BackendError::Conflict(_))
+        ));
+
         let mismatched_upload = Uuid::new_v4();
         {
             let mut guard = inner.lock().unwrap();
@@ -3786,6 +3811,26 @@ mod tests {
         .expect("lost commit response must be safely replayable");
         assert!(matches!(retry.outcome, CommitOutcomeKind::FirstSnapshot));
         assert_eq!(retry.head.0, "after-snapshot");
+
+        let different_base_upload = Uuid::new_v4();
+        sqlx::query("INSERT INTO upload_sessions(id,account_handle,device_cert_id,logical_save_id,base_head,parents,required_chunks,manifest_id,expires_at) VALUES ($1,$2,$3,'after-save','forged-base','[]','[]','after-manifest',now()+interval '1 hour')")
+            .bind(different_base_upload)
+            .bind(&account)
+            .bind(&device)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let base_mismatch = commit_persistent_with_failpoint(
+            &persistent,
+            different_base_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("after-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::Disabled,
+        )
+        .await;
+        assert!(matches!(base_mismatch, Err(BackendError::Conflict(_))));
 
         let mismatched_upload = insert_commit_fixture(
             &pool,

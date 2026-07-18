@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS snapshot_commit_receipts (
   snapshot_id TEXT NOT NULL,
   device_cert_id BYTEA NOT NULL,
   logical_save_id TEXT NOT NULL,
+  base_head TEXT,
   manifest_id TEXT NOT NULL,
   parents JSONB NOT NULL,
   required_chunks JSONB NOT NULL,

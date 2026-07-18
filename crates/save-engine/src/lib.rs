@@ -1339,6 +1339,8 @@ pub mod local_store {
         Sqlite(#[from] rusqlite::Error),
         #[error("capture lease lost")]
         CaptureLeaseLost,
+        #[error("existing queue row differs from immutable upload")]
+        ExistingRowMismatch,
     }
 
     pub struct LocalStore {
@@ -1614,11 +1616,28 @@ pub mod local_store {
             transaction.execute("INSERT OR IGNORE INTO profiles(id,name,created_at) VALUES ('default','Default',?1)", params![created_at as i64])?;
             transaction.execute("INSERT OR IGNORE INTO game_keys(id,family,title_id,region,slot) VALUES ('generic','generic','fixture','none','slot1')", [])?;
             transaction.execute("INSERT OR IGNORE INTO slots(id,profile_id,game_key_id,adapter_id,support_level) VALUES (?1,'default','generic','generic-folder','FixtureVerified')", params![slot_id])?;
-            transaction.execute(
+            let inserted_snapshot = transaction.execute(
                 "INSERT OR IGNORE INTO snapshots(id,slot_id,device_id,encrypted_manifest,created_at) VALUES (?1,?2,?3,?4,?5)",
                 params![snapshot_id.0, slot_id, device_id, encrypted_manifest, created_at as i64],
             )?;
-            transaction.execute(
+            if inserted_snapshot == 0 {
+                let existing = transaction.query_row(
+                    "SELECT slot_id,device_id,encrypted_manifest,created_at FROM snapshots WHERE id=?1",
+                    params![snapshot_id.0],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?, row.get::<_, i64>(3)?)),
+                ).optional()?;
+                if existing.as_ref().is_none_or(
+                    |(existing_slot, existing_device, existing_manifest, existing_created)| {
+                        existing_slot != slot_id
+                            || existing_device != device_id
+                            || existing_manifest != encrypted_manifest
+                            || *existing_created != created_at as i64
+                    },
+                ) {
+                    return Err(LocalStoreError::ExistingRowMismatch);
+                }
+            }
+            let inserted_queue = transaction.execute(
                 r#"INSERT OR IGNORE INTO upload_queue(
                     snapshot_id,state,server_endpoint,logical_save_id,base_head,device_id,bundle_path,
                     tree_uri,local_fingerprint
@@ -1634,6 +1653,40 @@ pub mod local_store {
                     local_fingerprint,
                 ],
             )?;
+            if inserted_queue == 0 {
+                let existing = transaction
+                    .query_row(
+                        r#"SELECT state,server_endpoint,logical_save_id,base_head,device_id,
+                              bundle_path,tree_uri,local_fingerprint
+                       FROM upload_queue WHERE snapshot_id=?1"#,
+                        params![snapshot_id.0],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, Option<String>>(5)?,
+                                row.get::<_, Option<String>>(6)?,
+                                row.get::<_, Option<String>>(7)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                if existing.as_ref().is_none_or(|existing| {
+                    !matches!(existing.0.as_str(), "pending" | "uploading")
+                        || existing.1.as_deref() != Some(server_endpoint)
+                        || existing.2.as_deref() != Some(logical_save_id)
+                        || existing.3.as_deref() != base_head
+                        || existing.4.as_deref() != Some(device_id)
+                        || existing.5.as_deref() != Some(bundle_path)
+                        || existing.6.as_deref() != Some(tree_uri)
+                        || existing.7.as_deref() != Some(local_fingerprint)
+                }) {
+                    return Err(LocalStoreError::ExistingRowMismatch);
+                }
+            }
             if let Some((capture_key, capture_owner, generation)) = capture_claim {
                 let updated = transaction.execute(
                     "UPDATE capture_state SET captured_generation=MAX(captured_generation,?3),lease_owner=NULL,lease_expires_at=NULL WHERE key=?1 AND lease_owner=?2 AND captured_generation<?3",
@@ -2654,6 +2707,64 @@ mod tests {
             "snap-durable",
             "process restart after HTTP success must retain the established HEAD",
         );
+    }
+
+    #[test]
+    fn sqlite_duplicate_upload_requires_exact_retryable_row_before_capture_ack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::local_store::LocalStore::open(&tmp.path().join("state.sqlite")).unwrap();
+        let snapshot = SnapshotId("duplicate-snapshot".into());
+        let enqueue = |manifest: &[u8], claim| {
+            store.enqueue_upload(
+                &snapshot,
+                "slot-a",
+                "device-a",
+                manifest,
+                7,
+                "https://sync.example.test",
+                "mh3g-nemessix-jp-slot1",
+                Some("base-a"),
+                "objects/duplicate.mhsavebundle",
+                "content://fixture/tree",
+                "fingerprint-a",
+                claim,
+            )
+        };
+        enqueue(b"encrypted-manifest", None).unwrap();
+        enqueue(b"encrypted-manifest", None).unwrap();
+
+        store.mark_capture_dirty("capture-a").unwrap();
+        let lease = store
+            .claim_capture_generation("capture-a", "capture-owner", 1, 100)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            enqueue(
+                b"hostile-different-manifest",
+                Some(("capture-a", "capture-owner", lease.generation)),
+            ),
+            Err(crate::local_store::LocalStoreError::ExistingRowMismatch)
+        ));
+        assert!(
+            store
+                .release_capture_generation("capture-a", "capture-owner")
+                .unwrap(),
+            "failed duplicate validation must not acknowledge the capture generation",
+        );
+
+        let claimed = store
+            .claim_retryable_upload(None, "upload-owner", 1, 100)
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .mark_upload_completed(claimed.id, "upload-owner", "duplicate-snapshot", true, 10,)
+                .unwrap()
+        );
+        assert!(matches!(
+            enqueue(b"encrypted-manifest", None),
+            Err(crate::local_store::LocalStoreError::ExistingRowMismatch)
+        ));
     }
 
     #[test]

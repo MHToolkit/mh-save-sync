@@ -22,7 +22,7 @@ Commit ordering is:
 
 The same transaction also records an account-scoped commit receipt keyed by
 upload ID and snapshot ID. It binds the committing device, logical save,
-manifest, normalized parent set, normalized object-reference set and original
+CAS base, manifest, normalized parent set, normalized object-reference set and original
 CAS response. A retry after response loss returns that response only when the
 opaque content contract matches; a different payload reusing the same snapshot
 ID is rejected.

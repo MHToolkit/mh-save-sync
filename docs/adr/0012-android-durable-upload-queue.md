@@ -37,8 +37,10 @@ is not represented as a save-complete event.
    protocol. Failure increments `attempts` and records only a redacted code;
    success marks the row `completed` and upserts the owner-scoped consistency
    baseline in the same SQLite transaction before deleting the encrypted
-   bundle. A non-conflict response whose HEAD is not the uploaded snapshot
-   fails closed and remains retryable.
+   bundle. First-snapshot/fast-forward require HEAD equal to the uploaded
+   snapshot and no conflict branch; conflict requires the uploaded snapshot to
+   be returned as the conflict branch and a different current HEAD. Any other
+   response fails closed and remains retryable.
 
 The next capture chooses its base in this order: latest pending local snapshot,
 durable SQLite consistency HEAD for the exact endpoint/logical-save/tree/device
@@ -98,6 +100,11 @@ test verifies their persisted rows reach a finished state.
 If releasing a failed capture lease cannot be confirmed, WorkManager retries
 immediately and reports unknown local queue state rather than silently waiting
 for lease expiry.
+
+Snapshot and queue inserts are idempotent only when an existing row matches all
+immutable fields and the queue row is still pending/uploading. A completed or
+mismatched duplicate rolls back the transaction and cannot acknowledge the
+capture generation.
 
 Rollback may leave encrypted bundles and pending rows in app-private storage;
 older clients ignore them and local emulator saves remain untouched. Reinstall

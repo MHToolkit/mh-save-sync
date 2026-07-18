@@ -390,6 +390,19 @@ pub struct AndroidUploadReport {
     pub total_bytes: u64,
 }
 
+fn valid_android_commit_receipt(upload: &AndroidUploadReport) -> bool {
+    match upload.outcome.as_str() {
+        "first-snapshot" | "fast-forward" => {
+            upload.cloud_head == upload.snapshot_id && upload.conflict_snapshot.is_none()
+        }
+        "conflict" => {
+            upload.cloud_head != upload.snapshot_id
+                && upload.conflict_snapshot.as_deref() == Some(upload.snapshot_id.as_str())
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AndroidQueueReport {
     pub snapshot_id: String,
@@ -1050,12 +1063,7 @@ pub async fn drain_android_upload_queue(
             {
                 Ok(upload) => {
                     heartbeat.abort();
-                    if !matches!(
-                        upload.outcome.as_str(),
-                        "first-snapshot" | "fast-forward" | "conflict"
-                    ) || (upload.outcome != "conflict"
-                        && upload.snapshot_id != upload.cloud_head)
-                    {
+                    if !valid_android_commit_receipt(&upload) {
                         let _ = store.mark_upload_failed(
                             job.id,
                             &owner,
@@ -2535,6 +2543,55 @@ impl SyncCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn commit_report(
+        outcome: &str,
+        snapshot: &str,
+        head: &str,
+        conflict: Option<&str>,
+    ) -> AndroidUploadReport {
+        AndroidUploadReport {
+            outcome: outcome.into(),
+            snapshot_id: snapshot.into(),
+            cloud_head: head.into(),
+            conflict_snapshot: conflict.map(str::to_owned),
+            file_count: 1,
+            total_bytes: 1,
+        }
+    }
+
+    #[test]
+    fn android_commit_receipt_rejects_forged_or_incomplete_outcomes() {
+        assert!(valid_android_commit_receipt(&commit_report(
+            "first-snapshot",
+            "s",
+            "s",
+            None,
+        )));
+        assert!(valid_android_commit_receipt(&commit_report(
+            "fast-forward",
+            "s",
+            "s",
+            None,
+        )));
+        assert!(valid_android_commit_receipt(&commit_report(
+            "conflict",
+            "branch",
+            "head",
+            Some("branch"),
+        )));
+        for forged in [
+            commit_report("created", "s", "s", None),
+            commit_report("first-snapshot", "s", "other", None),
+            commit_report("first-snapshot", "s", "s", Some("s")),
+            commit_report("fast-forward", "s", "s", Some("branch")),
+            commit_report("conflict", "branch", "head", None),
+            commit_report("conflict", "branch", "head", Some("other")),
+            commit_report("conflict", "branch", "branch", Some("branch")),
+        ] {
+            assert!(!valid_android_commit_receipt(&forged), "{forged:?}");
+        }
+    }
 
     fn spawn_upload_server(
         listener: std::net::TcpListener,
