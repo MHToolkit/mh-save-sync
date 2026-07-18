@@ -28,10 +28,16 @@ class ActiveSessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        SyncScheduler.markDirty(this)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        getSharedPreferences(SyncScheduler.PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putBoolean(SyncScheduler.SESSION_ACTIVE, false)
+            .putBoolean(SyncScheduler.DIRTY, true)
+            .commit()
         SyncScheduler.enqueueImmediate(this, "session-exit")
         super.onDestroy()
     }

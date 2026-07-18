@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -11,9 +12,7 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 object SyncScheduler {
-    // Flip only after a real SAF -> stable snapshot -> E2EE -> server pipeline is
-    // loaded and covered by device tests. The current Android Alpha is a UI shell.
-    const val REAL_SYNC_PIPELINE_AVAILABLE = false
+    const val REAL_SYNC_PIPELINE_AVAILABLE = true
     const val LOCAL_REPLACE_PIPELINE_AVAILABLE = true
     // Enabled only for Nemessix builds exposing the pinned SaveQuiescenceV1 lease.
     const val CLOUD_RESTORE_PIPELINE_AVAILABLE = true
@@ -22,6 +21,9 @@ object SyncScheduler {
     const val PREFERENCES = "mh_save_sync"
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"
+    const val CHARGING_REQUIRED = "charging_required"
+    const val DIRTY = "save_dirty"
+    const val PENDING_UPLOAD_COUNT = "pending_upload_count"
     const val SERVER_ENDPOINT = "server_endpoint"
     const val LAST_SYNC_SUMMARY = "last_sync_summary"
     const val LAST_SYNC_TARGET = "last_sync_target"
@@ -38,6 +40,7 @@ object SyncScheduler {
     const val NATIVE_BRIDGE_HEALTH = "native_bridge_health"
     const val NEMESSIX_PACKAGE = "io.github.vincentadamnemessisx.nemessix"
     private const val PERIODIC_NAME = "save-reconcile-periodic"
+    private const val IMMEDIATE_NAME = "save-reconcile-immediate"
 
     fun ensureDefaults(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -110,6 +113,7 @@ object SyncScheduler {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(network)
             .setRequiresBatteryNotLow(true)
+            .setRequiresCharging(preferences.getBoolean(CHARGING_REQUIRED, false))
             .build()
         val request = PeriodicWorkRequestBuilder<ReconcileWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints)
@@ -126,6 +130,15 @@ object SyncScheduler {
         val request = OneTimeWorkRequestBuilder<ReconcileWorker>()
             .setInputData(Data.Builder().putString("reason", reason).build())
             .build()
-        WorkManager.getInstance(context).enqueue(request)
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            IMMEDIATE_NAME,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request,
+        )
+    }
+
+    fun markDirty(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(DIRTY, true).apply()
     }
 }

@@ -1193,6 +1193,19 @@ pub mod local_store {
     use save_domain::SnapshotId;
     use std::path::Path;
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct UploadQueueItem {
+        pub id: i64,
+        pub snapshot_id: SnapshotId,
+        pub server_endpoint: String,
+        pub logical_save_id: String,
+        pub base_head: Option<String>,
+        pub device_id: String,
+        pub bundle_path: String,
+        pub attempts: u32,
+        pub last_error: Option<String>,
+    }
+
     #[derive(Debug, thiserror::Error)]
     pub enum LocalStoreError {
         #[error("sqlite error: {0}")]
@@ -1269,7 +1282,12 @@ pub mod local_store {
                     snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
                     state TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT
+                    last_error TEXT,
+                    server_endpoint TEXT,
+                    logical_save_id TEXT,
+                    base_head TEXT,
+                    device_id TEXT,
+                    bundle_path TEXT
                 );
                 CREATE TABLE IF NOT EXISTS leases (
                     key TEXT PRIMARY KEY,
@@ -1284,6 +1302,33 @@ pub mod local_store {
                 );
                 "#,
             )?;
+            self.ensure_upload_queue_column("server_endpoint", "TEXT")?;
+            self.ensure_upload_queue_column("logical_save_id", "TEXT")?;
+            self.ensure_upload_queue_column("base_head", "TEXT")?;
+            self.ensure_upload_queue_column("device_id", "TEXT")?;
+            self.ensure_upload_queue_column("bundle_path", "TEXT")?;
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS upload_queue_snapshot_unique ON upload_queue(snapshot_id)",
+                [],
+            )?;
+            Ok(())
+        }
+
+        fn ensure_upload_queue_column(
+            &self,
+            name: &str,
+            declaration: &str,
+        ) -> Result<(), LocalStoreError> {
+            let mut statement = self.conn.prepare("PRAGMA table_info(upload_queue)")?;
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !names.iter().any(|candidate| candidate == name) {
+                self.conn.execute(
+                    &format!("ALTER TABLE upload_queue ADD COLUMN {name} {declaration}"),
+                    [],
+                )?;
+            }
             Ok(())
         }
 
@@ -1316,10 +1361,133 @@ pub mod local_store {
             Ok(())
         }
 
+        #[allow(clippy::too_many_arguments)]
+        pub fn enqueue_upload(
+            &self,
+            snapshot_id: &SnapshotId,
+            slot_id: &str,
+            device_id: &str,
+            encrypted_manifest: &[u8],
+            created_at: u64,
+            server_endpoint: &str,
+            logical_save_id: &str,
+            base_head: Option<&str>,
+            bundle_path: &str,
+        ) -> Result<(), LocalStoreError> {
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO devices(id,label,public_key) VALUES (?1,'local',X'00')",
+                params![device_id],
+            )?;
+            transaction.execute("INSERT OR IGNORE INTO profiles(id,name,created_at) VALUES ('default','Default',?1)", params![created_at as i64])?;
+            transaction.execute("INSERT OR IGNORE INTO game_keys(id,family,title_id,region,slot) VALUES ('generic','generic','fixture','none','slot1')", [])?;
+            transaction.execute("INSERT OR IGNORE INTO slots(id,profile_id,game_key_id,adapter_id,support_level) VALUES (?1,'default','generic','generic-folder','FixtureVerified')", params![slot_id])?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO snapshots(id,slot_id,device_id,encrypted_manifest,created_at) VALUES (?1,?2,?3,?4,?5)",
+                params![snapshot_id.0, slot_id, device_id, encrypted_manifest, created_at as i64],
+            )?;
+            transaction.execute(
+                r#"INSERT OR IGNORE INTO upload_queue(
+                    snapshot_id,state,server_endpoint,logical_save_id,base_head,device_id,bundle_path
+                ) VALUES (?1,'pending',?2,?3,?4,?5,?6)"#,
+                params![
+                    snapshot_id.0,
+                    server_endpoint,
+                    logical_save_id,
+                    base_head,
+                    device_id,
+                    bundle_path,
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        }
+
+        pub fn retryable_uploads(
+            &self,
+            server_endpoint: &str,
+            limit: usize,
+        ) -> Result<Vec<UploadQueueItem>, LocalStoreError> {
+            let mut statement = self.conn.prepare(
+                r#"SELECT id,snapshot_id,server_endpoint,logical_save_id,base_head,
+                          device_id,bundle_path,attempts,last_error
+                   FROM upload_queue
+                   WHERE state IN ('pending','uploading') AND server_endpoint=?1
+                   ORDER BY id ASC LIMIT ?2"#,
+            )?;
+            let rows = statement.query_map(params![server_endpoint, limit as i64], |row| {
+                Ok(UploadQueueItem {
+                    id: row.get(0)?,
+                    snapshot_id: SnapshotId(row.get(1)?),
+                    server_endpoint: row.get(2)?,
+                    logical_save_id: row.get(3)?,
+                    base_head: row.get(4)?,
+                    device_id: row.get(5)?,
+                    bundle_path: row.get(6)?,
+                    attempts: row.get::<_, i64>(7)? as u32,
+                    last_error: row.get(8)?,
+                })
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        }
+
+        pub fn latest_retryable_snapshot(
+            &self,
+            server_endpoint: &str,
+            logical_save_id: &str,
+        ) -> Result<Option<SnapshotId>, LocalStoreError> {
+            let mut statement = self.conn.prepare(
+                r#"SELECT snapshot_id FROM upload_queue
+                   WHERE state IN ('pending','uploading')
+                     AND server_endpoint=?1 AND logical_save_id=?2
+                   ORDER BY id DESC LIMIT 1"#,
+            )?;
+            let mut rows = statement.query(params![server_endpoint, logical_save_id])?;
+            Ok(rows
+                .next()?
+                .map(|row| row.get::<_, String>(0).map(SnapshotId))
+                .transpose()?)
+        }
+
+        pub fn mark_uploading(&self, id: i64) -> Result<(), LocalStoreError> {
+            self.conn.execute(
+                "UPDATE upload_queue SET state='uploading' WHERE id=?1 AND state IN ('pending','uploading')",
+                params![id],
+            )?;
+            Ok(())
+        }
+
+        pub fn mark_upload_failed(&self, id: i64, error: &str) -> Result<(), LocalStoreError> {
+            self.conn.execute(
+                "UPDATE upload_queue SET state='pending',attempts=attempts+1,last_error=?2 WHERE id=?1",
+                params![id, error],
+            )?;
+            Ok(())
+        }
+
+        pub fn mark_upload_completed(&self, id: i64) -> Result<(), LocalStoreError> {
+            self.conn.execute(
+                "UPDATE upload_queue SET state='completed',last_error=NULL WHERE id=?1",
+                params![id],
+            )?;
+            Ok(())
+        }
+
         pub fn pending_upload_count(&self) -> Result<u64, LocalStoreError> {
             Ok(self.conn.query_row(
-                "SELECT COUNT(*) FROM upload_queue WHERE state='pending'",
+                "SELECT COUNT(*) FROM upload_queue WHERE state IN ('pending','uploading')",
                 [],
+                |row| row.get::<_, i64>(0),
+            )? as u64)
+        }
+
+        pub fn pending_upload_count_for_server(
+            &self,
+            server_endpoint: &str,
+        ) -> Result<u64, LocalStoreError> {
+            Ok(self.conn.query_row(
+                "SELECT COUNT(*) FROM upload_queue WHERE state IN ('pending','uploading') AND server_endpoint=?1",
+                params![server_endpoint],
                 |row| row.get::<_, i64>(0),
             )? as u64)
         }
@@ -1766,6 +1934,74 @@ mod tests {
                 1,
             )
             .unwrap();
+        assert_eq!(store.pending_upload_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn sqlite_upload_queue_preserves_retry_metadata_until_completed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::local_store::LocalStore::open(&tmp.path().join("state.sqlite")).unwrap();
+        let snapshot = SnapshotId("snap-durable".into());
+        store
+            .enqueue_upload(
+                &snapshot,
+                "slot-a",
+                "device-a",
+                b"encrypted-manifest",
+                7,
+                "https://sync.example.test",
+                "mh3g-nemessix-jp-slot1",
+                Some("base-a"),
+                "objects/snap-durable.mhsavebundle",
+            )
+            .unwrap();
+
+        let queued = store
+            .retryable_uploads("https://sync.example.test", 10)
+            .unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].snapshot_id, snapshot);
+        assert_eq!(queued[0].attempts, 0);
+        assert_eq!(queued[0].base_head.as_deref(), Some("base-a"));
+
+        store
+            .mark_upload_failed(queued[0].id, "network unavailable")
+            .unwrap();
+        let retry = store
+            .retryable_uploads("https://sync.example.test", 10)
+            .unwrap();
+        assert_eq!(retry[0].attempts, 1);
+        assert_eq!(retry[0].last_error.as_deref(), Some("network unavailable"));
+
+        store.mark_upload_completed(retry[0].id).unwrap();
+        assert!(
+            store
+                .retryable_uploads("https://sync.example.test", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.pending_upload_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn sqlite_upload_queue_is_idempotent_for_same_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::local_store::LocalStore::open(&tmp.path().join("state.sqlite")).unwrap();
+        for _ in 0..2 {
+            store
+                .enqueue_upload(
+                    &SnapshotId("snap-one".into()),
+                    "slot-a",
+                    "device-a",
+                    b"encrypted-manifest",
+                    7,
+                    "https://sync.example.test",
+                    "mh3g-nemessix-jp-slot1",
+                    None,
+                    "objects/snap-one.mhsavebundle",
+                )
+                .unwrap();
+        }
         assert_eq!(store.pending_upload_count().unwrap(), 1);
     }
     #[test]

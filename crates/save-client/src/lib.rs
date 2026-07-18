@@ -391,6 +391,26 @@ pub struct AndroidUploadReport {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AndroidQueueReport {
+    pub snapshot_id: String,
+    pub bundle_path: String,
+    pub pending_count: u64,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AndroidQueueDrainReport {
+    pub uploaded_count: u64,
+    pub conflict_count: u64,
+    pub failed_count: u64,
+    pub pending_count: u64,
+    pub last_snapshot_id: Option<String>,
+    pub last_cloud_head: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudHeadReport {
     pub head: Option<String>,
 }
@@ -538,6 +558,30 @@ pub async fn upload_android_stable_stage(
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as u64;
     let snapshot = create_snapshot_from_stable_folder(staging_root, &descriptor, secret, options)?;
+    upload_android_encrypted_snapshot(
+        &snapshot,
+        server,
+        secret,
+        logical_save_id,
+        base_head,
+        device_id,
+    )
+    .await
+}
+
+async fn upload_android_encrypted_snapshot(
+    snapshot: &EncryptedSnapshot,
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    base_head: Option<&str>,
+    device_id: &str,
+) -> anyhow::Result<AndroidUploadReport> {
+    let server = server.trim_end_matches('/');
+    anyhow::ensure!(
+        server.starts_with("https://") || server.starts_with("http://"),
+        "invalid server endpoint"
+    );
     let keys = derive_account_keys(secret)?;
     let handle = account_handle(&keys);
     let root = account_root_signing_key(&keys);
@@ -655,12 +699,163 @@ pub async fn upload_android_stable_stage(
     .await?;
     Ok(AndroidUploadReport {
         outcome: commit.outcome,
-        snapshot_id: snapshot.snapshot_id.0,
+        snapshot_id: snapshot.snapshot_id.0.clone(),
         cloud_head: commit.head.0,
         conflict_snapshot: commit.conflict_snapshot.map(|v| v.0),
         file_count: snapshot.fingerprint.file_count,
         total_bytes: snapshot.fingerprint.total_bytes,
     })
+}
+
+/// Creates an immutable encrypted snapshot and durably records it before any
+/// network request. A later worker can retry from the encrypted bundle without
+/// reopening the SAF tree or retaining plaintext staging data.
+pub fn queue_android_stable_stage(
+    staging_root: &Path,
+    queue_root: &Path,
+    server: &str,
+    secret: &[u8; 32],
+    logical_save_id: &str,
+    observed_base_head: Option<&str>,
+    device_id: &str,
+) -> anyhow::Result<AndroidQueueReport> {
+    let server = server.trim_end_matches('/');
+    anyhow::ensure!(
+        server.starts_with("https://") || server.starts_with("http://"),
+        "invalid server endpoint"
+    );
+    validate_logical_save_id(logical_save_id)?;
+    std::fs::create_dir_all(queue_root.join("objects"))?;
+    let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
+    let parent = store
+        .latest_retryable_snapshot(server, logical_save_id)?
+        .map(|snapshot| snapshot.0)
+        .or_else(|| observed_base_head.map(str::to_owned));
+    let descriptor = save_adapters::nemessix_android();
+    let mut options = SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "slot1"));
+    options.logical_save_id = LogicalSaveId(logical_save_id.to_owned());
+    options.device_id = DeviceId(device_id.to_owned());
+    options.parents = parent
+        .as_deref()
+        .map(|value| vec![SnapshotId(value.to_owned())])
+        .unwrap_or_default();
+    options.created_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64;
+    let created_unix_ms = options.created_unix_ms;
+    let snapshot = create_snapshot_from_stable_folder(staging_root, &descriptor, secret, options)?;
+    let relative_bundle = format!("objects/{}.mhsavebundle", snapshot.snapshot_id.0);
+    let bundle = queue_root.join(&relative_bundle);
+    export_encrypted_bundle(&snapshot, &bundle)?;
+    std::fs::File::open(queue_root.join("objects"))?.sync_all()?;
+    let encrypted_manifest = serde_json::to_vec(&snapshot.encrypted_manifest)?;
+    if let Err(error) = store.enqueue_upload(
+        &snapshot.snapshot_id,
+        logical_save_id,
+        device_id,
+        &encrypted_manifest,
+        created_unix_ms,
+        server,
+        logical_save_id,
+        parent.as_deref(),
+        &relative_bundle,
+    ) {
+        let _ = std::fs::remove_file(&bundle);
+        return Err(error.into());
+    }
+    Ok(AndroidQueueReport {
+        snapshot_id: snapshot.snapshot_id.0,
+        bundle_path: relative_bundle,
+        pending_count: store.pending_upload_count()?,
+        file_count: snapshot.fingerprint.file_count,
+        total_bytes: snapshot.fingerprint.total_bytes,
+    })
+}
+
+/// Consumes encrypted upload jobs in FIFO order. Failures are redacted and
+/// remain pending with an incremented attempt count; successful immutable
+/// commits are marked complete before their local bundle is removed.
+pub async fn drain_android_upload_queue(
+    queue_root: &Path,
+    server: &str,
+    secret: &[u8; 32],
+) -> AndroidQueueDrainReport {
+    let server = server.trim_end_matches('/');
+    let mut report = AndroidQueueDrainReport {
+        uploaded_count: 0,
+        conflict_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        last_snapshot_id: None,
+        last_cloud_head: None,
+        last_error: None,
+    };
+    let store = match save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite")) {
+        Ok(store) => store,
+        Err(_) => {
+            report.failed_count = 1;
+            report.last_error = Some("local_queue_unavailable".into());
+            return report;
+        }
+    };
+    let jobs = match store.retryable_uploads(server, 100) {
+        Ok(jobs) => jobs,
+        Err(_) => {
+            report.failed_count = 1;
+            report.last_error = Some("local_queue_unavailable".into());
+            return report;
+        }
+    };
+    for job in jobs {
+        if store.mark_uploading(job.id).is_err() {
+            report.failed_count += 1;
+            report.last_error = Some("local_queue_unavailable".into());
+            break;
+        }
+        let bundle = queue_root.join(&job.bundle_path);
+        let snapshot = match save_engine::import_encrypted_bundle(&bundle) {
+            Ok(snapshot) if snapshot.snapshot_id == job.snapshot_id => snapshot,
+            _ => {
+                let _ = store.mark_upload_failed(job.id, "local_queue_integrity_failure");
+                report.failed_count += 1;
+                report.last_error = Some("local_queue_integrity_failure".into());
+                break;
+            }
+        };
+        match upload_android_encrypted_snapshot(
+            &snapshot,
+            server,
+            secret,
+            &job.logical_save_id,
+            job.base_head.as_deref(),
+            &job.device_id,
+        )
+        .await
+        {
+            Ok(upload) => {
+                if store.mark_upload_completed(job.id).is_err() {
+                    report.failed_count += 1;
+                    report.last_error = Some("local_queue_unavailable".into());
+                    break;
+                }
+                let _ = std::fs::remove_file(bundle);
+                report.uploaded_count += 1;
+                if upload.outcome == "conflict" {
+                    report.conflict_count += 1;
+                }
+                report.last_snapshot_id = Some(upload.snapshot_id);
+                report.last_cloud_head = Some(upload.cloud_head);
+            }
+            Err(_) => {
+                let _ = store.mark_upload_failed(job.id, "network_or_server_failure");
+                report.failed_count += 1;
+                report.last_error = Some("network_or_server_failure".into());
+                break;
+            }
+        }
+    }
+    report.pending_count = store.pending_upload_count_for_server(server).unwrap_or(0);
+    report
 }
 
 async fn post_empty<T: Serialize>(
@@ -1704,6 +1899,102 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_downloadClou
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableStage<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    staging: jni::objects::JString<'local>,
+    queue_root: jni::objects::JString<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+    logical: jni::objects::JString<'local>,
+    base: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let staging: String = env.get_string(&staging)?.into();
+            let queue_root: String = env.get_string(&queue_root)?.into();
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let device: String = env.get_string(&device)?.into();
+            let base = if base.is_null() {
+                None
+            } else {
+                Some(String::from(env.get_string(&base)?))
+            };
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let report = queue_android_stable_stage(
+                Path::new(&staging),
+                Path::new(&queue_root),
+                &server,
+                &key,
+                &logical,
+                base.as_deref(),
+                &device,
+            )?;
+            Ok(serde_json::to_string(&report)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({
+            "error":"queue_failed",
+            "message_zh":"无法创建持久加密上传任务；未修改云端或本地原始存档"
+        })
+        .to_string(),
+    };
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_drainUploadQueue<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    server: jni::objects::JString<'local>,
+    secret: jni::objects::JByteArray<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let queue_root: String = env.get_string(&queue_root)?.into();
+            let server: String = env.get_string(&server)?.into();
+            let bytes = Zeroizing::new(env.convert_byte_array(&secret)?);
+            anyhow::ensure!(bytes.len() == 32, "recovery secret must be 32 bytes");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            let runtime = tokio::runtime::Runtime::new()?;
+            let report = runtime.block_on(drain_android_upload_queue(
+                Path::new(&queue_root),
+                &server,
+                &key,
+            ));
+            Ok(serde_json::to_string(&report)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({
+            "uploaded_count":0,
+            "conflict_count":0,
+            "failed_count":1,
+            "pending_count":0,
+            "last_error":"local_queue_unavailable"
+        })
+        .to_string(),
+    };
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_bridgeHealth<'local>(
     env: jni::JNIEnv<'local>,
     _class: jni::objects::JClass<'local>,
@@ -1817,6 +2108,218 @@ impl SyncCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spawn_upload_server(
+        listener: std::net::TcpListener,
+        snapshot_id: String,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let mut paths = Vec::new();
+            let mut idle = 0;
+            loop {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(value) => {
+                        idle = 0;
+                        value
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        idle += 1;
+                        if idle > 500 {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(error) => panic!("accept failed: {error}"),
+                };
+                use std::io::{Read, Write};
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let read = stream.read(&mut buffer).unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                    let header_end = request.windows(4).position(|v| v == b"\r\n\r\n");
+                    if let Some(header_end) = header_end {
+                        let headers = String::from_utf8_lossy(&request[..header_end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= header_end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let first = String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .to_owned();
+                paths.push(first.clone());
+                let is_commit = first.contains("/commit ");
+                let body = if first.contains("/v1/accounts/challenge ") {
+                    serde_json::json!({
+                        "challenge_id":"fixture-challenge",
+                        "nonce_b64":base64::engine::general_purpose::STANDARD.encode([3u8;32]),
+                        "expires_unix_seconds":4_102_444_800u64
+                    })
+                    .to_string()
+                } else if first.contains("/v1/snapshots/begin ") {
+                    serde_json::json!({"upload_id":"upload-fixture","missing_chunk_ids":[]})
+                        .to_string()
+                } else if first.contains("/commit ") {
+                    serde_json::json!({
+                        "outcome":"created",
+                        "head":snapshot_id,
+                        "conflict_snapshot":null
+                    })
+                    .to_string()
+                } else {
+                    String::new()
+                };
+                write!(stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body,
+                ).unwrap();
+                if is_commit {
+                    break;
+                }
+            }
+            paths
+        })
+    }
+
+    #[test]
+    fn android_durable_queue_survives_failed_upload_attempt() {
+        let source = tempfile::tempdir().unwrap();
+        let queue = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("system"), b"offline-save").unwrap();
+        let secret = [21u8; 32];
+        let queued = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            "http://127.0.0.1:9",
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            None,
+            "android-fixture",
+        )
+        .unwrap();
+        assert_eq!(queued.pending_count, 1);
+        assert!(queue.path().join(&queued.bundle_path).is_file());
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let drained = runtime.block_on(drain_android_upload_queue(
+            queue.path(),
+            "http://127.0.0.1:9",
+            &secret,
+        ));
+        assert_eq!(drained.uploaded_count, 0);
+        assert_eq!(drained.pending_count, 1);
+        assert_eq!(drained.failed_count, 1);
+        assert_eq!(
+            drained.last_error.as_deref(),
+            Some("network_or_server_failure")
+        );
+
+        let store =
+            save_engine::local_store::LocalStore::open(&queue.path().join("state.sqlite")).unwrap();
+        let retry = store.retryable_uploads("http://127.0.0.1:9", 10).unwrap();
+        assert_eq!(retry[0].attempts, 1);
+        assert_eq!(
+            retry[0].last_error.as_deref(),
+            Some("network_or_server_failure")
+        );
+    }
+
+    #[test]
+    fn android_durable_queue_chains_offline_snapshots_without_mtime_lww() {
+        let source = tempfile::tempdir().unwrap();
+        let queue = tempfile::tempdir().unwrap();
+        let secret = [22u8; 32];
+        std::fs::write(source.path().join("system"), b"first").unwrap();
+        let first = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            "https://sync.example.test",
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            Some("cloud-base"),
+            "android-fixture",
+        )
+        .unwrap();
+        std::fs::write(source.path().join("system"), b"second").unwrap();
+        let second = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            "https://sync.example.test",
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            Some("cloud-base"),
+            "android-fixture",
+        )
+        .unwrap();
+        assert_ne!(first.snapshot_id, second.snapshot_id);
+        let store =
+            save_engine::local_store::LocalStore::open(&queue.path().join("state.sqlite")).unwrap();
+        let jobs = store
+            .retryable_uploads("https://sync.example.test", 10)
+            .unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].base_head.as_deref(), Some("cloud-base"));
+        assert_eq!(
+            jobs[1].base_head.as_deref(),
+            Some(first.snapshot_id.as_str())
+        );
+    }
+
+    #[test]
+    fn android_durable_queue_retries_to_real_upload_and_removes_bundle() {
+        let source = tempfile::tempdir().unwrap();
+        let queue = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        std::fs::write(source.path().join("system"), b"retry-success").unwrap();
+        let secret = [23u8; 32];
+        let queued = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            &server,
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            None,
+            "android-fixture",
+        )
+        .unwrap();
+        let bundle = queue.path().join(&queued.bundle_path);
+        let store =
+            save_engine::local_store::LocalStore::open(&queue.path().join("state.sqlite")).unwrap();
+        let first_attempt = store.retryable_uploads(&server, 1).unwrap().remove(0);
+        store
+            .mark_upload_failed(first_attempt.id, "network_or_server_failure")
+            .unwrap();
+        let server_thread = spawn_upload_server(listener, queued.snapshot_id.clone());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let drained = runtime.block_on(drain_android_upload_queue(queue.path(), &server, &secret));
+        let paths = server_thread.join().unwrap();
+        assert_eq!(
+            drained.uploaded_count, 1,
+            "drained={drained:?} paths={paths:?}"
+        );
+        assert_eq!(drained.pending_count, 0);
+        assert_eq!(
+            drained.last_cloud_head.as_deref(),
+            Some(queued.snapshot_id.as_str())
+        );
+        assert!(!bundle.exists());
+        assert!(paths.iter().any(|path| path.contains("/commit ")));
+        assert!(store.retryable_uploads(&server, 1).unwrap().is_empty());
+    }
 
     #[test]
     fn cloud_head_json_is_strict_and_null_is_not_an_error() {

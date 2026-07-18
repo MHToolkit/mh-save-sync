@@ -125,6 +125,9 @@ class MainActivity : ComponentActivity() {
         var wifiOnly by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.WIFI_ONLY, true))
         }
+        var chargingRequired by remember {
+            mutableStateOf(preferences.getBoolean(SyncScheduler.CHARGING_REQUIRED, false))
+        }
         var sessionActive by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true))
         }
@@ -300,13 +303,18 @@ class MainActivity : ComponentActivity() {
             syncPhase = phase
             nextAction = action
             syncError = error
-            preferences.edit()
+            val stateEditor = preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
                 .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
                 .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-                .apply()
+            if (sessionActive) {
+                stateEditor.apply()
+            } else {
+                stateEditor.putBoolean(SyncScheduler.DIRTY, true).commit()
+                SyncScheduler.enqueueImmediate(this@MainActivity, "session-exit")
+            }
         }
 
         fun persistNoServerStatus(reason: String, actionLabel: String) {
@@ -781,6 +789,11 @@ class MainActivity : ComponentActivity() {
                         SettingSwitch("仅 Wi-Fi 上传", wifiOnly) {
                             wifiOnly = it
                             preferences.edit().putBoolean(SyncScheduler.WIFI_ONLY, it).apply()
+                            SyncScheduler.ensurePeriodic(this@MainActivity)
+                        }
+                        SettingSwitch("仅充电时后台对账", chargingRequired) {
+                            chargingRequired = it
+                            preferences.edit().putBoolean(SyncScheduler.CHARGING_REQUIRED, it).apply()
                             SyncScheduler.ensurePeriodic(this@MainActivity)
                         }
                         OutlinedButton(

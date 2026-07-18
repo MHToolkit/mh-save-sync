@@ -14,6 +14,22 @@ object NativeSyncBridge {
         deviceId: String,
     ): String
 
+    external fun queueStableStage(
+        stagingRoot: String,
+        queueRoot: String,
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        baseHead: String?,
+        deviceId: String,
+    ): String
+
+    external fun drainUploadQueue(
+        queueRoot: String,
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+    ): String
+
     external fun fetchCloudHead(
         serverEndpoint: String,
         recoverySecret: ByteArray,
