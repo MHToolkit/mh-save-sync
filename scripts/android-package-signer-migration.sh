@@ -32,7 +32,8 @@ secret_mode_is_600 "$secret_file" || blocked "release signing env must exist wit
 secret_mode_is_600 "$old_secret_file" || blocked "old signer env must exist with mode 600"
 secret_mode_is_600 "$lineage_file" || blocked "signing lineage must exist with mode 600"
 [[ -f "$old_keystore" ]] || blocked "old signer keystore is missing"
-[[ "$version_code" =~ ^[1-9][0-9]*$ ]] || blocked "migration versionCode must be a positive integer"
+[[ "$version_code" =~ ^[1-9][0-9]*$ && "$version_code" -gt 3 ]] \
+  || blocked "migration versionCode must be greater than the installed versionCode 3"
 [[ -n "$version_name" ]] || blocked "migration versionName must not be blank"
 
 set -a
@@ -129,14 +130,25 @@ old_installed_data_capability="$(
     in_old && /^Has installed data capability:/ { print $NF; exit }
   ' "$lineage_report"
 )"
+old_rollback_capability="$(
+  awk '
+    /^Signer #1 in lineage certificate DN:/ { in_old = 1; next }
+    /^Signer #2 in lineage certificate DN:/ { in_old = 0 }
+    in_old && /^Has rollback capability/ { print $NF; exit }
+  ' "$lineage_report"
+)"
 [[ "$actual_current_cert_sha256" == "$expected_new_cert_sha256" ]] \
   || blocked "migration APK current signer is not the production certificate"
 [[ "$actual_old_cert_sha256" == "$expected_old_cert_sha256" ]] \
   || blocked "lineage does not begin with the installed debug certificate"
 [[ "$old_installed_data_capability" == "true" ]] \
   || blocked "old signer lacks installed-data migration capability"
+[[ "$old_rollback_capability" == "false" ]] \
+  || blocked "old signer must not retain rollback capability"
 [[ "$actual_new_cert_sha256" == "$expected_new_cert_sha256" ]] \
   || blocked "lineage does not terminate at the production certificate"
+grep -q "package: name='org.mhtoolkit.savesync'" "$badging_report" \
+  || blocked "migration APK package name mismatch"
 grep -q "versionCode='$version_code'" "$badging_report" \
   || blocked "migration APK versionCode mismatch"
 grep -q "versionName='$version_name'" "$badging_report" \
@@ -154,3 +166,4 @@ printf 'PREVIOUS_SIGNER_CERT_SHA256=%s\n' "$expected_old_cert_sha256"
 printf 'CURRENT_SIGNER_CERT_SHA256=%s\n' "$expected_new_cert_sha256"
 printf 'SIGNATURE_SCHEME_V3=true\n'
 printf 'INSTALLED_DATA_CAPABILITY=true\n'
+printf 'ROLLBACK_CAPABILITY=false\n'

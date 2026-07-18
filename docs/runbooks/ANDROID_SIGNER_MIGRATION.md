@@ -69,8 +69,9 @@ Only certificate and artifact hashes are public evidence.
 
 The packaging script refuses dirty Git state, missing secrets, wrong file
 modes, an unexpected predecessor certificate, an unexpected production
-certificate, a lineage without installed-data capability, or a non-incremented
-versionCode.
+certificate, a lineage without installed-data capability, a lineage that lets
+the debug signer roll back, or a versionCode not greater than installed
+versionCode `3`.
 
 ```bash
 rtk scripts/android-package-signer-migration.sh
