@@ -1,7 +1,7 @@
 # Self-Hosting Benchmark and Failure Injection Ledger
 
-- Status: local Podman cold-start, persistence, conflict, restart-resume, backup and destructive restore verified; remote and long-idle runs remain open.
-- Last updated: 2026-07-05
+- Status: local Podman cold-start, persistence, conflict, restart-resume, backup, destructive restore and >2,000-object readiness scan verified; remote hardening and long-idle runs remain open.
+- Last updated: 2026-07-18
 - Scope: Docker/Podman local self-hosting and optional isolated Aliyun deployment on `8.130.112.207` without touching existing `nemessix-room` services.
 
 ## 1. Deployment shape to benchmark
@@ -44,6 +44,7 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 | MinIO backup/restore | Stop API writers, archive object volume, destroy both volumes, restore. | archive checksum, referenced-object verification. | **Passed locally.** archive SHA-256 `b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f`; `dangling_snapshot_objects=0` after destructive restore. |
 | Chunk upload interruption | Upload a chunk, stop/restart server, upload manifest and commit same upload session. | resumed commit ID, no bad HEAD. | **Passed locally.** upload session survived restart and committed as first snapshot; HEAD `119beee8ef738ddf81cceba508a7ef8801b6e5cc572e9ecf44302bfc43e20fc1`. |
 | Committed object loss | Delete a MinIO object referenced by committed history. | readiness failure, then successful disaster restore. | **Passed locally.** `/ready` returned HTTP 503 with `missing-object`; destructive two-store restore returned readiness to 200 with zero dangling references. |
+| Readiness beyond 2,000 objects | One committed snapshot references 2,001 object rows; omit only the final object, then add it and retry. | first `/ready` is 503 without leaking the storage key; second is ready; no total scan cap. | **Passed locally.** Persistent readiness now uses a repeatable-read transaction and 256-row keyset pages. `scripts/readiness-fullscan-test.sh` runs the real PostgreSQL fixture; the former fixed `LIMIT 2000` regression is covered. |
 | DB commit crash | Crash after object upload before DB insert; GC later reclaims orphan after grace. | orphan list before/after GC. | Pending. |
 | HEAD CAS race | Two upload sessions commit on the same base. | one fast-forward, one conflict branch; both snapshots retained. | **Passed locally.** Black-box API run produced three retained snapshots, one conflict branch and unchanged HEAD after stale-base commit. |
 | Resource idle | 10 minute idle service with no changes. | CPU, RSS, object/DB I/O. | Partial. One post-restore sample: server 0.13% CPU / 2.044 MiB RSS; PostgreSQL 1.70% / 52.18 MiB; MinIO 1.56% / 73.85 MiB. Ten-minute series remains pending. |
