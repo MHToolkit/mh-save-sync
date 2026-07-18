@@ -89,6 +89,21 @@ struct PersistentState {
     object_store: Arc<dyn ObjectStore>,
 }
 
+const READINESS_PAGE_SIZE: i64 = 256;
+const READINESS_OBJECT_PAGE_SQL: &str = "SELECT DISTINCT o.storage_key \
+     FROM snapshots s \
+     JOIN snapshot_objects so \
+       ON so.account_handle=s.account_handle AND so.snapshot_id=s.id \
+     JOIN objects o \
+       ON o.account_handle=so.account_handle AND o.object_id=so.object_id \
+     WHERE ($1::text IS NULL OR o.storage_key > $1) \
+     ORDER BY o.storage_key \
+     LIMIT $2";
+
+fn readiness_next_cursor(storage_keys: &[String]) -> Option<String> {
+    storage_keys.last().cloned()
+}
+
 #[derive(Debug, Clone)]
 struct UploadSession {
     account_handle: Option<String>,
@@ -329,23 +344,52 @@ impl AppState {
                 Ok(())
             }
             Backend::Persistent(p) => {
-                sqlx::query("SELECT 1")
-                    .execute(&p.pool)
+                let mut readiness_tx = p
+                    .pool
+                    .begin()
                     .await
-                    .map_err(db_unavailable)?;
+                    .map_err(|_| BackendError::Unavailable("database".into()))?;
+                sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                    .execute(&mut *readiness_tx)
+                    .await
+                    .map_err(|_| BackendError::Unavailable("database".into()))?;
                 p.object_store
                     .head(&ObjectPath::from("__mh_save_sync_readiness__"))
                     .await
-                    .map_err(object_store_unavailable)?;
-                let rows = sqlx::query("SELECT DISTINCT o.storage_key FROM snapshots s JOIN snapshot_objects so ON so.account_handle=s.account_handle AND so.snapshot_id=s.id JOIN objects o ON o.account_handle=so.account_handle AND o.object_id=so.object_id LIMIT 2000")
-                    .fetch_all(&p.pool).await.map_err(db_unavailable)?;
-                for row in rows {
-                    let key: String = row.get("storage_key");
-                    p.object_store
-                        .head(&ObjectPath::from(key.as_str()))
+                    .map_err(|_| BackendError::Unavailable("object-store".into()))?;
+
+                let mut after_storage_key: Option<String> = None;
+                loop {
+                    let rows = sqlx::query(READINESS_OBJECT_PAGE_SQL)
+                        .bind(after_storage_key.as_deref())
+                        .bind(READINESS_PAGE_SIZE)
+                        .fetch_all(&mut *readiness_tx)
                         .await
-                        .map_err(|_| BackendError::Unavailable(format!("missing-object:{key}")))?;
+                        .map_err(|_| BackendError::Unavailable("database".into()))?;
+                    if rows.is_empty() {
+                        break;
+                    }
+                    let storage_keys = rows
+                        .iter()
+                        .map(|row| row.get::<String, _>("storage_key"))
+                        .collect::<Vec<_>>();
+                    for key in &storage_keys {
+                        p.object_store
+                            .head(&ObjectPath::from(key.as_str()))
+                            .await
+                            .map_err(|error| match error {
+                                object_store::Error::NotFound { .. } => {
+                                    BackendError::Unavailable("missing-object".into())
+                                }
+                                _ => BackendError::Unavailable("object-store".into()),
+                            })?;
+                    }
+                    after_storage_key = readiness_next_cursor(&storage_keys);
                 }
+                readiness_tx
+                    .commit()
+                    .await
+                    .map_err(|_| BackendError::Unavailable("database".into()))?;
                 Ok(())
             }
         }
@@ -2095,6 +2139,131 @@ mod tests {
         let response = ready(State(state)).await.unwrap().0;
         assert_eq!(response.status, "ready");
         assert_eq!(response.backend, "memory");
+    }
+
+    #[test]
+    fn persistent_readiness_pagination_has_no_total_object_limit() {
+        let storage_keys = (0..=2000)
+            .map(|index| format!("objects/{index:04}"))
+            .collect::<Vec<_>>();
+        let mut cursor = None;
+        let mut scanned = 0;
+        for page in storage_keys.chunks(READINESS_PAGE_SIZE as usize) {
+            cursor = readiness_next_cursor(page);
+            scanned += page.len();
+        }
+
+        assert_eq!(scanned, 2001);
+        assert_eq!(cursor.as_deref(), Some("objects/2000"));
+        assert!(READINESS_OBJECT_PAGE_SQL.contains("o.storage_key > $1"));
+        assert!(READINESS_OBJECT_PAGE_SQL.contains("ORDER BY o.storage_key"));
+        assert!(READINESS_OBJECT_PAGE_SQL.contains("LIMIT $2"));
+        assert!(!READINESS_OBJECT_PAGE_SQL.contains("LIMIT 2000"));
+    }
+
+    #[sqlx::test(migrations = "../../deploy/compose/migrations")]
+    #[ignore = "requires PostgreSQL; run scripts/readiness-fullscan-test.sh"]
+    async fn persistent_ready_checks_referenced_objects_after_the_first_2000(pool: PgPool) {
+        use object_store::memory::InMemory;
+
+        let account = vec![0x11_u8; 20];
+        let device = vec![0x22_u8; 16];
+        sqlx::query("INSERT INTO accounts(account_handle,root_public_key) VALUES ($1,$2)")
+            .bind(&account)
+            .bind(vec![0x33_u8; 32])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO devices(cert_id,account_handle,device_public_key,certificate) VALUES ($1,$2,$3,$4)")
+            .bind(&device)
+            .bind(&account)
+            .bind(vec![0x44_u8; 32])
+            .bind(vec![0x55_u8; 32])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO logical_saves(id,account_handle,encrypted_label) VALUES ('save',$1,$2)",
+        )
+        .bind(&account)
+        .bind(Vec::<u8>::new())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO snapshots(id,account_handle,logical_save_id,encrypted_manifest_object,committing_device_cert_id) VALUES ('snapshot',$1,'save','object-0000',$2)")
+            .bind(&account)
+            .bind(&device)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut objects = sqlx::QueryBuilder::new(
+            "INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256) ",
+        );
+        objects.push_values(0..=2000, |mut row, index| {
+            let object_id = format!("object-{index:04}");
+            let storage_key = format!("objects/{index:04}");
+            row.push_bind(account.clone())
+                .push_bind(object_id)
+                .push_bind("chunk")
+                .push_bind(storage_key)
+                .push_bind(0_i64)
+                .push_bind("00");
+        });
+        objects.build().execute(&pool).await.unwrap();
+
+        let mut references = sqlx::QueryBuilder::new(
+            "INSERT INTO snapshot_objects(account_handle,snapshot_id,object_id) ",
+        );
+        references.push_values(0..=2000, |mut row, index| {
+            row.push_bind(account.clone())
+                .push_bind("snapshot")
+                .push_bind(format!("object-{index:04}"));
+        });
+        references.build().execute(&pool).await.unwrap();
+
+        // Force DISTINCT to preserve key ordering so the legacy LIMIT 2000 query
+        // deterministically omits the final referenced object.
+        sqlx::query("SET enable_hashagg = off")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        object_store
+            .put(
+                &ObjectPath::from("__mh_save_sync_readiness__"),
+                Vec::new().into(),
+            )
+            .await
+            .unwrap();
+        for index in 0..2000 {
+            object_store
+                .put(
+                    &ObjectPath::from(format!("objects/{index:04}")),
+                    Vec::new().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let state = AppState {
+            backend: Backend::Persistent(Arc::new(PersistentState { pool, object_store })),
+        };
+
+        let (status, response) = ready(State(state.clone())).await.unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.0.status, "backend unavailable: missing-object");
+
+        let Backend::Persistent(persistent) = &state.backend else {
+            unreachable!();
+        };
+        persistent
+            .object_store
+            .put(&ObjectPath::from("objects/2000"), Vec::new().into())
+            .await
+            .unwrap();
+        let response = ready(State(state)).await.unwrap().0;
+        assert_eq!(response.status, "ready");
     }
 
     #[tokio::test]
