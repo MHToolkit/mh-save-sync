@@ -42,9 +42,11 @@ as already swept only when PostgreSQL proves they are not a snapshot or active
 upload root.
 
 S3 current-version deletion is not called physical GC when bucket versioning is
-enabled. Logical deletion enqueues the opaque storage key in migration 006.
-The MinIO Compose wrapper leases that queue, streams keys only through stdin,
-executes version-aware purge, and acknowledges only after every version is gone.
+enabled. Logical deletion captures the then-current version ID and enqueues that
+generation boundary with the opaque storage key in migration 006. The MinIO
+Compose wrapper leases that queue, streams keys only through stdin, deletes the
+captured version and older generations, and acknowledges only after success.
+A newer version uploaded after logical GC is therefore preserved.
 Other S3 providers require an equivalent lifecycle/version-purge worker; a
 non-zero `physical_purge_pending` is an explicit incomplete state.
 

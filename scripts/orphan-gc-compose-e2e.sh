@@ -102,30 +102,59 @@ value = json.loads(sys.argv[1])
 assert value == {"eligible": 1006, "deleted": 0, "dry_run": True, "physical_purge_pending": 0, "physical_purged": 0}, value
 PY
 
-delete_json="$(env "${common_env[@]}" deploy/compose/scripts/gc-orphans.sh --grace-seconds 1 --delete)"
-python3 - "$delete_json" <<'PY'
+logical_json="$(compose exec -T server /app/mh-save-server --gc-orphans --grace-seconds 1 --delete)"
+python3 - "$logical_json" <<'PY'
 import json, sys
 value = json.loads(sys.argv[1])
-assert value == {"eligible": 1006, "deleted": 1006, "dry_run": False, "physical_purge_pending": 0, "physical_purged": 1006}, value
+assert value == {"eligible": 1006, "deleted": 1006, "dry_run": False, "physical_purge_pending": 1006}, value
+PY
+
+compose exec -T minio sh -c '
+  user="$(cat /run/secrets/minio_root_user)"
+  password="$(cat /run/secrets/minio_root_password)"
+  mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
+  printf new-current | mc pipe "fixture/mh-save-sync/accounts/'"$account"'/chunks/tracked-orphan" >/dev/null
+'
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -U mh_save_sync -d mh_save_sync <<SQL
+INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256)
+VALUES (decode('$account','hex'),'tracked-orphan','chunk','$prefix/tracked-orphan',11,'00');
+INSERT INTO upload_sessions(id,account_handle,device_cert_id,logical_save_id,parents,required_chunks,manifest_id,expires_at)
+VALUES ('33333333-3333-4333-8333-333333333333',decode('$account','hex'),decode('$device','hex'),
+        'gc-save','[]','["tracked-orphan"]','new-manifest',now()+interval '1 hour');
+SQL
+
+physical_json="$(env "${common_env[@]}" deploy/compose/scripts/gc-orphans.sh --physical-only)"
+python3 - "$physical_json" <<'PY'
+import json, sys
+value = json.loads(sys.argv[1])
+assert value == {"eligible": 0, "deleted": 0, "dry_run": False, "physical_purge_pending": 0, "physical_purged": 1006}, value
 PY
 
 db_state="$(compose exec -T postgres psql -U mh_save_sync -d mh_save_sync -Atc \
-  "SELECT (SELECT count(*) FROM objects),(SELECT count(*) FROM orphan_gc_marks);")"
-[[ "$db_state" == "1|0" ]]
+  "SELECT (SELECT count(*) FROM objects),(SELECT count(*) FROM orphan_gc_marks),(SELECT count(*) FROM orphan_gc_purge_queue);")"
+[[ "$db_state" == "2|0|0" ]]
 remaining="$(compose exec -T minio sh -c '
   user="$(cat /run/secrets/minio_root_user)"
   password="$(cat /run/secrets/minio_root_password)"
   mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
   mc find "fixture/mh-save-sync/accounts/'"$account"'" | wc -l | tr -d " "
 ')"
-[[ "$remaining" == "1" ]]
+[[ "$remaining" == "2" ]]
 versions_after="$(compose exec -T minio sh -c '
   user="$(cat /run/secrets/minio_root_user)"
   password="$(cat /run/secrets/minio_root_password)"
   mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
   mc find --versions "fixture/mh-save-sync/accounts/'"$account"'" | wc -l | tr -d " "
 ')"
-[[ "$versions_after" == "1" ]]
+[[ "$versions_after" == "2" ]]
+current_payload="$(compose exec -T minio sh -c '
+  user="$(cat /run/secrets/minio_root_user)"
+  password="$(cat /run/secrets/minio_root_password)"
+  mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
+  mc cat "fixture/mh-save-sync/accounts/'"$account"'/chunks/tracked-orphan"
+')"
+[[ "$current_payload" == "new-current" ]]
+curl -fsS "http://127.0.0.1:$http_port/ready" >/dev/null
 
 leak_marker="page-1004"
 compose stop minio >/dev/null

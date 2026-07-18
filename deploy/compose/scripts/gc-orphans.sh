@@ -8,9 +8,10 @@ runtime="${CONTAINER_RUNTIME:-docker}"
 compose_project="${COMPOSE_PROJECT_NAME:-${MH_SAVE_SYNC_COMPOSE_PROJECT:-mh-save-sync}}"
 grace_seconds="${MH_SAVE_SYNC_GC_GRACE_SECONDS:-604800}"
 delete=false
+physical_only=false
 
 usage() {
-  echo "usage: gc-orphans.sh [--grace-seconds N] [--delete]" >&2
+  echo "usage: gc-orphans.sh [--grace-seconds N] [--delete|--physical-only]" >&2
 }
 
 while (($#)); do
@@ -21,6 +22,11 @@ while (($#)); do
       shift 2
       ;;
     --delete)
+      delete=true
+      shift
+      ;;
+    --physical-only)
+      physical_only=true
       delete=true
       shift
       ;;
@@ -48,7 +54,11 @@ fi
 # Phase 1 removes current objects and queues opaque storage keys. On versioned
 # MinIO, phase 2 consumes those keys only over stdin and removes every version.
 # Keys never appear in command arguments, stdout, or the final JSON report.
-logical_json="$(compose exec -T server /app/mh-save-server "${args[@]}")"
+if [[ "$physical_only" == true ]]; then
+  logical_json='{"eligible":0,"deleted":0,"dry_run":false,"physical_purge_pending":0}'
+else
+  logical_json="$(compose exec -T server /app/mh-save-server "${args[@]}")"
+fi
 if [[ "$delete" != true ]]; then
   python3 - "$logical_json" <<'PYJSON'
 import json, sys
@@ -60,14 +70,18 @@ PYJSON
 fi
 
 physical_purged=0
+purge_tmp="$(mktemp -d)"
+trap 'rm -rf "$purge_tmp"' EXIT
 while :; do
   lease_token="$(python3 - <<'PYUUID'
 import uuid
 print(uuid.uuid4())
 PYUUID
 )"
-  batch_count="$(
-    compose exec -T postgres psql -qAt -v ON_ERROR_STOP=1 \
+  claimed_file="$purge_tmp/claimed"
+  versions_file="$purge_tmp/versions"
+  plan_file="$purge_tmp/plan"
+  compose exec -T postgres psql -qAt -v ON_ERROR_STOP=1 \
       -U mh_save_sync -d mh_save_sync -c \
       "WITH claimed AS (
          SELECT account_handle,storage_key
@@ -81,26 +95,70 @@ PYUUID
        SET lease_token='$lease_token',lease_until=now()+interval '5 minutes'
        FROM claimed c
        WHERE q.account_handle=c.account_handle AND q.storage_key=c.storage_key
-       RETURNING q.storage_key;" |
-      compose exec -T minio sh -c '
+       RETURNING q.storage_key || E'\t' || coalesce(q.head_version_id,'');" \
+    >"$claimed_file"
+  batch_count="$(python3 - "$claimed_file" <<'PYCOUNT'
+import pathlib, sys
+print(sum(1 for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line))
+PYCOUNT
+)"
+  if [[ "$batch_count" == "0" ]]; then
+    break
+  fi
+  compose exec -T minio sh -c '
         set -eu
         user="$(cat /run/secrets/minio_root_user)"
         password="$(cat /run/secrets/minio_root_password)"
         bucket="${S3_BUCKET:-mh-save-sync}"
         mc alias set purge http://127.0.0.1:9000 "$user" "$password" >/dev/null
-        count=0
-        while IFS= read -r key; do
-          [ -n "$key" ] || continue
-          mc rm --force --versions "purge/$bucket/$key" >/dev/null
-          count=$((count + 1))
-        done
-        printf "%s\n" "$count"
-      '
-  )"
-  [[ "$batch_count" =~ ^[0-9]+$ ]]
-  if [[ "$batch_count" == "0" ]]; then
-    break
-  fi
+        mc ls --recursive --versions --json "purge/$bucket/"
+      ' >"$versions_file"
+  python3 - "$claimed_file" "$versions_file" "$plan_file" <<'PYPLAN'
+import json, pathlib, sys
+
+claimed_path, versions_path, plan_path = map(pathlib.Path, sys.argv[1:])
+claimed = {}
+for line in claimed_path.read_text().splitlines():
+    if not line:
+        continue
+    key, separator, head = line.partition("\t")
+    if not separator or not head:
+        raise SystemExit("physical purge requires a captured version id")
+    claimed[key] = head
+
+versions = {key: [] for key in claimed}
+for line in versions_path.read_text().splitlines():
+    value = json.loads(line)
+    key = value.get("key")
+    if key not in versions:
+        continue
+    version_id = value.get("versionId")
+    ordinal = value.get("versionOrdinal")
+    if version_id and isinstance(ordinal, int):
+        versions[key].append((ordinal, version_id))
+
+with plan_path.open("w") as plan:
+    for key, head in claimed.items():
+        generations = sorted(versions[key], reverse=True)
+        try:
+            boundary = next(i for i, (_, version_id) in enumerate(generations) if version_id == head)
+        except StopIteration:
+            raise SystemExit("captured object version is no longer enumerable") from None
+        for _, version_id in generations[boundary:]:
+            plan.write(f"{key}\t{version_id}\n")
+PYPLAN
+  compose exec -T minio sh -c '
+      set -eu
+      user="$(cat /run/secrets/minio_root_user)"
+      password="$(cat /run/secrets/minio_root_password)"
+      bucket="${S3_BUCKET:-mh-save-sync}"
+      mc alias set purge http://127.0.0.1:9000 "$user" "$password" >/dev/null
+      tab="$(printf "\t")"
+      while IFS="$tab" read -r key version_id; do
+        [ -n "$key" ] || continue
+        mc rm --force --version-id "$version_id" "purge/$bucket/$key" >/dev/null
+      done
+    ' <"$plan_file"
   compose exec -T postgres psql -qAt -v ON_ERROR_STOP=1 \
     -U mh_save_sync -d mh_save_sync -c \
     "DELETE FROM orphan_gc_purge_queue WHERE lease_token='$lease_token';" >/dev/null

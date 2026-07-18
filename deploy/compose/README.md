@@ -98,9 +98,11 @@ slow S3 deletion does not lock the global upload or snapshot tables. Output
 contains aggregate counts only.
 
 Because this Compose stack enables MinIO versioning, collection is explicitly
-two-stage. The Rust server removes current objects and durably queues opaque
-keys; the Compose wrapper then uses `mc rm --versions` over stdin to purge every
-noncurrent version and delete marker before acknowledging the queue lease.
+two-stage. The Rust server records the current version ID before removing the
+logical object and durably queues that boundary with the opaque key. The Compose
+wrapper lists versions once per leased batch and deletes the captured version
+plus older generations over stdin before acknowledging the queue lease. A newer
+version uploaded between the two phases is preserved.
 `physical_purge_pending` must be zero before claiming storage was physically
 reclaimed. A non-MinIO S3 deployment must provide equivalent bucket lifecycle
 or provider-specific version purge processing.

@@ -692,14 +692,15 @@ async fn sweep_claimed_orphan(
         return Ok(false);
     }
 
-    match persistent
+    let head_version_id = match persistent
         .object_store
-        .delete(&ObjectPath::from(mark.storage_key.clone()))
+        .head(&ObjectPath::from(mark.storage_key.clone()))
         .await
     {
-        Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+        Ok(meta) => Some(meta.version),
+        Err(object_store::Error::NotFound { .. }) => None,
         Err(error) => return Err(object_store_unavailable(error)),
-    }
+    };
     sqlx::query("DELETE FROM objects WHERE account_handle=$1 AND object_id=$2 AND storage_key=$3")
         .bind(&mark.account)
         .bind(&mark.object_id)
@@ -707,15 +708,18 @@ async fn sweep_claimed_orphan(
         .execute(&mut *tx)
         .await
         .map_err(db_unavailable)?;
-    sqlx::query(
-        "INSERT INTO orphan_gc_purge_queue(account_handle,storage_key) VALUES ($1,$2) \
-         ON CONFLICT (account_handle,storage_key) DO NOTHING",
-    )
-    .bind(&mark.account)
-    .bind(&mark.storage_key)
-    .execute(&mut *tx)
-    .await
-    .map_err(db_unavailable)?;
+    if let Some(head_version_id) = head_version_id {
+        sqlx::query(
+            "INSERT INTO orphan_gc_purge_queue(account_handle,storage_key,head_version_id) \
+             VALUES ($1,$2,$3) ON CONFLICT (account_handle,storage_key) DO NOTHING",
+        )
+        .bind(&mark.account)
+        .bind(&mark.storage_key)
+        .bind(head_version_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_unavailable)?;
+    }
     delete_orphan_mark_tx(&mut tx, mark).await?;
     tx.commit().await.map_err(db_unavailable)?;
     Ok(true)

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS orphan_gc_purge_queue (
   account_handle BYTEA NOT NULL,
   storage_key TEXT NOT NULL,
+  head_version_id TEXT,
   queued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   lease_token UUID,
   lease_until TIMESTAMPTZ,
