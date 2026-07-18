@@ -53,4 +53,7 @@ rtk env JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" 
 
 Do not install a release-signed APK over a debug-signed installation. Android
 correctly rejects the signer transition; preserve data by using an explicit
-migration/export plan rather than uninstalling the debug app.
+migration/export plan rather than uninstalling the debug app. The approved
+offline proof-of-rotation packaging and the separate device-authorization gate
+are defined in
+[`docs/runbooks/ANDROID_SIGNER_MIGRATION.md`](../runbooks/ANDROID_SIGNER_MIGRATION.md).
