@@ -33,9 +33,14 @@ Android maps the contract to Material 3 colors, `animateContentSize` (interrupti
 - Compose status changes use a polite live region, preserving screen-reader order.
 - Material controls keep platform hit targets, focus, keyboard and contrast behavior.
 - System font scaling is retained; no fixed text size was introduced.
-- Native macOS menus/alerts remain the accessibility boundary; disabled history is explicitly unavailable rather than clickable.
+- Native macOS menus/alerts remain the accessibility boundary; the menu-bar button now has an explicit VoiceOver label and next-action help, and disabled history is explicitly unavailable rather than clickable.
 
 ## Test and evidence entry points
+
+- macOS isolated runtime/accessibility evidence:
+  scripts/macos-accessibility-e2e.sh creates a disposable HOME and app install,
+  observes the live process AX menu-bar boundary, then stops only that
+  temporary process.
 
 - State contract red/green test: `apps/android/app/src/test/java/org/mhtoolkit/savesync/SaveSyncUiStateTest.kt`.
 - Existing dashboard/conflict tests: `DashboardContentPolicyTest.kt` and related unit tests.

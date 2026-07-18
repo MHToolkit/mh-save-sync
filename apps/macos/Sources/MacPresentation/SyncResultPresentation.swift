@@ -14,6 +14,21 @@ public enum MenuCopy {
     public static let cloudStatus = "云端状态"
 }
 
+/// Stable semantic labels for the menu-bar status item. The status item is
+/// hosted by macOS Control Center, so an explicit label/help pair is needed
+/// for VoiceOver and Accessibility Inspector to identify it reliably.
+public func statusItemAccessibilityLabel(menuBarTitle: String) -> String {
+    let prefix = "MH 云存档 · "
+    let state = menuBarTitle.hasPrefix(prefix)
+        ? String(menuBarTitle.dropFirst(prefix.count))
+        : menuBarTitle
+    return "MH 云存档 · \(state)"
+}
+
+public func statusItemAccessibilityHelp(nextAction: String) -> String {
+    "下一步：\(nextAction)"
+}
+
 public func onboardingPrompt(
     missingServer: Bool,
     missingSaveRoot: Bool,
