@@ -6,6 +6,25 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseSigningVariables = mapOf(
+    "keystore" to "MH_SAVE_SYNC_ANDROID_KEYSTORE",
+    "storePassword" to "MH_SAVE_SYNC_ANDROID_STORE_PASSWORD",
+    "keyAlias" to "MH_SAVE_SYNC_ANDROID_KEY_ALIAS",
+    "keyPassword" to "MH_SAVE_SYNC_ANDROID_KEY_PASSWORD",
+)
+val releaseSigningValues = releaseSigningVariables.mapValues { (_, environmentName) ->
+    providers.environmentVariable(environmentName).orNull
+}
+val releaseSigningConfigured = releaseSigningValues.values.all { !it.isNullOrBlank() }
+val releaseSigningPartiallyConfigured =
+    releaseSigningValues.values.any { !it.isNullOrBlank() } && !releaseSigningConfigured
+
+if (releaseSigningPartiallyConfigured) {
+    throw GradleException(
+        "Android release signing is only partially configured; set all MH_SAVE_SYNC_ANDROID_* variables",
+    )
+}
+
 android {
     namespace = "org.mhtoolkit.savesync"
     compileSdk = 36
@@ -22,6 +41,25 @@ android {
         compose = true
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseSigningConfigured) {
+                storeFile = file(requireNotNull(releaseSigningValues["keystore"]))
+                storePassword = requireNotNull(releaseSigningValues["storePassword"])
+                keyAlias = requireNotNull(releaseSigningValues["keyAlias"])
+                keyPassword = requireNotNull(releaseSigningValues["keyPassword"])
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
 
     compileOptions {
@@ -30,6 +68,17 @@ android {
     }
 
 }
+
+tasks.matching { it.name in setOf("packageRelease", "assembleRelease", "bundleRelease") }
+    .configureEach {
+        doFirst {
+            if (!releaseSigningConfigured) {
+                throw GradleException(
+                    "Android release signing is not configured; use scripts/android-package-release.sh",
+                )
+            }
+        }
+    }
 
 val buildRustAndroid by tasks.registering(Exec::class) {
     val repoRoot = rootProject.projectDir.parentFile.parentFile
