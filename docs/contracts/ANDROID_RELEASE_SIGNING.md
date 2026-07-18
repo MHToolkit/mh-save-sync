@@ -16,6 +16,10 @@ stored in Git, logs, APK evidence JSON or GitHub Actions output.
   `MH_SAVE_SYNC_ANDROID_KEY_PASSWORD`
 - Local wrapper: `scripts/android-package-release.sh`
 
+The wrapper requires a clean Git worktree before building so the commit in the
+artifact filename is a truthful provenance anchor rather than a label applied
+to uncommitted source.
+
 Nemessix production builds may pin only the production certificate above for
 `SaveQuiescenceV1`. The Android debug signer
 `ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb`

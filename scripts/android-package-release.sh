@@ -13,6 +13,8 @@ blocked() {
   exit 77
 }
 
+[[ -z "$(git status --porcelain --untracked-files=normal)" ]] \
+  || blocked "release packaging requires a clean Git worktree"
 [[ -f "$secret_file" ]] || blocked "release signing env file not found: $secret_file"
 mode="$(stat -f '%Lp' "$secret_file")"
 [[ "$mode" == "600" ]] || blocked "release signing env file must use mode 600"
