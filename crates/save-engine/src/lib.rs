@@ -1315,10 +1315,18 @@ pub mod local_store {
         pub last_error: Option<String>,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CaptureGenerationLease {
+        pub generation: u64,
+        pub owner: String,
+    }
+
     #[derive(Debug, thiserror::Error)]
     pub enum LocalStoreError {
         #[error("sqlite error: {0}")]
         Sqlite(#[from] rusqlite::Error),
+        #[error("capture lease lost")]
+        CaptureLeaseLost,
     }
 
     pub struct LocalStore {
@@ -1405,6 +1413,13 @@ pub mod local_store {
                     owner TEXT NOT NULL,
                     expires_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS capture_state (
+                    key TEXT PRIMARY KEY,
+                    dirty_generation INTEGER NOT NULL DEFAULT 0,
+                    captured_generation INTEGER NOT NULL DEFAULT 0,
+                    lease_owner TEXT,
+                    lease_expires_at INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
@@ -1451,6 +1466,80 @@ pub mod local_store {
                 .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))?)
         }
 
+        pub fn mark_capture_dirty(&self, key: &str) -> Result<u64, LocalStoreError> {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO capture_state(key) VALUES (?1)",
+                params![key],
+            )?;
+            self.conn.execute(
+                "UPDATE capture_state SET dirty_generation=CASE WHEN dirty_generation=9223372036854775807 THEN dirty_generation ELSE dirty_generation+1 END WHERE key=?1",
+                params![key],
+            )?;
+            Ok(self.conn.query_row(
+                "SELECT dirty_generation FROM capture_state WHERE key=?1",
+                params![key],
+                |row| row.get::<_, i64>(0),
+            )? as u64)
+        }
+
+        pub fn claim_capture_generation(
+            &self,
+            key: &str,
+            owner: &str,
+            now_unix_ms: u64,
+            lease_expires_at: u64,
+        ) -> Result<Option<CaptureGenerationLease>, LocalStoreError> {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO capture_state(key) VALUES (?1)",
+                params![key],
+            )?;
+            let mut statement = self.conn.prepare(
+                r#"UPDATE capture_state
+                   SET lease_owner=?2, lease_expires_at=?4
+                   WHERE key=?1
+                     AND dirty_generation>captured_generation
+                     AND (lease_owner IS NULL OR COALESCE(lease_expires_at,0)<=?3)
+                   RETURNING dirty_generation,lease_owner"#,
+            )?;
+            let mut rows = statement.query(params![
+                key,
+                owner,
+                now_unix_ms as i64,
+                lease_expires_at as i64,
+            ])?;
+            rows.next()?
+                .map(|row| {
+                    Ok(CaptureGenerationLease {
+                        generation: row.get::<_, i64>(0)? as u64,
+                        owner: row.get(1)?,
+                    })
+                })
+                .transpose()
+        }
+
+        pub fn complete_capture_generation(
+            &self,
+            key: &str,
+            owner: &str,
+            generation: u64,
+        ) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                "UPDATE capture_state SET captured_generation=MAX(captured_generation,?3),lease_owner=NULL,lease_expires_at=NULL WHERE key=?1 AND lease_owner=?2 AND captured_generation<?3",
+                params![key, owner, generation as i64],
+            )? == 1)
+        }
+
+        pub fn release_capture_generation(
+            &self,
+            key: &str,
+            owner: &str,
+        ) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                "UPDATE capture_state SET lease_owner=NULL,lease_expires_at=NULL WHERE key=?1 AND lease_owner=?2",
+                params![key, owner],
+            )? == 1)
+        }
+
         pub fn enqueue_snapshot(
             &self,
             snapshot_id: &SnapshotId,
@@ -1486,6 +1575,7 @@ pub mod local_store {
             logical_save_id: &str,
             base_head: Option<&str>,
             bundle_path: &str,
+            capture_claim: Option<(&str, &str, u64)>,
         ) -> Result<(), LocalStoreError> {
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute(
@@ -1512,6 +1602,15 @@ pub mod local_store {
                     bundle_path,
                 ],
             )?;
+            if let Some((capture_key, capture_owner, generation)) = capture_claim {
+                let updated = transaction.execute(
+                    "UPDATE capture_state SET captured_generation=MAX(captured_generation,?3),lease_owner=NULL,lease_expires_at=NULL WHERE key=?1 AND lease_owner=?2 AND captured_generation<?3",
+                    params![capture_key, capture_owner, generation as i64],
+                )?;
+                if updated != 1 {
+                    return Err(LocalStoreError::CaptureLeaseLost);
+                }
+            }
             transaction.commit()?;
             Ok(())
         }
@@ -1674,6 +1773,22 @@ pub mod local_store {
                 [],
                 |row| row.get::<_, i64>(0),
             )? as u64)
+        }
+
+        pub fn pending_upload_endpoints(&self) -> Result<Vec<String>, LocalStoreError> {
+            let mut statement = self.conn.prepare(
+                r#"SELECT server_endpoint
+                   FROM upload_queue
+                   WHERE state IN ('pending','uploading')
+                     AND server_endpoint IS NOT NULL
+                     AND logical_save_id IS NOT NULL
+                     AND device_id IS NOT NULL
+                     AND bundle_path IS NOT NULL
+                   GROUP BY server_endpoint
+                   ORDER BY MIN(id) ASC"#,
+            )?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
         }
 
         pub fn durable_pending_upload_count(&self) -> Result<u64, LocalStoreError> {
@@ -2326,6 +2441,7 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 Some("base-a"),
                 "objects/snap-durable.mhsavebundle",
+                None,
             )
             .unwrap();
 
@@ -2386,6 +2502,7 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 None,
                 "objects/snap-claimed.mhsavebundle",
+                None,
             )
             .unwrap();
         let second = crate::local_store::LocalStore::open(&path).unwrap();
@@ -2435,6 +2552,7 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 None,
                 "objects/snap-crashed.mhsavebundle",
+                None,
             )
             .unwrap();
         let first_claim = crashed
@@ -2463,6 +2581,63 @@ mod tests {
     }
 
     #[test]
+    fn capture_generation_is_claimed_once_and_new_dirty_survives_ack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.sqlite");
+        let first = crate::local_store::LocalStore::open(&path).unwrap();
+        let second = crate::local_store::LocalStore::open(&path).unwrap();
+        assert_eq!(first.mark_capture_dirty("mh3g").unwrap(), 1);
+        let claim = first
+            .claim_capture_generation("mh3g", "worker-a", 100, 200)
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.generation, 1);
+        assert!(
+            second
+                .claim_capture_generation("mh3g", "worker-b", 100, 200)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(second.mark_capture_dirty("mh3g").unwrap(), 2);
+        assert!(
+            first
+                .complete_capture_generation("mh3g", "worker-a", 1)
+                .unwrap()
+        );
+        let next = second
+            .claim_capture_generation("mh3g", "worker-b", 201, 300)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.generation, 2);
+    }
+
+    #[test]
+    fn capture_generation_lease_is_reclaimed_after_crash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.sqlite");
+        let crashed = crate::local_store::LocalStore::open(&path).unwrap();
+        crashed.mark_capture_dirty("mh3g").unwrap();
+        crashed
+            .claim_capture_generation("mh3g", "dead", 10, 20)
+            .unwrap()
+            .unwrap();
+        drop(crashed);
+        let restarted = crate::local_store::LocalStore::open(&path).unwrap();
+        assert!(
+            restarted
+                .claim_capture_generation("mh3g", "new", 19, 30)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            restarted
+                .claim_capture_generation("mh3g", "new", 20, 30)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn sqlite_upload_queue_is_idempotent_for_same_snapshot() {
         let tmp = tempfile::tempdir().unwrap();
         let store = crate::local_store::LocalStore::open(&tmp.path().join("state.sqlite")).unwrap();
@@ -2478,6 +2653,7 @@ mod tests {
                     "mh3g-nemessix-jp-slot1",
                     None,
                     "objects/snap-one.mhsavebundle",
+                    None,
                 )
                 .unwrap();
         }

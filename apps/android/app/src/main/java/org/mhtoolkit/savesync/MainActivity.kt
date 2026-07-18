@@ -334,7 +334,6 @@ class MainActivity : ComponentActivity() {
 
         fun executeLocalReplaceCloud() {
             val observed = observedReplaceHead
-            val manualGeneration = SyncScheduler.dirtyGeneration(this@MainActivity).first
             persistSyncStatus(
                 reason = "user-use-local",
                 summary = "正在读取两次稳定存档并加密上传；不会修改本地原始存档。",
@@ -367,12 +366,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                 "上传完成",
                                 "Mac 端下次打开游戏前核对后即可看到该版本。",
-                            ).also {
-                                SyncScheduler.acknowledgeCapturedGeneration(
-                                    this@MainActivity,
-                                    manualGeneration,
-                                )
-                            }
+                            )
                             is LocalReplaceResult.Conflict -> persistSyncStatus(
                                 "user-use-local-conflict",
                                 "确认后云端版本仍发生竞争变化，本地快照已保留为冲突分支 …${upload.snapshotId.takeLast(6)}，当前云端版本仍为 …${upload.cloudHead.takeLast(6)}。",
@@ -748,9 +742,9 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(
                             onClick = { toggleSessionProtection() },
                             modifier = Modifier.fillMaxWidth(),
-                        ) { Text("我已退出 Nemessix，保存并排队上传") }
+                        ) { Text("尝试读取稳定存档并排队上传") }
                         Text(
-                            "Android 对其他应用进程的可见性尚未实机验证；若没有自动收敛，请用此按钮明确确认。",
+                            "此操作只授权读取两次稳定副本；仍会独立检查 Nemessix 进程，不能证明停止时不会读取或上传。",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

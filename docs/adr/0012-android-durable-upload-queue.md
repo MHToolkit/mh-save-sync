@@ -30,7 +30,7 @@ is not represented as a save-complete event.
 6. A capture-only Worker finishes successfully while offline, then schedules a
    separate drain Worker carrying unmetered/connected, battery-not-low and
    optional charging constraints.
-7. The drain atomically claims one row with a random process owner and expiring
+7. The drain atomically claims one row with a random 128-bit UUID owner and expiring
    lease. Completion/failure updates require the same owner; an expired lease
    is reclaimable after a crash. It then uses the existing signed E2EE upload
    protocol. Failure increments `attempts` and records only a redacted code;
@@ -40,27 +40,26 @@ Multiple offline captures chain from the latest pending snapshot ID. They do
 not use mtime and do not silently replace a different remote HEAD. A stale base
 therefore becomes a server conflict branch.
 
-Periodic WorkManager remains at the Android minimum 15-minute class and only
-creates a candidate when a durable dirty generation is newer than the last
-captured generation and the emulator is stopped. Capture acknowledges that
-generation only if it did not change during staging. One-time session-exit work
+Periodic WorkManager remains at the Android minimum 15-minute class. Dirty and
+captured generations plus the capture lease live in SQLite; claim rereads the
+generation atomically, and queue insertion plus acknowledgement use one
+transaction. One-time session-exit work
 is intentionally allowed to run offline. Every automatic network drain applies
 Wi-Fi/unmetered (or user-selected connected), battery-not-low and optional
 charging constraints.
 
-When this app launches Nemessix, a foreground service records the session and
-polls the package process. Exit convergence requires the process to be observed
-running first and absent for three consecutive polls; service destruction alone
-is never treated as exit proof. Direct emulator launches outside the tool have
+When this app launches Nemessix, a foreground service records the session.
+Direct emulator launches outside the tool have
 no reliable public Android lifecycle callback and therefore remain periodic/
 manual reconciliation only. Cross-package `ActivityManager` visibility remains
 unverified on the target Android build, so the capability gate is false and the
-active-session UI always exposes an explicit “I exited Nemessix” confirmation;
-absence that was never preceded by an observed package process fails closed.
+ActivityManager automatic-exit path is disabled. The explicit UI action only
+authorizes dual-stable capture; the independent process gate still fails closed.
 
 Queued rows retain the normalized endpoint present when they were created.
 Changing settings never hides or silently migrates old rows: a drain consumes
-all endpoints and each row is sent only to its original endpoint. The UI reports
+endpoints round-robin, skips a failed endpoint for that run, and sends each row
+only to its original endpoint. The UI reports
 when pending work spans multiple endpoints.
 
 This pipeline uploads only. It never downloads or restores into a live
@@ -76,6 +75,8 @@ capture-only compatibility target so persisted WorkManager rows do not resolve
 to a missing class after upgrade. The alpha.3 boolean dirty bit migrates to one
 dirty generation, and its unproven default `session_active=true` is reset once
 when the process-evidence tracker version is installed.
+Both legacy unique WorkManager names are cancelled once; a Robolectric upgrade
+test verifies their persisted rows reach a finished state.
 
 Rollback may leave encrypted bundles and pending rows in app-private storage;
 older clients ignore them and local emulator saves remain untouched. Reinstall

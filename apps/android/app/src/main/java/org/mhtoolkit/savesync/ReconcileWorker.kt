@@ -11,6 +11,30 @@ internal object SafGrantPolicy {
         root != null && root in readablePersistedUris
 }
 
+internal sealed interface SafGrantInspection {
+    data class Available(val readableUris: Set<String>) : SafGrantInspection
+    data object Revoked : SafGrantInspection
+
+    companion object {
+        fun inspect(loader: () -> Set<String>): SafGrantInspection = try {
+            Available(loader())
+        } catch (_: SecurityException) {
+            Revoked
+        }
+    }
+}
+
+internal data class CaptureGenerationClaim(val generation: Long, val owner: String) {
+    companion object {
+        fun parse(raw: String): CaptureGenerationClaim? {
+            val json = JSONObject(raw)
+            check(!json.has("error")) { "capture_claim_failed" }
+            if (!json.optBoolean("claimed")) return null
+            return CaptureGenerationClaim(json.getLong("generation"), json.getString("owner"))
+        }
+    }
+}
+
 private data class PendingLedgerReceipt(
     val snapshotId: String,
     val serverEndpoint: String,
@@ -66,37 +90,68 @@ open class CaptureWorker(
         val reason = inputData.getString("reason") ?: "periodic"
         val endpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
         val root = preferences.getString(SyncScheduler.SAF_ROOT, null)
-        val readablePersistedUris = applicationContext.contentResolver.persistedUriPermissions
-            .filter { it.isReadPermission }
-            .map { it.uri.toString() }
-            .toSet()
+        val grantInspection = SafGrantInspection.inspect {
+            applicationContext.contentResolver.persistedUriPermissions
+                .filter { it.isReadPermission }
+                .map { it.uri.toString() }
+                .toSet()
+        }
+        if (grantInspection is SafGrantInspection.Revoked) {
+            preferences.edit().remove(SyncScheduler.SAF_ROOT).apply()
+            writeSafRevokedStatus(preferences, reason)
+            return Result.success()
+        }
+        val readablePersistedUris = (grantInspection as SafGrantInspection.Available).readableUris
         val stillGranted = SafGrantPolicy.isUsable(root, readablePersistedUris)
         if (root != null && !stillGranted) {
             preferences.edit().remove(SyncScheduler.SAF_ROOT).apply()
+            writeSafRevokedStatus(preferences, reason)
+            return Result.success()
         }
-        val (generation, dirty) = SyncScheduler.dirtyGeneration(applicationContext)
         val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false)
+        if (!AutomaticCapturePolicy.shouldCapture(reason, dirty = true, sessionActive)) {
+            SyncScheduler.enqueueConstrainedDrain(applicationContext)
+            return Result.success()
+        }
+        val queueRoot = SyncScheduler.queueRoot(applicationContext)
+        val claim = runCatching {
+            CaptureGenerationClaim.parse(
+                NativeSyncBridge.claimCaptureGeneration(
+                    queueRoot.absolutePath,
+                    SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                ),
+            )
+        }.getOrElse {
+            preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_PHASE, "本地队列不可用")
+                .putString(SyncScheduler.LAST_SYNC_ERROR, "capture_claim_failed")
+                .apply()
+            return Result.retry()
+        }
+        if (claim == null) {
+            SyncScheduler.enqueueConstrainedDrain(applicationContext)
+            return Result.success()
+        }
         val capture = DurableSyncPipeline(applicationContext).capture(
             reason = reason,
             treeUri = root?.takeIf { stillGranted }?.let(Uri::parse),
             serverEndpoint = endpoint,
-            dirty = dirty,
             sessionActive = sessionActive,
+            captureOwner = claim.owner,
+            captureGeneration = claim.generation,
         )
         capture.queued?.let { queued ->
-            if (SyncScheduler.acknowledgeCapturedGeneration(applicationContext, generation)) {
-                capture.localFingerprint?.let { fingerprint ->
-                    PendingLedgerReceiptStore.write(
-                        applicationContext,
-                        PendingLedgerReceipt(
-                            snapshotId = queued.snapshotId,
-                            serverEndpoint = SyncServerProbe.normalizeServer(endpoint),
-                            treeUri = requireNotNull(root),
-                            deviceId = SyncServerProbe.deviceId(applicationContext),
-                            fingerprint = fingerprint,
-                        ),
-                    )
-                }
+            capture.localFingerprint?.let { fingerprint ->
+                PendingLedgerReceiptStore.write(
+                    applicationContext,
+                    PendingLedgerReceipt(
+                        snapshotId = queued.snapshotId,
+                        serverEndpoint = SyncServerProbe.normalizeServer(endpoint),
+                        treeUri = requireNotNull(root),
+                        deviceId = SyncServerProbe.deviceId(applicationContext),
+                        fingerprint = fingerprint,
+                    ),
+                )
             }
             preferences.edit()
                 .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, queued.pendingCount)
@@ -113,6 +168,13 @@ open class CaptureWorker(
             SyncScheduler.enqueueConstrainedDrain(applicationContext)
             return Result.success()
         }
+        NativeSyncBridge.finishCaptureGeneration(
+            queueRoot.absolutePath,
+            SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+            claim.owner,
+            claim.generation,
+            false,
+        )
         if (capture.localError != null) {
             val revoked = capture.localError == "saf_permission_required"
             preferences.edit()
@@ -139,6 +201,19 @@ open class CaptureWorker(
         SyncScheduler.enqueueConstrainedDrain(applicationContext)
         return Result.success()
     }
+
+    private fun writeSafRevokedStatus(
+        preferences: android.content.SharedPreferences,
+        reason: String,
+    ) {
+        preferences.edit()
+            .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+            .putString(SyncScheduler.LAST_SYNC_PHASE, "需要重新授权")
+            .putString(SyncScheduler.LAST_SYNC_SUMMARY, "Android 已撤销存档目录权限；没有读取或上传新候选。")
+            .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "请重新选择 Android Nemessix 存档目录。")
+            .putString(SyncScheduler.LAST_SYNC_ERROR, "saf_permission_required")
+            .apply()
+    }
 }
 
 class DrainWorker(
@@ -150,6 +225,11 @@ class DrainWorker(
             SyncScheduler.PREFERENCES, Context.MODE_PRIVATE,
         )
         val result = DurableSyncPipeline(applicationContext).drain()
+        val displayedPendingCount = if (result.queueStateKnown) {
+            result.pendingCount
+        } else {
+            preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
+        }
         val receipt = PendingLedgerReceiptStore.read(applicationContext)
         if (
             receipt != null && result.pendingCount == 0 && result.conflictCount == 0 &&
@@ -180,6 +260,12 @@ class DrainWorker(
                 summary = "上传队列保留在手机上，但需要恢复密钥才能继续。"
                 nextAction = "导入与其他设备相同的恢复密钥。"
                 error = "未导入恢复密钥"
+            }
+            result.lastError != null || !result.queueStateKnown -> {
+                phase = "本地上传队列暂不可用"
+                summary = "无法确认本地加密队列状态；不会把未知状态显示为上传完成。"
+                nextAction = "后台会重试；不要清除应用数据。"
+                error = "本地队列读取失败"
             }
             result.conflictCount > 0 -> {
                 phase = "检测到冲突"
@@ -217,9 +303,13 @@ class DrainWorker(
             .putString(SyncScheduler.LAST_SYNC_PHASE, phase)
             .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
             .putString(SyncScheduler.LAST_SYNC_ERROR, error)
-            .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, result.pendingCount)
-            .putInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, result.pendingEndpointCount)
+            .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, displayedPendingCount)
             .apply()
+        if (result.queueStateKnown) {
+            preferences.edit()
+                .putInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, result.pendingEndpointCount)
+                .apply()
+        }
         return if (result.shouldRetry) Result.retry() else Result.success()
     }
 }

@@ -22,7 +22,21 @@ object NativeSyncBridge {
         logicalSaveId: String,
         baseHead: String?,
         deviceId: String,
+        captureOwner: String,
+        captureGeneration: Long,
     ): String
+
+    external fun markCaptureDirty(queueRoot: String, logicalSaveId: String): Long
+
+    external fun claimCaptureGeneration(queueRoot: String, logicalSaveId: String): String
+
+    external fun finishCaptureGeneration(
+        queueRoot: String,
+        logicalSaveId: String,
+        owner: String,
+        generation: Long,
+        completed: Boolean,
+    ): Boolean
 
     external fun drainUploadQueue(
         queueRoot: String,

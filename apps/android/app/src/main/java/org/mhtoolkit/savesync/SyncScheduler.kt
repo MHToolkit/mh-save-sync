@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 object SyncScheduler {
     const val REAL_SYNC_PIPELINE_AVAILABLE = true
@@ -25,10 +26,11 @@ object SyncScheduler {
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"
     const val CHARGING_REQUIRED = "charging_required"
-    const val DIRTY_GENERATION = "save_dirty_generation"
-    const val CAPTURED_GENERATION = "save_captured_generation"
     private const val LEGACY_DIRTY = "save_dirty"
     private const val SESSION_TRACKING_VERSION = "session_tracking_version"
+    internal const val LEGACY_PERIODIC_NAME = "save-reconcile-periodic"
+    internal const val LEGACY_IMMEDIATE_NAME = "save-reconcile-immediate"
+    internal const val LEGACY_WORK_MIGRATION_VERSION = "legacy_work_migration_version"
     const val PENDING_UPLOAD_COUNT = "pending_upload_count"
     const val PENDING_UPLOAD_ENDPOINT_COUNT = "pending_upload_endpoint_count"
     const val SERVER_ENDPOINT = "server_endpoint"
@@ -49,10 +51,6 @@ object SyncScheduler {
     private const val PERIODIC_NAME = "save-capture-periodic"
     private const val CAPTURE_NAME = "save-capture-immediate"
     private const val DRAIN_NAME = "save-upload-drain"
-    private val dirtyLock = Any()
-
-    internal fun canAcknowledgeGeneration(observed: Long, current: Long): Boolean =
-        observed == current
 
     internal fun captureConstraints(chargingRequired: Boolean): Constraints =
         Constraints.Builder()
@@ -74,12 +72,11 @@ object SyncScheduler {
         val defaultLaunchGateSummary = "启动前会重新核对手机与云端版本。"
         val defaultPhase = "暂无后台任务"
         val defaultNextAction = "先完成设置，再点“检查并打开 Nemessix”。"
+        migrateLegacyWorkManager(context)
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
                 .putBoolean(SESSION_ACTIVE, false)
-                .putLong(DIRTY_GENERATION, 0)
-                .putLong(CAPTURED_GENERATION, 0)
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
                 .putString(LAST_SYNC_SUMMARY, defaultLastSyncSummary)
                 .putString(LAST_SYNC_PHASE, defaultPhase)
@@ -95,11 +92,8 @@ object SyncScheduler {
                 // Alpha.3 defaulted this flag to true without real process tracking.
                 .putBoolean(SESSION_ACTIVE, false)
             if (preferences.getBoolean(LEGACY_DIRTY, false)) {
-                val current = preferences.getLong(DIRTY_GENERATION, 0)
-                editor.putLong(
-                    DIRTY_GENERATION,
-                    if (current == Long.MAX_VALUE) Long.MAX_VALUE else current + 1,
-                ).remove(LEGACY_DIRTY)
+                editor.remove(LEGACY_DIRTY)
+                markDirty(context)
             }
             editor.commit()
         }
@@ -141,6 +135,24 @@ object SyncScheduler {
         }
     }
 
+    internal fun migrateLegacyWorkManager(context: Context) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (preferences.getInt(LEGACY_WORK_MIGRATION_VERSION, 0) >= 1) return
+        val completed = AtomicInteger(0)
+        val directExecutor = java.util.concurrent.Executor { runnable -> runnable.run() }
+        listOf(LEGACY_PERIODIC_NAME, LEGACY_IMMEDIATE_NAME).forEach { name ->
+            val operation = WorkManager.getInstance(context).cancelUniqueWork(name)
+            operation.result.addListener(
+                {
+                    if (runCatching { operation.result.get() }.isSuccess && completed.incrementAndGet() == 2) {
+                        preferences.edit().putInt(LEGACY_WORK_MIGRATION_VERSION, 1).commit()
+                    }
+                },
+                directExecutor,
+            )
+        }
+    }
+
     fun ensurePeriodic(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         val captureConstraints = captureConstraints(
@@ -178,26 +190,14 @@ object SyncScheduler {
         )
     }
 
-    fun markDirty(context: Context): Long = synchronized(dirtyLock) {
-        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val current = preferences.getLong(DIRTY_GENERATION, 0)
-        val next = if (current == Long.MAX_VALUE) Long.MAX_VALUE else current + 1
-        check(preferences.edit().putLong(DIRTY_GENERATION, next).commit())
-        next
-    }
+    internal fun queueRoot(context: Context) = context.filesDir.resolve("durable-upload-queue-v1")
 
-    fun dirtyGeneration(context: Context): Pair<Long, Boolean> = synchronized(dirtyLock) {
-        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val current = preferences.getLong(DIRTY_GENERATION, 0)
-        current to (current > preferences.getLong(CAPTURED_GENERATION, 0))
+    fun markDirty(context: Context): Long {
+        val generation = NativeSyncBridge.markCaptureDirty(
+            queueRoot(context).absolutePath,
+            SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+        )
+        check(generation >= 0) { "local capture state unavailable" }
+        return generation
     }
-
-    fun acknowledgeCapturedGeneration(context: Context, observed: Long): Boolean =
-        synchronized(dirtyLock) {
-            val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            if (!canAcknowledgeGeneration(observed, preferences.getLong(DIRTY_GENERATION, 0))) {
-                return@synchronized false
-            }
-            preferences.edit().putLong(CAPTURED_GENERATION, observed).commit()
-        }
 }

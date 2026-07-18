@@ -52,8 +52,9 @@ internal data class DurableDrainResult(
     val lastSnapshotId: String?,
     val lastCloudHead: String?,
     val lastError: String?,
+    val queueStateKnown: Boolean,
 ) {
-    val shouldRetry: Boolean get() = pendingCount > 0
+    val shouldRetry: Boolean get() = pendingCount > 0 || lastError != null || !queueStateKnown
 
     companion object {
         fun parse(raw: String): DurableDrainResult {
@@ -67,6 +68,7 @@ internal data class DurableDrainResult(
                 lastSnapshotId = json.optString("last_snapshot_id").ifBlank { null },
                 lastCloudHead = json.optString("last_cloud_head").ifBlank { null },
                 lastError = json.optString("last_error").ifBlank { null },
+                queueStateKnown = json.optBoolean("queue_state_known", false),
             )
         }
     }
@@ -83,11 +85,12 @@ internal class DurableSyncPipeline(private val context: Context) {
         reason: String,
         treeUri: Uri?,
         serverEndpoint: String,
-        dirty: Boolean,
         sessionActive: Boolean,
+        captureOwner: String,
+        captureGeneration: Long,
     ): DurableCaptureResult = withContext(Dispatchers.IO) {
         AndroidSyncOperationMutex.value.withLock {
-            if (!AutomaticCapturePolicy.shouldCapture(reason, dirty, sessionActive)) {
+            if (!AutomaticCapturePolicy.shouldCapture(reason, dirty = true, sessionActive)) {
                 return@withLock DurableCaptureResult()
             }
             val server = SyncServerProbe.normalizeServer(serverEndpoint)
@@ -130,6 +133,8 @@ internal class DurableSyncPipeline(private val context: Context) {
                             logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
                             baseHead = baseline,
                             deviceId = deviceId,
+                            captureOwner = captureOwner,
+                            captureGeneration = captureGeneration,
                         ),
                     )
                     DurableCaptureResult(queued, stage.fingerprint)
@@ -138,6 +143,8 @@ internal class DurableSyncPipeline(private val context: Context) {
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (_: SecurityException) {
+                DurableCaptureResult(localError = "saf_permission_required")
             } catch (_: Exception) {
                 DurableCaptureResult(localError = "capture_or_queue_failed")
             } finally {
@@ -151,7 +158,12 @@ internal class DurableSyncPipeline(private val context: Context) {
             var secret: ByteArray? = null
             try {
                 if (!AndroidSecretVault(context).hasSecret()) {
-                    return@withLock DurableDrainResult(0, 0, 0, 0, 0, null, null, "recovery_secret_required")
+                    val stateExists = SyncScheduler.queueRoot(context).resolve("state.sqlite").isFile
+                    return@withLock if (stateExists) {
+                        DurableDrainResult(0, 0, 0, 0, 0, null, null, "recovery_secret_required", false)
+                    } else {
+                        DurableDrainResult(0, 0, 0, 0, 0, null, null, null, true)
+                    }
                 }
                 secret = AndroidSecretVault(context).load()
                 val queueRoot = context.filesDir.resolve("durable-upload-queue-v1")
@@ -161,7 +173,7 @@ internal class DurableSyncPipeline(private val context: Context) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                DurableDrainResult(0, 0, 1, 0, 0, null, null, "local_pipeline_failed")
+                DurableDrainResult(0, 0, 1, 0, 0, null, null, "local_pipeline_failed", false)
             } finally {
                 secret?.fill(0)
             }

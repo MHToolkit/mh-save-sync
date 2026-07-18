@@ -26,7 +26,7 @@ class DurableSyncPipelineTest {
     @Test
     fun `failed native drain remains pending and requests retry`() {
         val result = DurableDrainResult.parse(
-            """{"uploaded_count":0,"conflict_count":0,"failed_count":1,"pending_count":2,"pending_endpoint_count":2,"last_error":"network_or_server_failure"}""",
+            """{"uploaded_count":0,"conflict_count":0,"failed_count":1,"pending_count":2,"pending_endpoint_count":2,"last_error":"network_or_server_failure","queue_state_known":true}""",
         )
         assertEquals(2, result.pendingCount)
         assertEquals(1, result.failedCount)
@@ -35,9 +35,14 @@ class DurableSyncPipelineTest {
     }
 
     @Test
-    fun `dirty generation acknowledgement is compare and swap safe`() {
-        assertTrue(SyncScheduler.canAcknowledgeGeneration(observed = 7, current = 7))
-        assertFalse(SyncScheduler.canAcknowledgeGeneration(observed = 7, current = 8))
+    fun `capture claim parser distinguishes owned work from busy generation`() {
+        assertEquals(
+            CaptureGenerationClaim(7, "00112233445566778899aabbccddeeff"),
+            CaptureGenerationClaim.parse(
+                """{"claimed":true,"generation":7,"owner":"00112233445566778899aabbccddeeff"}""",
+            ),
+        )
+        assertEquals(null, CaptureGenerationClaim.parse("""{"claimed":false}"""))
     }
 
     @Test
@@ -46,6 +51,10 @@ class DurableSyncPipelineTest {
         assertTrue(SafGrantPolicy.isUsable(root, setOf(root)))
         assertFalse(SafGrantPolicy.isUsable(root, emptySet()))
         assertFalse(SafGrantPolicy.isUsable(null, setOf(root)))
+        assertEquals(
+            SafGrantInspection.Revoked,
+            SafGrantInspection.inspect { throw SecurityException("revoked") },
+        )
     }
 
     @Test
@@ -94,7 +103,7 @@ class DurableSyncPipelineTest {
     @Test
     fun `successful native drain clears pending jobs`() {
         val result = DurableDrainResult.parse(
-            """{"uploaded_count":2,"conflict_count":0,"failed_count":0,"pending_count":0,"last_snapshot_id":"abc","last_cloud_head":"abc"}""",
+            """{"uploaded_count":2,"conflict_count":0,"failed_count":0,"pending_count":0,"last_snapshot_id":"abc","last_cloud_head":"abc","queue_state_known":true}""",
         )
         assertEquals(2, result.uploadedCount)
         assertFalse(result.shouldRetry)
@@ -103,8 +112,17 @@ class DurableSyncPipelineTest {
     @Test
     fun `remaining fifo batch requests another worker even without a network error`() {
         val result = DurableDrainResult.parse(
-            """{"uploaded_count":100,"conflict_count":0,"failed_count":0,"pending_count":1}""",
+            """{"uploaded_count":100,"conflict_count":0,"failed_count":0,"pending_count":1,"queue_state_known":true}""",
         )
         assertTrue(result.shouldRetry)
+    }
+
+    @Test
+    fun `unknown queue state retries instead of reporting empty success`() {
+        val result = DurableDrainResult.parse(
+            """{"uploaded_count":0,"failed_count":1,"pending_count":0,"last_error":"local_queue_unavailable","queue_state_known":false}""",
+        )
+        assertTrue(result.shouldRetry)
+        assertFalse(result.queueStateKnown)
     }
 }

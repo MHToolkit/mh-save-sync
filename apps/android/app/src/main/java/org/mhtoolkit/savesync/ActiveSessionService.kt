@@ -68,7 +68,9 @@ class ActiveSessionService : Service() {
         getSharedPreferences(SyncScheduler.PREFERENCES, MODE_PRIVATE)
             .edit().putBoolean(SyncScheduler.SESSION_ACTIVE, true).commit()
         SyncScheduler.markDirty(this)
-        startProcessMonitor()
+        if (SyncScheduler.PROCESS_EXIT_RUNTIME_VERIFIED) {
+            startProcessMonitor()
+        }
         return START_STICKY
     }
 

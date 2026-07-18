@@ -409,6 +409,14 @@ pub struct AndroidQueueDrainReport {
     pub last_snapshot_id: Option<String>,
     pub last_cloud_head: Option<String>,
     pub last_error: Option<String>,
+    pub queue_state_known: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AndroidCaptureClaimReport {
+    pub claimed: bool,
+    pub generation: Option<u64>,
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -711,6 +719,61 @@ async fn upload_android_encrypted_snapshot(
 /// Creates an immutable encrypted snapshot and durably records it before any
 /// network request. A later worker can retry from the encrypted bundle without
 /// reopening the SAF tree or retaining plaintext staging data.
+pub fn mark_android_capture_dirty(queue_root: &Path, logical_save_id: &str) -> anyhow::Result<u64> {
+    validate_logical_save_id(logical_save_id)?;
+    std::fs::create_dir_all(queue_root)?;
+    let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
+    Ok(store.mark_capture_dirty(logical_save_id)?)
+}
+
+pub fn claim_android_capture_generation(
+    queue_root: &Path,
+    logical_save_id: &str,
+) -> anyhow::Result<AndroidCaptureClaimReport> {
+    validate_logical_save_id(logical_save_id)?;
+    std::fs::create_dir_all(queue_root)?;
+    let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
+    let owner = uuid::Uuid::new_v4().simple().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64;
+    let claim = store.claim_capture_generation(
+        logical_save_id,
+        &owner,
+        now,
+        now.saturating_add(10 * 60 * 1000),
+    )?;
+    Ok(match claim {
+        Some(claim) => AndroidCaptureClaimReport {
+            claimed: true,
+            generation: Some(claim.generation),
+            owner: Some(claim.owner),
+        },
+        None => AndroidCaptureClaimReport {
+            claimed: false,
+            generation: None,
+            owner: None,
+        },
+    })
+}
+
+pub fn finish_android_capture_generation(
+    queue_root: &Path,
+    logical_save_id: &str,
+    owner: &str,
+    generation: u64,
+    completed: bool,
+) -> anyhow::Result<bool> {
+    validate_logical_save_id(logical_save_id)?;
+    let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
+    if completed {
+        Ok(store.complete_capture_generation(logical_save_id, owner, generation)?)
+    } else {
+        Ok(store.release_capture_generation(logical_save_id, owner)?)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn queue_android_stable_stage(
     staging_root: &Path,
     queue_root: &Path,
@@ -719,6 +782,7 @@ pub fn queue_android_stable_stage(
     logical_save_id: &str,
     observed_base_head: Option<&str>,
     device_id: &str,
+    capture_claim: Option<(&str, u64)>,
 ) -> anyhow::Result<AndroidQueueReport> {
     let server = server.trim_end_matches('/');
     anyhow::ensure!(
@@ -760,6 +824,7 @@ pub fn queue_android_stable_stage(
         logical_save_id,
         parent.as_deref(),
         &relative_bundle,
+        capture_claim.map(|(owner, generation)| (logical_save_id, owner, generation)),
     ) {
         let _ = std::fs::remove_file(&bundle);
         return Err(error.into());
@@ -780,15 +845,9 @@ pub async fn drain_android_upload_queue(
     queue_root: &Path,
     secret: &[u8; 32],
 ) -> AndroidQueueDrainReport {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static OWNER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
     const LEASE_DURATION_MS: u64 = 2 * 60 * 1000;
     const LEASE_RENEW_INTERVAL_SECONDS: u64 = 30;
-    let owner = format!(
-        "drain-{}-{}",
-        std::process::id(),
-        OWNER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    );
+    let owner = uuid::Uuid::new_v4().simple().to_string();
     let mut report = AndroidQueueDrainReport {
         uploaded_count: 0,
         conflict_count: 0,
@@ -798,109 +857,164 @@ pub async fn drain_android_upload_queue(
         last_snapshot_id: None,
         last_cloud_head: None,
         last_error: None,
+        queue_state_known: true,
     };
-    let store = match save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite")) {
+    let state_path = queue_root.join("state.sqlite");
+    match state_path.try_exists() {
+        Ok(false) => return report,
+        Ok(true) => {}
+        Err(_) => {
+            report.failed_count = 1;
+            report.last_error = Some("local_queue_unavailable".into());
+            report.queue_state_known = false;
+            return report;
+        }
+    }
+    let store = match save_engine::local_store::LocalStore::open(&state_path) {
         Ok(store) => store,
         Err(_) => {
             report.failed_count = 1;
             report.last_error = Some("local_queue_unavailable".into());
+            report.queue_state_known = false;
             return report;
         }
     };
-    for _ in 0..100 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let job = match store.claim_retryable_upload(
-            None,
-            &owner,
-            now,
-            now.saturating_add(LEASE_DURATION_MS),
-        ) {
-            Ok(Some(job)) => job,
-            Ok(None) => break,
-            Err(_) => {
-                report.failed_count += 1;
-                report.last_error = Some("local_queue_unavailable".into());
-                break;
+    let endpoints = match store.pending_upload_endpoints() {
+        Ok(endpoints) => endpoints,
+        Err(_) => {
+            report.failed_count = 1;
+            report.last_error = Some("local_queue_unavailable".into());
+            report.queue_state_known = false;
+            return report;
+        }
+    };
+    let mut failed_endpoints = std::collections::HashSet::new();
+    let mut processed = 0usize;
+    'rounds: loop {
+        let mut claimed_in_round = false;
+        for endpoint in &endpoints {
+            if processed >= 100 {
+                break 'rounds;
             }
-        };
-        let bundle = queue_root.join(&job.bundle_path);
-        let heartbeat_queue = queue_root.to_path_buf();
-        let heartbeat_owner = owner.clone();
-        let heartbeat_id = job.id;
-        let heartbeat = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(LEASE_RENEW_INTERVAL_SECONDS))
-                    .await;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                let Ok(heartbeat_store) = save_engine::local_store::LocalStore::open(
-                    &heartbeat_queue.join("state.sqlite"),
-                ) else {
-                    break;
-                };
-                if !matches!(
-                    heartbeat_store.renew_upload_lease(
-                        heartbeat_id,
-                        &heartbeat_owner,
-                        now.saturating_add(LEASE_DURATION_MS),
-                    ),
-                    Ok(true)
-                ) {
-                    break;
-                }
+            if failed_endpoints.contains(endpoint) {
+                continue;
             }
-        });
-        let snapshot = match save_engine::import_encrypted_bundle(&bundle) {
-            Ok(snapshot) if snapshot.snapshot_id == job.snapshot_id => snapshot,
-            _ => {
-                heartbeat.abort();
-                let _ = store.mark_upload_failed(job.id, &owner, "local_queue_integrity_failure");
-                report.failed_count += 1;
-                report.last_error = Some("local_queue_integrity_failure".into());
-                break;
-            }
-        };
-        match upload_android_encrypted_snapshot(
-            &snapshot,
-            &job.server_endpoint,
-            secret,
-            &job.logical_save_id,
-            job.base_head.as_deref(),
-            &job.device_id,
-        )
-        .await
-        {
-            Ok(upload) => {
-                heartbeat.abort();
-                if !matches!(store.mark_upload_completed(job.id, &owner), Ok(true)) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let job = match store.claim_retryable_upload(
+                Some(endpoint),
+                &owner,
+                now,
+                now.saturating_add(LEASE_DURATION_MS),
+            ) {
+                Ok(Some(job)) => job,
+                Ok(None) => continue,
+                Err(_) => {
                     report.failed_count += 1;
                     report.last_error = Some("local_queue_unavailable".into());
-                    break;
+                    report.queue_state_known = false;
+                    break 'rounds;
                 }
-                let _ = std::fs::remove_file(bundle);
-                report.uploaded_count += 1;
-                if upload.outcome == "conflict" {
-                    report.conflict_count += 1;
+            };
+            claimed_in_round = true;
+            processed += 1;
+            let bundle = queue_root.join(&job.bundle_path);
+            let heartbeat_queue = queue_root.to_path_buf();
+            let heartbeat_owner = owner.clone();
+            let heartbeat_id = job.id;
+            let heartbeat = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        LEASE_RENEW_INTERVAL_SECONDS,
+                    ))
+                    .await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let Ok(heartbeat_store) = save_engine::local_store::LocalStore::open(
+                        &heartbeat_queue.join("state.sqlite"),
+                    ) else {
+                        break;
+                    };
+                    if !matches!(
+                        heartbeat_store.renew_upload_lease(
+                            heartbeat_id,
+                            &heartbeat_owner,
+                            now.saturating_add(LEASE_DURATION_MS),
+                        ),
+                        Ok(true)
+                    ) {
+                        break;
+                    }
                 }
-                report.last_snapshot_id = Some(upload.snapshot_id);
-                report.last_cloud_head = Some(upload.cloud_head);
-            }
-            Err(_) => {
-                heartbeat.abort();
-                let _ = store.mark_upload_failed(job.id, &owner, "network_or_server_failure");
-                report.failed_count += 1;
-                report.last_error = Some("network_or_server_failure".into());
-                break;
+            });
+            let snapshot = match save_engine::import_encrypted_bundle(&bundle) {
+                Ok(snapshot) if snapshot.snapshot_id == job.snapshot_id => snapshot,
+                _ => {
+                    heartbeat.abort();
+                    let _ =
+                        store.mark_upload_failed(job.id, &owner, "local_queue_integrity_failure");
+                    report.failed_count += 1;
+                    report.last_error = Some("local_queue_integrity_failure".into());
+                    failed_endpoints.insert(endpoint.clone());
+                    continue;
+                }
+            };
+            match upload_android_encrypted_snapshot(
+                &snapshot,
+                &job.server_endpoint,
+                secret,
+                &job.logical_save_id,
+                job.base_head.as_deref(),
+                &job.device_id,
+            )
+            .await
+            {
+                Ok(upload) => {
+                    heartbeat.abort();
+                    if !matches!(store.mark_upload_completed(job.id, &owner), Ok(true)) {
+                        report.failed_count += 1;
+                        report.last_error = Some("local_queue_unavailable".into());
+                        report.queue_state_known = false;
+                        break 'rounds;
+                    }
+                    let _ = std::fs::remove_file(bundle);
+                    report.uploaded_count += 1;
+                    if upload.outcome == "conflict" {
+                        report.conflict_count += 1;
+                    }
+                    report.last_snapshot_id = Some(upload.snapshot_id);
+                    report.last_cloud_head = Some(upload.cloud_head);
+                }
+                Err(_) => {
+                    heartbeat.abort();
+                    let _ = store.mark_upload_failed(job.id, &owner, "network_or_server_failure");
+                    report.failed_count += 1;
+                    report.last_error = Some("network_or_server_failure".into());
+                    failed_endpoints.insert(endpoint.clone());
+                }
             }
         }
+        if !claimed_in_round {
+            break;
+        }
     }
-    report.pending_count = store.durable_pending_upload_count().unwrap_or(0);
-    report.pending_endpoint_count = store.pending_upload_endpoint_count().unwrap_or(0);
+    match (
+        store.durable_pending_upload_count(),
+        store.pending_upload_endpoint_count(),
+    ) {
+        (Ok(pending), Ok(endpoint_count)) => {
+            report.pending_count = pending;
+            report.pending_endpoint_count = endpoint_count;
+        }
+        _ => {
+            report.queue_state_known = false;
+            report.last_error = Some("local_queue_unavailable".into());
+        }
+    }
     report
 }
 
@@ -1945,6 +2059,85 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_downloadClou
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_markCaptureDirty<'local>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    logical_save_id: jni::objects::JString<'local>,
+) -> jni::sys::jlong {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<u64> {
+        let queue_root: String = env.get_string(&queue_root)?.into();
+        let logical_save_id: String = env.get_string(&logical_save_id)?.into();
+        mark_android_capture_dirty(Path::new(&queue_root), &logical_save_id)
+    }))
+    .ok()
+    .and_then(Result::ok)
+    .and_then(|value| i64::try_from(value).ok())
+    .unwrap_or(-1)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_claimCaptureGeneration<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    logical_save_id: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let queue_root: String = env.get_string(&queue_root)?.into();
+            let logical_save_id: String = env.get_string(&logical_save_id)?.into();
+            Ok(serde_json::to_string(&claim_android_capture_generation(
+                Path::new(&queue_root),
+                &logical_save_id,
+            )?)?)
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => serde_json::json!({"error":"capture_claim_failed"}).to_string(),
+    };
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_finishCaptureGeneration<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    logical_save_id: jni::objects::JString<'local>,
+    owner: jni::objects::JString<'local>,
+    generation: jni::sys::jlong,
+    completed: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<bool> {
+        let queue_root: String = env.get_string(&queue_root)?.into();
+        let logical_save_id: String = env.get_string(&logical_save_id)?.into();
+        let owner: String = env.get_string(&owner)?.into();
+        let generation = u64::try_from(generation)?;
+        finish_android_capture_generation(
+            Path::new(&queue_root),
+            &logical_save_id,
+            &owner,
+            generation,
+            completed != 0,
+        )
+    }))
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or(false) as jni::sys::jboolean
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableStage<'local>(
     mut env: jni::JNIEnv<'local>,
     _class: jni::objects::JClass<'local>,
@@ -1955,6 +2148,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
     logical: jni::objects::JString<'local>,
     base: jni::objects::JString<'local>,
     device: jni::objects::JString<'local>,
+    capture_owner: jni::objects::JString<'local>,
+    capture_generation: jni::sys::jlong,
 ) -> jni::sys::jstring {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || -> anyhow::Result<String> {
@@ -1963,6 +2158,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
             let server: String = env.get_string(&server)?.into();
             let logical: String = env.get_string(&logical)?.into();
             let device: String = env.get_string(&device)?.into();
+            let capture_owner: String = env.get_string(&capture_owner)?.into();
+            let capture_generation = u64::try_from(capture_generation)?;
             let base = if base.is_null() {
                 None
             } else {
@@ -1980,6 +2177,7 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
                 &logical,
                 base.as_deref(),
                 &device,
+                Some((&capture_owner, capture_generation)),
             )?;
             Ok(serde_json::to_string(&report)?)
         },
@@ -2025,6 +2223,7 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_drainUploadQ
             "failed_count":1,
             "pending_count":0,
             "pending_endpoint_count":0,
+            "queue_state_known":false,
             "last_error":"local_queue_unavailable"
         })
         .to_string(),
@@ -2249,6 +2448,7 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            None,
         )
         .unwrap();
         assert_eq!(queued.pending_count, 1);
@@ -2275,6 +2475,39 @@ mod tests {
     }
 
     #[test]
+    fn durable_queue_enqueue_atomically_acknowledges_capture_generation() {
+        let source = tempfile::tempdir().unwrap();
+        let queue = tempfile::tempdir().unwrap();
+        let logical = "mh3g-nemessix-jp-slot1";
+        std::fs::write(source.path().join("system"), b"claimed-capture").unwrap();
+        assert_eq!(
+            mark_android_capture_dirty(queue.path(), logical).unwrap(),
+            1
+        );
+        let claim = claim_android_capture_generation(queue.path(), logical).unwrap();
+        let owner = claim.owner.unwrap();
+        assert_eq!(owner.len(), 32);
+        assert!(owner.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let generation = claim.generation.unwrap();
+        queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            "https://sync.example.test",
+            &[27u8; 32],
+            logical,
+            None,
+            "android-fixture",
+            Some((&owner, generation)),
+        )
+        .unwrap();
+        assert!(
+            !claim_android_capture_generation(queue.path(), logical)
+                .unwrap()
+                .claimed
+        );
+    }
+
+    #[test]
     fn android_durable_queue_chains_offline_snapshots_without_mtime_lww() {
         let source = tempfile::tempdir().unwrap();
         let queue = tempfile::tempdir().unwrap();
@@ -2288,6 +2521,7 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             Some("cloud-base"),
             "android-fixture",
+            None,
         )
         .unwrap();
         std::fs::write(source.path().join("system"), b"second").unwrap();
@@ -2299,6 +2533,7 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             Some("cloud-base"),
             "android-fixture",
+            None,
         )
         .unwrap();
         assert_ne!(first.snapshot_id, second.snapshot_id);
@@ -2331,6 +2566,7 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            None,
         )
         .unwrap();
         let bundle = queue.path().join(&queued.bundle_path);
@@ -2383,6 +2619,7 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            None,
         )
         .unwrap();
         let server_thread = spawn_upload_server(listener, queued.snapshot_id);
@@ -2421,6 +2658,89 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn failed_old_endpoint_does_not_starve_new_endpoint() {
+        let source = tempfile::tempdir().unwrap();
+        let queue = tempfile::tempdir().unwrap();
+        let secret = [25u8; 32];
+        std::fs::write(source.path().join("system"), b"old-endpoint").unwrap();
+        queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            "http://127.0.0.1:9",
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            None,
+            "android-fixture",
+            None,
+        )
+        .unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let new_server = format!("http://{}", listener.local_addr().unwrap());
+        std::fs::write(source.path().join("system"), b"new-endpoint").unwrap();
+        let newer = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            &new_server,
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            None,
+            "android-fixture",
+            None,
+        )
+        .unwrap();
+        let server_thread = spawn_upload_server(listener, newer.snapshot_id.clone());
+        let report = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(drain_android_upload_queue(queue.path(), &secret));
+        let paths = server_thread.join().unwrap();
+        assert_eq!(report.uploaded_count, 1);
+        assert_eq!(report.failed_count, 1);
+        assert_eq!(report.pending_count, 1);
+        assert_eq!(
+            report.last_snapshot_id.as_deref(),
+            Some(newer.snapshot_id.as_str())
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| path.contains("/commit "))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn fresh_queue_root_is_known_empty_but_corrupt_state_is_unknown() {
+        let fresh = tempfile::tempdir().unwrap();
+        let secret = [26u8; 32];
+        let empty = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(drain_android_upload_queue(fresh.path(), &secret));
+        assert!(empty.queue_state_known);
+        assert_eq!(empty.pending_count, 0);
+        assert!(empty.last_error.is_none());
+
+        std::fs::write(fresh.path().join("state.sqlite"), b"not-a-sqlite-database").unwrap();
+        let unknown = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(drain_android_upload_queue(fresh.path(), &secret));
+        assert!(!unknown.queue_state_known);
+        assert_eq!(
+            unknown.last_error.as_deref(),
+            Some("local_queue_unavailable")
+        );
+
+        let wrong_type = tempfile::tempdir().unwrap();
+        std::fs::create_dir(wrong_type.path().join("state.sqlite")).unwrap();
+        let root_error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(drain_android_upload_queue(wrong_type.path(), &secret));
+        assert!(!root_error.queue_state_known);
+        assert!(root_error.last_error.is_some());
     }
 
     #[test]
