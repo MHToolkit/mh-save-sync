@@ -1,10 +1,12 @@
 {
   "android_release_signing": true,
-  "verified_at": "2026-07-18T14:16:07+08:00",
-  "source_commit": "b6d6aa5ea5ca8097a1da1f4812589dd65e35e92b",
-  "artifact": "mh-save-sync-b6d6aa5-release.apk",
+  "verified_at": "2026-07-18T14:44:14+08:00",
+  "classification": "merged-main-release",
+  "source_ref": "main",
+  "source_commit": "b13f64a6f6202ab2854f2b18cc812e8128fa458e",
+  "artifact": "mh-save-sync-b13f64a-release.apk",
   "artifact_location": "local MHSaveSync release backup directory",
-  "artifact_sha256": "eda2c2ff237476608e836b1ad48c60fa84cda17b9a63575abf8d3ffe9edc06f0",
+  "artifact_sha256": "28d07c71186b7a7241ff58432d4d179deccce140a3e890e3902572db89e25a4c",
   "package": "org.mhtoolkit.savesync",
   "version_code": 3,
   "version_name": "0.1.0-alpha.3",
@@ -18,6 +20,11 @@
   "debug_signer": {
     "certificate_sha256": "ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb",
     "production_trust_root": false
+  },
+  "candidate_archive": {
+    "artifact": "mh-save-sync-b6d6aa5-pr-head-candidate.apk",
+    "artifact_sha256": "eda2c2ff237476608e836b1ad48c60fa84cda17b9a63575abf8d3ffe9edc06f0",
+    "classification": "pr-head-candidate-not-latest"
   },
   "verification": {
     "unsigned_release_rejected": true,

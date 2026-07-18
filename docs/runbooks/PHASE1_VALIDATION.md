@@ -1250,8 +1250,12 @@ Open Phase 1D gates:
   configuration, checks the keystore file modes, builds the release APK,
   verifies APK Signature Scheme v2 and rejects any signer other than the pinned
   production certificate.
-- Exact clean-worktree artifact: `mh-save-sync-b6d6aa5-release.apk`, SHA-256
-  `eda2c2ff...9edc06f0`. It was intentionally not installed over the debug-signed
+- After PR #4 was squash-merged, the release was rebuilt from clean merged
+  `main` commit `b13f64a6f6202ab2854f2b18cc812e8128fa458e`.
+  The formal merged-main artifact is `mh-save-sync-b13f64a-release.apk`,
+  SHA-256 `28d07c71...9e25a4c`. The former PR-head artifact
+  `eda2c2ff...9edc06f0` is retained only as a candidate and is not the latest
+  release. The formal artifact was intentionally not installed over the debug-signed
   phone app because Android signer transitions require an explicit data
   migration; uninstalling the user's configured debug app was not acceptable.
 - Public, secret-free evidence is recorded in
