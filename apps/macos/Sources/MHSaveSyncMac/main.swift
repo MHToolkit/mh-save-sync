@@ -575,7 +575,7 @@ func redactedCommand(_ command: [String]) -> [String] {
             continue
         }
         result.append(part)
-        if part == "--secret-hex" {
+        if ["--secret-hex", "--target", "--root", "--bundle"].contains(part) {
             redactNext = true
         }
     }
@@ -736,6 +736,7 @@ func configuredServerUpload(
 ) throws -> String {
     let serverURL = try serverURLOrThrow(context)
     let root = try saveRootOrThrow(context)
+    try recoverConfiguredNativeRestore(context: context)
     let secret = try recoverySecretHexOrThrow(context)
     var arguments = [
         "server-upload",
@@ -785,6 +786,7 @@ func configuredServerRestore(context: MacSyncContext) throws -> String {
             stderr: "Nemessix 仍在运行：不会把云端存档覆盖到正在运行的模拟器目录。请先退出 MH3G/Nemessix。\n"
         )
     }
+    try recoverConfiguredNativeRestore(context: context)
     let serverURL = try serverURLOrThrow(context)
     let target = try saveRootOrThrow(context)
     let secret = try recoverySecretHexOrThrow(context)
@@ -822,6 +824,23 @@ func isNemessixRunning() -> Bool {
         app.bundleIdentifier == "io.github.vincentadamnemessisx.nemessix" ||
             app.localizedName?.lowercased().contains("nemessix") == true
     }
+}
+
+func recoverConfiguredNativeRestore(context: MacSyncContext) throws {
+    guard let target = context.saveRootPath, !target.isEmpty else {
+        return
+    }
+    if isNemessixRunning() {
+        throw CommandFailure(
+            command: ["MHSaveSyncMac"],
+            status: 2,
+            stderr: "Nemessix 正在运行：已延后本地恢复事务检查，不会修改模拟器存档目录。\n"
+        )
+    }
+    _ = try runMHSave([
+        "recover-interrupted-restore",
+        "--target", target,
+    ])
 }
 
 
@@ -864,6 +883,24 @@ final class MenuController: NSObject, NSApplicationDelegate {
         let stateItem = NSMenuItem(title: "状态：等待操作", action: nil, keyEquivalent: "")
         menu.addItem(stateItem)
         syncStateMenuItem = stateItem
+        if context.hasSaveRoot {
+            if isNemessixRunning() {
+                setSyncState("Nemessix 运行中，恢复检查已延后")
+            } else {
+                do {
+                    try recoverConfiguredNativeRestore(context: context)
+                    setSyncState("本地恢复事务已检查")
+                } catch {
+                    setSyncState("本地恢复事务待处理")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.showAlert(
+                            title: "本地存档恢复未完成",
+                            message: "为避免丢档，暂勿启动 Nemessix。请重新打开 MH 云存档完成恢复。\n\n\(error)"
+                        )
+                    }
+                }
+            }
+        }
         menu.addItem(NSMenuItem.separator())
         menu.addItem(makeMenuItem(MenuCopy.syncNow, action: #selector(syncNow), key: "s"))
         menu.addItem(makeMenuItem(MenuCopy.uploadLocal, action: #selector(uploadNow), key: "u"))
@@ -1221,6 +1258,16 @@ final class MenuController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPrelaunch() {
+        refreshContext()
+        do {
+            try recoverConfiguredNativeRestore(context: context)
+        } catch {
+            showAlert(
+                title: "启动前检查未通过",
+                message: "本地恢复事务尚未安全收敛，暂勿启动 Nemessix。\n\n\(error)"
+            )
+            return
+        }
         showAlert(
             title: "启动 MH3G 前检查",
             message: prelaunchCheckText(context)
