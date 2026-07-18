@@ -102,6 +102,14 @@ production certificate, lineage signer #1 is the installed debug certificate,
 lineage signer #2 is the production certificate, and installed-data capability
 is true.
 
+The verified offline artifact built from packaging commit `3d49c7d` is
+`mh-save-sync-3d49c7d-signer-migration.apk`, SHA-256
+`b587761d4d3ef8a1e3ff3a1b7a67ce5f893d11283d86f0ad826bb15986246a92`.
+It has versionCode `4`, v3 `true`, and production as its current signer. Its v2
+status is `false` because the app minimum SDK is 29 and rotation minimum SDK is
+28, so every supported platform verifies the v3 production signature and
+lineage rather than a legacy v2 signature.
+
 ## Authorized device migration gate
 
 No device action belongs to this PR. A later, explicitly authorized acceptance

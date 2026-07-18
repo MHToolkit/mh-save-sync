@@ -1,0 +1,60 @@
+{
+  "android_signer_migration": true,
+  "verified_at": "2026-07-18T15:52:01+08:00",
+  "source_base": "main@b13f64a6f6202ab2854f2b18cc812e8128fa458e",
+  "packaging_commit": "3d49c7d",
+  "package": "org.mhtoolkit.savesync",
+  "installed_archive": {
+    "artifact": "mh-save-sync-63da8e5-debug.apk",
+    "sha256": "8e32a75bd41e0de8c28db0640d058822dda2e57bc851a795d1c2da7689958b9f",
+    "version_code": 3,
+    "version_name": "0.1.0-alpha.3",
+    "signer_certificate_sha256": "ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb",
+    "signature_schemes": {
+      "v1": false,
+      "v2": true,
+      "v3": false,
+      "v3_1": false,
+      "v4": false
+    },
+    "private_key_control": "confirmed by exact certificate match to the local Android debug keystore; key material not exported"
+  },
+  "migration_artifact": {
+    "artifact": "mh-save-sync-3d49c7d-signer-migration.apk",
+    "artifact_location": "local MHSaveSync migration backup directory",
+    "sha256": "b587761d4d3ef8a1e3ff3a1b7a67ce5f893d11283d86f0ad826bb15986246a92",
+    "version_code": 4,
+    "version_name": "0.1.0-alpha.3-signer-migration.1",
+    "current_signer_certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
+    "signature_schemes": {
+      "v1": false,
+      "v2": false,
+      "v3": true,
+      "v3_1": false,
+      "v4": false
+    }
+  },
+  "proof_of_rotation": {
+    "predecessor_certificate_sha256": "ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb",
+    "successor_certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
+    "installed_data_capability": true,
+    "shared_uid_capability": false,
+    "permission_capability": false,
+    "rollback_capability": false,
+    "auth_capability": false,
+    "rotation_min_sdk": 28,
+    "lineage_storage": "redacted; local Secrets directory mode 0600 only"
+  },
+  "verification": {
+    "gradle_test_debug_unit": "pass",
+    "gradle_lint_debug": "pass",
+    "gradle_assemble_release": "pass",
+    "apksigner_verify": "pass",
+    "apksigner_lineage_history": "pass",
+    "version_increment_gate": "pass",
+    "secret_scan": "pass",
+    "device_installation": "not performed"
+  },
+  "platform_basis": "Android 9+ APK Signature Scheme v3 proof-of-rotation; Android 16 is supported",
+  "privacy": "No keystore bytes, password, private key, lineage binary, recovery secret, token, device data or save data is included."
+}
