@@ -1,10 +1,10 @@
 {
   "android_release_signing": true,
-  "verified_at": "2026-07-18T14:05:34+08:00",
-  "source_commit": "e03db18b0b9fc288a8da0b727776eab1ee1d5cbf",
-  "artifact": "mh-save-sync-e03db18-release.apk",
+  "verified_at": "2026-07-18T14:16:07+08:00",
+  "source_commit": "b6d6aa5ea5ca8097a1da1f4812589dd65e35e92b",
+  "artifact": "mh-save-sync-b6d6aa5-release.apk",
   "artifact_location": "local MHSaveSync release backup directory",
-  "artifact_sha256": "d0e82258641f29fb8a15b5781c4c27175682591c8d194c73c3da929edb9ff926",
+  "artifact_sha256": "eda2c2ff237476608e836b1ad48c60fa84cda17b9a63575abf8d3ffe9edc06f0",
   "package": "org.mhtoolkit.savesync",
   "version_code": 3,
   "version_name": "0.1.0-alpha.3",
@@ -21,6 +21,7 @@
   },
   "verification": {
     "unsigned_release_rejected": true,
+    "abbreviated_release_tasks_rejected": true,
     "partial_environment_rejected": true,
     "dirty_worktree_rejected": true,
     "gradle_test_debug_lint_debug_assemble_release": "pass",
