@@ -24,13 +24,15 @@ if (releaseSigningPartiallyConfigured) {
         "Android release signing is only partially configured; set all MH_SAVE_SYNC_ANDROID_* variables",
     )
 }
-val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
-    taskName.contains("release", ignoreCase = true)
-}
-if (releaseTaskRequested && !releaseSigningConfigured) {
-    throw GradleException(
-        "Android release signing is not configured; use scripts/android-package-release.sh",
-    )
+gradle.taskGraph.whenReady {
+    val releaseTaskScheduled = allTasks.any { task ->
+        task.project == project && task.name.contains("release", ignoreCase = true)
+    }
+    if (releaseTaskScheduled && !releaseSigningConfigured) {
+        throw GradleException(
+            "Android release signing is not configured; use scripts/android-package-release.sh",
+        )
+    }
 }
 
 android {

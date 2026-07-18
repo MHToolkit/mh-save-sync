@@ -10,8 +10,12 @@ fi
 
 release_tasks=(
   :app:assembleRelease
+  :app:assembleRel
+  :app:aR
   :app:packageReleaseUniversalApk
+  :app:pRUA
   :app:signReleaseBundle
+  :app:sRB
 )
 
 for task in "${release_tasks[@]}"; do

@@ -20,10 +20,11 @@ The wrapper requires a clean Git worktree before building so the commit in the
 artifact filename is a truthful provenance anchor rather than a label applied
 to uncommitted source.
 
-Gradle rejects every requested `Release` task at configuration time unless all
-four signing variables are present. This covers direct AGP entry points such as
-`packageReleaseUniversalApk` and `signReleaseBundle`, not only
-`assembleRelease`. `scripts/android-release-signing-contract-test.sh` keeps
+Gradle rejects every resolved `Release` task graph unless all four signing
+variables are present. The check runs after Gradle expands task abbreviations,
+so direct AGP entry points such as `packageReleaseUniversalApk` and
+`signReleaseBundle` cannot be reached through full names or aliases such as
+`pRUA` and `sRB`. `scripts/android-release-signing-contract-test.sh` keeps
 those bypass attempts in the local/CI regression set.
 
 Nemessix production builds may pin only the production certificate above for
