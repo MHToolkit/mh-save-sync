@@ -90,3 +90,31 @@ The backup script stops only the API writer, dumps PostgreSQL, and archives the
 immutable MinIO volume. It restarts the API before returning. Restore verifies
 artifact checksums, recreates both volumes, restores both stores, waits for
 health, and checks for dangling snapshot-object references.
+
+Orphan collection is dry-run by default. PostgreSQL snapshot references and
+unexpired upload sessions are the reachability truth. Destructive runs use a
+recoverable mark/lease row and an account/object-scoped PostgreSQL advisory lock;
+slow S3 deletion does not lock the global upload or snapshot tables. Output
+contains aggregate counts only.
+
+Because this Compose stack enables MinIO versioning, collection is explicitly
+two-stage. The Rust server records the current version ID before removing the
+logical object and durably queues that boundary with the opaque key. The Compose
+wrapper lists versions once per leased batch and deletes the captured version
+plus older generations over stdin before acknowledging the queue lease. Keys
+do not enter host Compose arguments or the final JSON output; claimed rows,
+version listings and deletion plans exist only in a mode-0700 ephemeral
+directory removed on exit. MinIO deletion stderr is discarded and replaced by
+the fixed `physical purge failed` error. A newer version uploaded between the
+two phases is preserved.
+`physical_purge_pending` must be zero before claiming storage was physically
+reclaimed. A non-MinIO S3 deployment must provide equivalent bucket lifecycle
+or provider-specific version purge processing.
+
+Preview objects older than the default seven-day grace period:
+
+    deploy/compose/scripts/gc-orphans.sh
+
+Run an explicit destructive sweep with a 24-hour grace period:
+
+    deploy/compose/scripts/gc-orphans.sh --grace-seconds 86400 --delete

@@ -123,3 +123,65 @@ fn cli_refuses_bundle_restore_while_emulator_running() {
         "running restore must not write target directory"
     );
 }
+
+#[test]
+fn cli_recovery_is_safe_and_does_not_print_the_target_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("private-save-root");
+    let stale_backup = tmp.path().join("private-save-root.mhsave-backup");
+    fs::create_dir_all(&stale_backup).unwrap();
+    fs::write(stale_backup.join("old.bin"), b"stale").unwrap();
+
+    let recovery = mh_save()
+        .args([
+            "recover-interrupted-restore",
+            "--target",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        recovery.status.success(),
+        "recovery failed: {}",
+        String::from_utf8_lossy(&recovery.stderr),
+    );
+    assert!(!target.exists(), "a stale backup must not be resurrected");
+    assert!(
+        stale_backup.exists(),
+        "the stale backup must remain untouched"
+    );
+    let stdout = String::from_utf8_lossy(&recovery.stdout);
+    assert!(stdout.contains("\"recovered\":true"));
+    assert!(
+        !stdout.contains("private-save-root"),
+        "recovery output must not expose the configured save path"
+    );
+}
+
+#[test]
+fn cli_recovery_failure_does_not_print_the_target_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("private-failed-save-root");
+    fs::write(
+        tmp.path()
+            .join(".private-failed-save-root.mhsave-restore-journal.json"),
+        b"not-json",
+    )
+    .unwrap();
+
+    let recovery = mh_save()
+        .args([
+            "recover-interrupted-restore",
+            "--target",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!recovery.status.success());
+    let stderr = String::from_utf8_lossy(&recovery.stderr);
+    assert!(stderr.contains("interrupted restore recovery failed"));
+    assert!(!stderr.contains("private-failed-save-root"));
+    assert!(!stderr.contains(tmp.path().to_str().unwrap()));
+}

@@ -14,6 +14,55 @@ object NativeSyncBridge {
         deviceId: String,
     ): String
 
+    external fun queueStableStage(
+        stagingRoot: String,
+        queueRoot: String,
+        serverEndpoint: String,
+        recoverySecret: ByteArray,
+        logicalSaveId: String,
+        baseHead: String?,
+        deviceId: String,
+        treeUri: String,
+        localFingerprint: String,
+        captureOwner: String,
+        captureGeneration: Long,
+    ): String
+
+    external fun markCaptureDirty(queueRoot: String, logicalSaveId: String): Long
+
+    external fun claimCaptureGeneration(queueRoot: String, logicalSaveId: String): String
+
+    external fun finishCaptureGeneration(
+        queueRoot: String,
+        logicalSaveId: String,
+        owner: String,
+        generation: Long,
+        completed: Boolean,
+    ): Boolean
+
+    external fun drainUploadQueue(
+        queueRoot: String,
+        recoverySecret: ByteArray,
+    ): String
+
+    external fun readConsistencyBaseline(
+        queueRoot: String,
+        serverEndpoint: String,
+        logicalSaveId: String,
+        treeUri: String,
+        deviceId: String,
+    ): String
+
+    external fun migrateLegacyConsistencyReceipt(
+        queueRoot: String,
+        snapshotId: String,
+        serverEndpoint: String,
+        logicalSaveId: String,
+        treeUri: String,
+        deviceId: String,
+        localFingerprint: String,
+    ): Boolean
+
     external fun fetchCloudHead(
         serverEndpoint: String,
         recoverySecret: ByteArray,

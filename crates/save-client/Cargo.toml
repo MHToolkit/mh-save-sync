@@ -29,6 +29,7 @@ thiserror.workspace = true
 tokio.workspace = true
 uniffi.workspace = true
 zeroize = "1.8"
+uuid.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

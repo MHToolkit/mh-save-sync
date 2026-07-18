@@ -1137,7 +1137,8 @@ Open Phase 1D gates:
 
 - real macOS Nemessix save-complete IPC and emulator-readable restore/relaunch
   proof; stopped stable snapshot proof exists for the observed local save root;
-- Android Nemessix restore proof against a real authorized save root;
+- Android Nemessix emulator-readable readback after the already completed real
+  stopped SAF restore; core launch alone does not satisfy Runtime Verified;
 - Android Azahar or Citra MMJ modification producing a macOS conflict branch;
 - exported `.mhsavebundle` restore in a real emulator-readable no-server
   environment; fixture byte-for-byte recovery is already covered;
@@ -1250,11 +1251,39 @@ Open Phase 1D gates:
   configuration, checks the keystore file modes, builds the release APK,
   verifies APK Signature Scheme v2 and rejects any signer other than the pinned
   production certificate.
-- Exact clean-worktree artifact: `mh-save-sync-b6d6aa5-release.apk`, SHA-256
-  `eda2c2ff...9edc06f0`. It was intentionally not installed over the debug-signed
+- After PR #4 was squash-merged, the release was rebuilt from clean merged
+  `main` commit `b13f64a6f6202ab2854f2b18cc812e8128fa458e`.
+  The formal merged-main artifact is `mh-save-sync-b13f64a-release.apk`,
+  SHA-256 `28d07c71...9e25a4c`. The former PR-head artifact
+  `eda2c2ff...9edc06f0` is retained only as a candidate and is not the latest
+  release. The formal artifact was intentionally not installed over the debug-signed
   phone app because Android signer transitions require an explicit data
   migration; uninstalling the user's configured debug app was not acceptable.
 - Public, secret-free evidence is recorded in
   `artifacts/runtime/android-release-signing-evidence.json`. Nemessix receives
   only the production certificate SHA-256 contract, never the private key or
   passwords.
+
+### 2026-07-18 crash-safe native restore and exhaustive readiness
+
+- Native-folder restore now materializes and fully verifies the new tree in a
+  deterministic same-filesystem staging directory, fsyncs files/directories,
+  and persists an atomic phase journal before either rename. Restart recovery
+  distinguishes stage-complete, original-target-backed-up and new-tree-installed
+  states, and records whether an original target existed.
+- The failure matrix covers interruption after staging, target backup, new-tree
+  install and terminal receipt loss; missing staging, corrupt journal, stale
+  backup, initially absent target, repeated recovery and concurrent restore are
+  also covered. At every injected point the visible target converges to the
+  complete old tree, the complete new tree, or the original absent state.
+- `mh-save recover-interrupted-restore --target <path>` exposes path-redacted
+  recovery to the macOS shell. The menu-bar app invokes it at startup when
+  Nemessix is stopped, before upload/restore, and before its launch-check UI.
+  If recovery cannot safely converge, the UI fails closed and tells the user
+  not to start Nemessix. Android SAF continues to use its separate journaled
+  transaction and is not implicitly upgraded by this native-path result.
+- Persistent server readiness no longer checks only the first 2,000 referenced
+  objects. It scans a repeatable-read snapshot in bounded 256-key pages and
+  returns a redacted 503 when any referenced object is missing. A real
+  PostgreSQL fixture proves the 2,001st missing object is detected and readiness
+  succeeds only after that object is present.

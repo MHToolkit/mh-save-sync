@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class NemessixProcessGate(private val context: Context) {
@@ -27,27 +28,28 @@ class LocalReplacePipeline(private val context: Context) {
         sessionActive: Boolean,
     ): LocalReplaceResult =
         withContext(Dispatchers.IO) {
-            LocalReplacePolicy.requireSessionStopped(sessionActive)
-            NemessixProcessGate(context).requireStopped()
-            val current = SyncServerProbe.fetchHeadForReplace(context, server)
-            val base = LocalReplacePolicy.requireObservedBase(observedBase, current)
-            val stage = SafStableStager(context).capture(treeUri)
-            var secret: ByteArray? = null
-            try {
-                val normalizedServer = SyncServerProbe.normalizeServer(server)
-                val device = deviceId()
-                secret = AndroidSecretVault(context).load()
-                val output = NativeSyncBridge.uploadStableStage(
-                    stagingRoot = stage.root.absolutePath,
-                    serverEndpoint = normalizedServer,
-                    recoverySecret = secret,
-                    logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
-                    baseHead = base,
-                    deviceId = device,
-                )
-                val result = LocalReplaceResult.parse(output)
-                if (SyncLedgerWritePolicy.shouldEstablishAfterUpload(result)) {
-                    result as LocalReplaceResult.Uploaded
+            AndroidSyncOperationMutex.value.withLock {
+                LocalReplacePolicy.requireSessionStopped(sessionActive)
+                NemessixProcessGate(context).requireStopped()
+                val current = SyncServerProbe.fetchHeadForReplace(context, server)
+                val base = LocalReplacePolicy.requireObservedBase(observedBase, current)
+                val stage = SafStableStager(context).capture(treeUri)
+                var secret: ByteArray? = null
+                try {
+                    val normalizedServer = SyncServerProbe.normalizeServer(server)
+                    val device = deviceId()
+                    secret = AndroidSecretVault(context).load()
+                    val output = NativeSyncBridge.uploadStableStage(
+                        stagingRoot = stage.root.absolutePath,
+                        serverEndpoint = normalizedServer,
+                        recoverySecret = secret,
+                        logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                        baseHead = base,
+                        deviceId = device,
+                    )
+                    val result = LocalReplaceResult.parse(output)
+                    if (SyncLedgerWritePolicy.shouldEstablishAfterUpload(result)) {
+                        result as LocalReplaceResult.Uploaded
                         val confirmedHead = runCatching {
                             SyncServerProbe.fetchHeadForReplace(context, normalizedServer)
                         }.getOrNull()
@@ -69,12 +71,13 @@ class LocalReplacePipeline(private val context: Context) {
                             true
                         }.getOrDefault(false)
                         result.copy(consistencyEstablished = established)
-                } else {
-                    result
+                    } else {
+                        result
+                    }
+                } finally {
+                    secret?.fill(0)
+                    stage.root.deleteRecursively()
                 }
-            } finally {
-                secret?.fill(0)
-                stage.root.deleteRecursively()
             }
         }
 

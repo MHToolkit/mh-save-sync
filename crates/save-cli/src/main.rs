@@ -13,7 +13,7 @@ use save_engine::{
     EmulatorState, EncryptedSnapshot, EngineError, GameSaveDiffReport, SnapshotOptions,
     create_snapshot_from_stable_folder, decrypt_manifest, diff_folders_for_game,
     diff_manifests_for_game, export_encrypted_bundle, import_encrypted_bundle,
-    restore_snapshot_to_folder,
+    recover_interrupted_restore, restore_snapshot_to_folder,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -52,6 +52,10 @@ enum Commands {
         secret_hex: String,
         #[arg(long, value_enum, default_value_t = CliEmulatorState::Stopped)]
         emulator_state: CliEmulatorState,
+    },
+    RecoverInterruptedRestore {
+        #[arg(long)]
+        target: PathBuf,
     },
     SaveDiff {
         #[arg(long)]
@@ -277,6 +281,11 @@ async fn run() -> anyhow::Result<()> {
                     "snapshot_id": snapshot.snapshot_id
                 })
             );
+        }
+        Commands::RecoverInterruptedRestore { target } => {
+            recover_interrupted_restore(&target)
+                .map_err(|_| anyhow::anyhow!("interrupted restore recovery failed"))?;
+            println!("{}", serde_json::json!({"recovered": true}));
         }
         Commands::SaveDiff {
             left,

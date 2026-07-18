@@ -125,8 +125,11 @@ class MainActivity : ComponentActivity() {
         var wifiOnly by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.WIFI_ONLY, true))
         }
+        var chargingRequired by remember {
+            mutableStateOf(preferences.getBoolean(SyncScheduler.CHARGING_REQUIRED, false))
+        }
         var sessionActive by remember {
-            mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true))
+            mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false))
         }
         var gameEnabled by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true))
@@ -155,6 +158,12 @@ class MainActivity : ComponentActivity() {
         }
         var syncError by remember {
             mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty())
+        }
+        var pendingUploads by remember {
+            mutableStateOf(preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0))
+        }
+        var pendingEndpoints by remember {
+            mutableStateOf(preferences.getInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, 0))
         }
         var launchGate by remember {
             mutableStateOf(DashboardContentPolicy.launchStatus(
@@ -216,7 +225,7 @@ class MainActivity : ComponentActivity() {
         fun refreshDashboardStateFromPreferences() {
             authorized = preferences.contains(SyncScheduler.SAF_ROOT)
             wifiOnly = preferences.getBoolean(SyncScheduler.WIFI_ONLY, true)
-            sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
+            sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false)
             gameEnabled = preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)
             serverEndpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
             lastSummary = preferences.getString(
@@ -229,6 +238,8 @@ class MainActivity : ComponentActivity() {
                 "先完成设置，再点“检查并打开 Nemessix”。",
             ).orEmpty()
             syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
+            pendingUploads = preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
+            pendingEndpoints = preferences.getInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, 0)
             launchGateReason = preferences.getString(
                 SyncScheduler.LAUNCH_GATE_REASON,
                 "not-checked",
@@ -247,6 +258,8 @@ class MainActivity : ComponentActivity() {
                         SyncScheduler.LAST_SYNC_PHASE,
                         SyncScheduler.LAST_SYNC_NEXT_ACTION,
                         SyncScheduler.LAST_SYNC_ERROR,
+                        SyncScheduler.PENDING_UPLOAD_COUNT,
+                        SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT,
                         SyncScheduler.LAUNCH_GATE_SUMMARY,
                         SyncScheduler.LAUNCH_GATE_REASON,
                         SyncScheduler.SESSION_ACTIVE,
@@ -464,12 +477,16 @@ class MainActivity : ComponentActivity() {
 
         fun toggleSessionProtection() {
             if (sessionActive) {
-                stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
+                startService(
+                    Intent(this@MainActivity, ActiveSessionService::class.java)
+                        .setAction(ActiveSessionService.ACTION_MANUAL_STOP),
+                )
                 lastSummary = SyncMessages.sessionExitSummary()
             } else {
                 ContextCompat.startForegroundService(
                     this@MainActivity,
-                    Intent(this@MainActivity, ActiveSessionService::class.java),
+                    Intent(this@MainActivity, ActiveSessionService::class.java)
+                        .setAction(ActiveSessionService.ACTION_TRACK_LAUNCH),
                 )
                 lastSummary = SyncMessages.sessionStartSummary()
             }
@@ -721,6 +738,16 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(DashboardContentPolicy.launchLabel) }
                     Text(launchGate, style = MaterialTheme.typography.bodySmall)
+                    if (sessionActive) {
+                        OutlinedButton(
+                            onClick = { toggleSessionProtection() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("尝试读取稳定存档并排队上传") }
+                        Text(
+                            "此操作只授权读取两次稳定副本；仍会独立检查 Nemessix 进程，不能证明停止时不会读取或上传。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     val canContinueLocal = launchGateReason in setOf(
                         "prelaunch-no-server", "prelaunch-key-required", "prelaunch-cloud-unavailable",
                         "prelaunch-remote-advanced", "prelaunch-local-changed", "prelaunch-diverged",
@@ -765,6 +792,16 @@ class MainActivity : ComponentActivity() {
                             gameEnabled = it
                             preferences.edit().putBoolean(SyncScheduler.GAME_MH3G_ENABLED, it).apply()
                         }
+                        if (pendingUploads > 0) {
+                            StatusLine(
+                                "待上传队列",
+                                if (pendingEndpoints > 1) {
+                                    "$pendingUploads 项，包含 $pendingEndpoints 个原服务器地址；不会静默迁移"
+                                } else {
+                                    "$pendingUploads 项；按创建时的服务器地址续传"
+                                },
+                            )
+                        }
                     }
                     CardSection("存档与密钥") {
                         StatusLine("存档目录", if (authorized) "已授权" else "未授权")
@@ -781,6 +818,11 @@ class MainActivity : ComponentActivity() {
                         SettingSwitch("仅 Wi-Fi 上传", wifiOnly) {
                             wifiOnly = it
                             preferences.edit().putBoolean(SyncScheduler.WIFI_ONLY, it).apply()
+                            SyncScheduler.ensurePeriodic(this@MainActivity)
+                        }
+                        SettingSwitch("仅充电时后台对账", chargingRequired) {
+                            chargingRequired = it
+                            preferences.edit().putBoolean(SyncScheduler.CHARGING_REQUIRED, it).apply()
                             SyncScheduler.ensurePeriodic(this@MainActivity)
                         }
                         OutlinedButton(
@@ -967,6 +1009,11 @@ class MainActivity : ComponentActivity() {
         val packageName = SyncScheduler.NEMESSIX_PACKAGE
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             ?: return SyncMessages.launchNemessixMissing(packageName)
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, ActiveSessionService::class.java)
+                .setAction(ActiveSessionService.ACTION_TRACK_LAUNCH),
+        )
         startActivity(launchIntent)
         return SyncMessages.launchNemessixStarted()
     }

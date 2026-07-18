@@ -126,6 +126,40 @@ internal data class DurableRestoreLease(
     val backupSnapshotId: String? = null,
 )
 
+internal object RestoreLeaseAcquireCoordinator {
+    fun acquire(
+        operation: File,
+        placeholder: DurableRestoreLease,
+        writeLease: (File, DurableRestoreLease) -> Unit = RestoreLeaseStore::write,
+        acquireLease: () -> NemessixQuiescenceLease,
+    ): DurableRestoreLease {
+        writeLease(operation, placeholder)
+        val lease = try {
+            acquireLease()
+        } catch (failure: Throwable) {
+            if (RestoreAcquireFailurePolicy.provesNoLease(failure)) {
+                operation.deleteRecursively()
+            }
+            throw failure
+        }
+        return placeholder.copy(lease = lease).also { writeLease(operation, it) }
+    }
+}
+
+internal object RestoreAcquireFailurePolicy {
+    private val NO_LEASE_CODES = setOf(
+        "nemessix_quiescence_unauthorized",
+        "nemessix_quiescence_emulator_running",
+        "nemessix_quiescence_untrusted_provider",
+        "nemessix_quiescence_untrusted_emulator",
+    )
+
+    fun provesNoLease(failure: Throwable): Boolean =
+        generateSequence(failure as Throwable?) { it.cause }
+            .mapNotNull { it.message }
+            .any(NO_LEASE_CODES::contains)
+}
+
 internal object RestoreLeaseStore {
     private const val FILE_NAME = "lease.json"
 
@@ -512,16 +546,15 @@ class CloudRestorePipeline(private val context: Context) {
                 .joinToString("") { "%02x".format(it) }
             val operation = File(restoreRoot, operationId).apply { mkdirs() }
             val treeFingerprint = RestoreLeaseStore.treeFingerprint(treeUri)
-            RestoreLeaseStore.write(
-                operation,
-                DurableRestoreLease(
+            var durableLease = RestoreLeaseAcquireCoordinator.acquire(
+                operation = operation,
+                placeholder = DurableRestoreLease(
                     NemessixQuiescenceLease("", challenge, operationId, ""),
                     treeFingerprint,
                 ),
+                acquireLease = { quiescence.acquire(operationId, challenge) },
             )
-            val lease = quiescence.acquire(operationId, challenge)
-            var durableLease = DurableRestoreLease(lease, treeFingerprint)
-            RestoreLeaseStore.write(operation, durableLease)
+            val lease = durableLease.lease
             val desired = File(operation, "incoming")
             val encryptedBackup = File(operation, "before.mhsavebundle")
             var secret: ByteArray? = null

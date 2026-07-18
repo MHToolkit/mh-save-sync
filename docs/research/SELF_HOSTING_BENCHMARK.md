@@ -1,7 +1,7 @@
 # Self-Hosting Benchmark and Failure Injection Ledger
 
-- Status: local Podman cold-start, persistence, conflict, restart-resume, backup and destructive restore verified; remote and long-idle runs remain open.
-- Last updated: 2026-07-05
+- Status: local Podman cold-start, persistence, conflict, restart-resume, backup, destructive restore and >2,000-object readiness scan verified; remote hardening and long-idle runs remain open.
+- Last updated: 2026-07-18
 - Scope: Docker/Podman local self-hosting and optional isolated Aliyun deployment on `8.130.112.207` without touching existing `nemessix-room` services.
 
 ## 1. Deployment shape to benchmark
@@ -44,7 +44,9 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 | MinIO backup/restore | Stop API writers, archive object volume, destroy both volumes, restore. | archive checksum, referenced-object verification. | **Passed locally.** archive SHA-256 `b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f`; `dangling_snapshot_objects=0` after destructive restore. |
 | Chunk upload interruption | Upload a chunk, stop/restart server, upload manifest and commit same upload session. | resumed commit ID, no bad HEAD. | **Passed locally.** upload session survived restart and committed as first snapshot; HEAD `119beee8ef738ddf81cceba508a7ef8801b6e5cc572e9ecf44302bfc43e20fc1`. |
 | Committed object loss | Delete a MinIO object referenced by committed history. | readiness failure, then successful disaster restore. | **Passed locally.** `/ready` returned HTTP 503 with `missing-object`; destructive two-store restore returned readiness to 200 with zero dangling references. |
-| DB commit crash | Crash after object upload before DB insert; GC later reclaims orphan after grace. | orphan list before/after GC. | Pending. |
+| Readiness beyond 2,000 objects | One committed snapshot references 2,001 object rows; omit only the final object, then add it and retry. | first `/ready` is 503 without leaking the storage key; second is ready; no total scan cap. | **Passed locally.** Persistent readiness now uses a repeatable-read transaction and 256-row keyset pages. `scripts/readiness-fullscan-test.sh` runs the real PostgreSQL fixture; the former fixed `LIMIT 2000` regression is covered. |
+| DB commit crash | Inject failure immediately before and after the PostgreSQL transaction commit; expire the abandoned upload and sweep after grace. | snapshot/head/upload rows before/after, aggregate GC count, referenced object retained. | **Passed locally.** Before-commit injection rolled back snapshot/HEAD and left the uploaded manifest reclaimable; after-commit injection returned an error while snapshot/HEAD stayed durable and GC retained its object. `scripts/server-crash-gc-test.sh` runs both real PostgreSQL fixtures. |
+| Orphan GC pagination, version race and recovery | Create 1,005 S3-only objects plus one PostgreSQL-tracked orphan and one referenced object; run logical GC, re-upload the tracked key under an active session, then run physical purge and stop MinIO. | listing crosses one S3 page; captured generation and older versions are purged; newer upload remains readable; exact queue/version counts; readiness 200; no storage key in stderr. | **Passed locally.** Dry-run and logical GC reported 1,006; the durable purge queue captured each old head version; physical purge reported 1,006 while preserving `new-current`; PostgreSQL retained two live objects with both GC queues empty; MinIO retained exactly two live/current versions; `/ready` returned 200; unavailable MinIO exposed only the redacted `object-store unavailable` code. `scripts/orphan-gc-compose-e2e.sh`. |
 | HEAD CAS race | Two upload sessions commit on the same base. | one fast-forward, one conflict branch; both snapshots retained. | **Passed locally.** Black-box API run produced three retained snapshots, one conflict branch and unchanged HEAD after stale-base commit. |
 | Resource idle | 10 minute idle service with no changes. | CPU, RSS, object/DB I/O. | Partial. One post-restore sample: server 0.13% CPU / 2.044 MiB RSS; PostgreSQL 1.70% / 52.18 MiB; MinIO 1.56% / 73.85 MiB. Ten-minute series remains pending. |
 
@@ -54,7 +56,16 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 
 - `compose.yaml` with healthchecks, resource limits, named volumes, project-local network, non-root server user and secret-file mounts: present.
 - SQL migrations: `migrations/001_init.sql` present.
-- Backup/restore/verify/orphan scripts: present. The server applies embedded SQLx migrations before accepting traffic.
+- Backup/restore/verify/orphan scripts: present. Orphan GC defaults to dry-run,
+  uses a seven-day grace period, treats snapshot references plus unexpired
+  upload sessions as roots, and uses durable mark/lease rows plus per-object
+  advisory locks rather than locking hot tables during S3 I/O. The server
+  applies embedded SQLx migrations before accepting traffic.
+- Versioned physical purge: migration 006 records the head-version boundary in
+  a second durable queue. Compose deletes only that captured generation and
+  older versions, preserving any newer re-upload, and acknowledges only after
+  success. Generic S3 deployments must configure an
+  equivalent version lifecycle/worker and monitor `physical_purge_pending`.
 - `README.md` with 5-minute local demo, upgrade/rollback and disaster-recovery runbook.
 - `.env.example` with quoted non-secret placeholders. Real `.env` is ignored and stored outside the repo.
 
