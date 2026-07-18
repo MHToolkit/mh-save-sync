@@ -56,6 +56,8 @@ trap 'rm -f "$signature_report"' EXIT
 "$apksigner" verify --verbose --print-certs "$apk" > "$signature_report"
 grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$signature_report" \
   || blocked "release APK is not v2 signed"
+grep -q '^Number of signers: 1$' "$signature_report" \
+  || blocked "release APK must contain exactly one signer"
 actual_cert_sha256="$(
   sed -n \
     -e 's/^Signer #1 certificate SHA-256 digest: //p' \

@@ -24,6 +24,14 @@ if (releaseSigningPartiallyConfigured) {
         "Android release signing is only partially configured; set all MH_SAVE_SYNC_ANDROID_* variables",
     )
 }
+val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("release", ignoreCase = true)
+}
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw GradleException(
+        "Android release signing is not configured; use scripts/android-package-release.sh",
+    )
+}
 
 android {
     namespace = "org.mhtoolkit.savesync"
@@ -68,17 +76,6 @@ android {
     }
 
 }
-
-tasks.matching { it.name in setOf("packageRelease", "assembleRelease", "bundleRelease") }
-    .configureEach {
-        doFirst {
-            if (!releaseSigningConfigured) {
-                throw GradleException(
-                    "Android release signing is not configured; use scripts/android-package-release.sh",
-                )
-            }
-        }
-    }
 
 val buildRustAndroid by tasks.registering(Exec::class) {
     val repoRoot = rootProject.projectDir.parentFile.parentFile

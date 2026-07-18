@@ -20,6 +20,12 @@ The wrapper requires a clean Git worktree before building so the commit in the
 artifact filename is a truthful provenance anchor rather than a label applied
 to uncommitted source.
 
+Gradle rejects every requested `Release` task at configuration time unless all
+four signing variables are present. This covers direct AGP entry points such as
+`packageReleaseUniversalApk` and `signReleaseBundle`, not only
+`assembleRelease`. `scripts/android-release-signing-contract-test.sh` keeps
+those bypass attempts in the local/CI regression set.
+
 Nemessix production builds may pin only the production certificate above for
 `SaveQuiescenceV1`. The Android debug signer
 `ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb`
