@@ -1,8 +1,8 @@
 {
   "android_signer_migration": true,
-  "verified_at": "2026-07-18T15:52:01+08:00",
+  "verified_at": "2026-07-18T16:05:07+08:00",
   "source_base": "main@b13f64a6f6202ab2854f2b18cc812e8128fa458e",
-  "packaging_commit": "3d49c7d",
+  "packaging_commit": "0b66934",
   "package": "org.mhtoolkit.savesync",
   "installed_archive": {
     "artifact": "mh-save-sync-63da8e5-debug.apk",
@@ -17,10 +17,11 @@
       "v3_1": false,
       "v4": false
     },
-    "private_key_control": "confirmed by exact certificate match to the local Android debug keystore; key material not exported"
+    "private_key_control": "confirmed by exact certificate match to the sealed predecessor keystore; key material not exported",
+    "sealed_keystore": "redacted; local Secrets directory mode 0600 only"
   },
   "migration_artifact": {
-    "artifact": "mh-save-sync-3d49c7d-signer-migration.apk",
+    "artifact": "mh-save-sync-0b66934-signer-migration.apk",
     "artifact_location": "local MHSaveSync migration backup directory",
     "sha256": "b587761d4d3ef8a1e3ff3a1b7a67ce5f893d11283d86f0ad826bb15986246a92",
     "version_code": 4,
@@ -51,6 +52,9 @@
     "gradle_assemble_release": "pass",
     "apksigner_verify": "pass",
     "apksigner_lineage_history": "pass",
+    "exact_scheme_and_single_signer_gate": "pass",
+    "secret_realpath_and_mode_gate": "pass",
+    "predecessor_certificate_pin": "pass",
     "version_increment_gate": "pass",
     "secret_scan": "pass",
     "device_installation": "not performed"
