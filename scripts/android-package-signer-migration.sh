@@ -170,12 +170,21 @@ old_rollback_capability="$(
     in_old && /^Has rollback capability/ { print $NF; exit }
   ' "$lineage_report"
 )"
+old_permission_capability="$(
+  awk '
+    /^Signer #1 in lineage certificate DN:/ { in_old = 1; next }
+    /^Signer #2 in lineage certificate DN:/ { in_old = 0 }
+    in_old && /^Has permission capability/ { print $NF; exit }
+  ' "$lineage_report"
+)"
 [[ "$actual_current_cert_sha256" == "$expected_new_cert_sha256" ]] \
   || blocked "migration APK current signer is not the production certificate"
 [[ "$actual_old_cert_sha256" == "$expected_old_cert_sha256" ]] \
   || blocked "lineage does not begin with the installed debug certificate"
 [[ "$old_installed_data_capability" == "true" ]] \
   || blocked "old signer lacks installed-data migration capability"
+[[ "$old_permission_capability" == "true" ]] \
+  || blocked "old signer lacks signature-permission migration capability"
 [[ "$old_rollback_capability" == "false" ]] \
   || blocked "old signer must not retain rollback capability"
 [[ "$actual_new_cert_sha256" == "$expected_new_cert_sha256" ]] \
@@ -199,4 +208,5 @@ printf 'PREVIOUS_SIGNER_CERT_SHA256=%s\n' "$expected_old_cert_sha256"
 printf 'CURRENT_SIGNER_CERT_SHA256=%s\n' "$expected_new_cert_sha256"
 printf 'SIGNATURE_SCHEME_V3=true\n'
 printf 'INSTALLED_DATA_CAPABILITY=true\n'
+printf 'SIGNATURE_PERMISSION_CAPABILITY=true\n'
 printf 'ROLLBACK_CAPABILITY=false\n'

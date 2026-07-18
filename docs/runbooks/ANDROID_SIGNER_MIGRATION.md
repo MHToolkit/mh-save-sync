@@ -50,10 +50,21 @@ Official sources, accessed 2026-07-18:
 - Android SDK Build Tools 36.0.0 `apksigner rotate`, `sign`, and `lineage`
   command help installed locally.
 
-The lineage grants the predecessor only `installed-data`. It deliberately does
-not grant shared UID, signature permission, rollback, or authenticator
-capabilities. In particular, rollback remains false so the debug key cannot
-retake control after migration.
+The lineage grants the predecessor `installed-data` **and** `signature
+permission`. The latter is required because the AndroidX manifest merger emits
+the package-owned signature permission
+`org.mhtoolkit.savesync.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`; without the
+capability Android 16 rejects an in-place signer rotation with
+`INSTALL_FAILED_DUPLICATE_PERMISSION`. It deliberately does not grant shared
+UID, rollback, or authenticator capabilities. In particular, rollback remains
+false so the debug key cannot retake control after migration.
+
+`signature-permission=true` is a migration-window capability, not a permanent
+trust decision for the predecessor debug key. After the known Alpha install
+base has migrated, a later production release must revoke that predecessor
+capability while keeping rollback false. Removing the AndroidX permission from
+the manifest is not an acceptable shortcut because Android 9-12 use it when
+registering non-exported dynamic receivers.
 
 ## Secret layout
 
@@ -76,8 +87,8 @@ Only certificate and artifact hashes are public evidence.
 
 The packaging script refuses dirty Git state, missing secrets, wrong file
 modes, an unexpected predecessor certificate, an unexpected production
-certificate, a lineage without installed-data capability, a lineage that lets
-the debug signer roll back, or a versionCode not greater than installed
+certificate, a lineage without installed-data or signature-permission
+capability, a lineage that lets the debug signer roll back, or a versionCode not greater than installed
 versionCode `3`.
 
 ```bash
@@ -90,7 +101,8 @@ Default migration identity:
 - versionName `0.1.0-alpha.3-signer-migration.1`;
 - rotation minimum SDK `28`;
 - current signer: production certificate;
-- predecessor: installed debug certificate with installed-data capability.
+- predecessor: installed debug certificate with installed-data and
+  signature-permission capabilities.
 
 Pure offline verification:
 
@@ -106,8 +118,9 @@ rtk env JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" 
 
 Expected result: v3 verification succeeds, the current signer is the
 production certificate, lineage signer #1 is the installed debug certificate,
-lineage signer #2 is the production certificate, and installed-data capability
-is true.
+and lineage signer #2 is the production certificate; both installed-data and
+signature-permission capabilities are true for signer #1, while rollback is
+false.
 
 The verified offline artifact built from packaging commit `0b66934` is
 `mh-save-sync-0b66934-signer-migration.apk`, SHA-256
@@ -131,6 +144,10 @@ the production certificate as the current signer with the debug certificate in
 history.
 
 If an actual device rejects the v3 lineage despite the offline gates, stop. Do
-not uninstall or clear data. The fallback is a separately authorized export,
+not uninstall or clear data. First inspect the exact PackageManager error and
+reconcile the manifest's package-owned signature permissions with lineage
+capabilities; `INSTALL_FAILED_DUPLICATE_PERMISSION` requires a corrected
+permission-capable lineage, not an uninstall. Only after a corrected lineage
+has also failed is the fallback a separately authorized export,
 uninstall/reinstall, recovery-phrase import and itemized hash reconciliation;
 it is not automatic and must never be attempted without the user's approval.

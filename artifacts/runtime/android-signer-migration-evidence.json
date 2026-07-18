@@ -1,8 +1,8 @@
 {
   "android_signer_migration": true,
-  "verified_at": "2026-07-18T16:05:07+08:00",
-  "source_base": "main@b13f64a6f6202ab2854f2b18cc812e8128fa458e",
-  "packaging_commit": "0b66934",
+  "verified_at": "2026-07-18T20:49:22+08:00",
+  "source_base": "main@9af3ac8360687b317ce5232688ecc0d9faf21a31",
+  "packaging_commit": "28b1ead",
   "package": "org.mhtoolkit.savesync",
   "installed_archive": {
     "artifact": "mh-save-sync-63da8e5-debug.apk",
@@ -21,9 +21,9 @@
     "sealed_keystore": "redacted; local Secrets directory mode 0600 only"
   },
   "migration_artifact": {
-    "artifact": "mh-save-sync-0b66934-signer-migration.apk",
+    "artifact": "mh-save-sync-28b1ead-signer-migration.apk",
     "artifact_location": "local MHSaveSync migration backup directory",
-    "sha256": "b587761d4d3ef8a1e3ff3a1b7a67ce5f893d11283d86f0ad826bb15986246a92",
+    "sha256": "ea90c169b9b29e01a73c5fb187996ec34a400dce5ab3fac8b4784b28ae6bd726",
     "version_code": 4,
     "version_name": "0.1.0-alpha.3-signer-migration.1",
     "current_signer_certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
@@ -40,7 +40,7 @@
     "successor_certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
     "installed_data_capability": true,
     "shared_uid_capability": false,
-    "permission_capability": false,
+    "permission_capability": true,
     "rollback_capability": false,
     "auth_capability": false,
     "rotation_min_sdk": 28,
@@ -57,7 +57,17 @@
     "predecessor_certificate_pin": "pass",
     "version_increment_gate": "pass",
     "secret_scan": "pass",
-    "device_installation": "not performed"
+    "device_installation": "alpha-4 rejected before mutation: INSTALL_FAILED_DUPLICATE_PERMISSION; corrected artifact not installed",
+    "device_failure_evidence": {
+      "serial": "192.168.101.100:38631",
+      "api": 36,
+      "data_dir_stat_before": "65101:31988:700:10374:10374",
+      "data_dir_stat_after_failed_install": "65101:31988:700:10374:10374",
+      "version_after_failed_install": "0.1.0-alpha.3",
+      "version_code_after_failed_install": 3,
+      "failure": "INSTALL_FAILED_DUPLICATE_PERMISSION",
+      "alpha_4_status": "superseded/failed-device-gate"
+    }
   },
   "platform_basis": "Android 9+ APK Signature Scheme v3 proof-of-rotation; Android 16 is supported",
   "privacy": "No keystore bytes, password, private key, lineage binary, recovery secret, token, device data or save data is included."
