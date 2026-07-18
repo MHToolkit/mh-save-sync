@@ -4,6 +4,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+macos_version_name="${MH_SAVE_SYNC_MACOS_VERSION_NAME:-0.1.0-alpha.3}"
+macos_version_code="${MH_SAVE_SYNC_MACOS_VERSION_CODE:-4}"
+[[ -n "$macos_version_name" ]] || { echo "MH_SAVE_SYNC_MACOS_VERSION_NAME must not be blank" >&2; exit 2; }
+[[ "$macos_version_code" =~ ^[1-9][0-9]*$ ]] || { echo "MH_SAVE_SYNC_MACOS_VERSION_CODE must be a positive integer" >&2; exit 2; }
+
 swift build -c release --package-path apps/macos
 cargo build --release -q -p save-cli --bin mh-save
 
@@ -34,7 +39,7 @@ cp "${repo_root}/apps/macos/Resources/AppIcon/mh-save-sync-menubar-template.png"
   "${resources}/mh-save-sync-menubar-template.png"
 chmod 755 "${macos}/MHSaveSyncMac" "${macos}/mh-save"
 
-cat > "${contents}/Info.plist" <<'PLIST'
+cat > "${contents}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -57,9 +62,9 @@ cat > "${contents}/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0-alpha.1</string>
+<string>${macos_version_name}</string>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>${macos_version_code}</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>
