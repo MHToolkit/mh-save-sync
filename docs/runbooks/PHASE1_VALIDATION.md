@@ -1199,3 +1199,38 @@ Open Phase 1D gates:
 - Root UX defect: the Mac helper had no durable, locally trusted pre-game base HEAD, so a normal post-exit upload could not prove ancestry and correctly failed safe as a conflict. Resolved branches also remained in the pending-conflict query, making an already handled choice look permanently unresolved.
 - Fix: the Mac client now uses only a HEAD established by successful local restore/upload as its session base; merely seeing a newer remote HEAD never authorizes overwrite. Exit uploads pass that frozen base, and unknown/stale ancestry still creates a safe branch. The server retains immutable conflict history but exposes only unresolved branches as pending after an authenticated explicit choice with current-HEAD CAS.
 - The current Mac bytes were independently proven equal to cloud HEAD `…478f16` by a stopped-emulator corruption/restore exercise. The local session ledger was seeded to that verified HEAD with mode `0600`; future Mac sessions therefore have a trustworthy base.
+
+### 2026-07-18 B3 cross-platform icon system
+
+- Shipped the approved B3 “加密紫” identity: dark `#4936B7` to light
+  `#9B72F2`, white shield, save slot and verification check. The deterministic
+  generator now checks gradient direction, transparent outer pixels, all ten
+  ICNS representations and byte-for-byte regeneration.
+- macOS bundle verification passed 16 Swift tests and installed
+  `/Applications/MH Save Sync.app`. `CFBundleIconFile=MHSaveSync`; the installed
+  ICNS SHA-256 is `37b991b...903214`, the dedicated 36×36 template SHA-256 is
+  `f8311690...b0d3b`, and Accessibility reports a running status item titled
+  `MH 云存档 · 就绪` with description `状态菜单`.
+- Android ships legacy/round mipmaps, API 26 adaptive icons, API 33 themed
+  monochrome icons and a dedicated notification alpha glyph. The themed glyph
+  was reduced to the 66×66 adaptive safe zone and the smoke gate now rejects
+  coordinates outside `21..87` in the 108 viewport.
+- The OnePlus Ace 5 was updated in place without clearing app data to
+  `org.mhtoolkit.savesync` versionCode `3`, versionName `0.1.0-alpha.3`. The
+  installed APK is byte-identical to `mh-save-sync-63da8e5-debug.apk`, SHA-256
+  `8e32a75b...58b9f`; install/launch and compact-Chinese UI copy smokes passed.
+  The Settings icon cache initially showed the old default icon, then displayed
+  B3 immediately after force-stopping and reopening Settings, proving the APK
+  resource was correct rather than requiring app-data deletion.
+- OxygenOS exposes a vendor override (`oplus_smallicon_use_app_icon=true`) for
+  the foreground notification and substitutes the app launcher icon at runtime.
+  The APK resource table still contains `drawable/ic_stat_save_sync`, and
+  `ActiveSessionService` references it directly. This is recorded as a
+  ColorOS/OxygenOS presentation variance, not silently reported as the standard
+  Android notification rendering.
+- The frozen Nemessix package was not installed, removed or modified. Its
+  post-validation version remains `3d0ec57af-vanilla`, versionCode `33267691`,
+  with unchanged last-update time `2026-07-17 19:47:03`.
+- Full redacted evidence and artifact hashes are recorded in
+  `artifacts/runtime/icon-system-evidence.json`; no save bytes, recovery secret,
+  device secret or token are included.
