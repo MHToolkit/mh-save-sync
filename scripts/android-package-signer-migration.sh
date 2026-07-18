@@ -7,7 +7,7 @@ cd "$repo_root"
 secret_file="${MH_SAVE_SYNC_ANDROID_RELEASE_ENV:-$HOME/Documents/Secrets/mh-save-sync-android-release.env}"
 old_secret_file="${MH_SAVE_SYNC_ANDROID_OLD_SIGNER_ENV:-$HOME/Documents/Secrets/mh-save-sync-android-old-signer.env}"
 lineage_file="${MH_SAVE_SYNC_ANDROID_LINEAGE:-$HOME/Documents/Secrets/mh-save-sync-android-signing-lineage.bin}"
-old_keystore="${MH_SAVE_SYNC_ANDROID_OLD_KEYSTORE:-$HOME/.android/debug.keystore}"
+old_keystore="${MH_SAVE_SYNC_ANDROID_OLD_KEYSTORE:-$HOME/Documents/Secrets/mh-save-sync-android-old-signer.keystore}"
 old_alias="${MH_SAVE_SYNC_ANDROID_OLD_KEY_ALIAS:-androiddebugkey}"
 old_store_password_env="${MH_SAVE_SYNC_ANDROID_OLD_STORE_PASSWORD_ENV:-MH_SAVE_SYNC_ANDROID_OLD_STORE_PASSWORD}"
 old_key_password_env="${MH_SAVE_SYNC_ANDROID_OLD_KEY_PASSWORD_ENV:-MH_SAVE_SYNC_ANDROID_OLD_KEY_PASSWORD}"
@@ -22,16 +22,26 @@ blocked() {
   exit 77
 }
 
-secret_mode_is_600() {
-  [[ -f "$1" && "$(stat -f '%Lp' "$1")" == "600" ]]
+require_secret_file() {
+  local candidate="$1"
+  local label="$2"
+  local secrets_root resolved
+  secrets_root="$(realpath "$HOME/Documents/Secrets")"
+  [[ -f "$candidate" ]] || blocked "$label is missing"
+  resolved="$(realpath "$candidate")"
+  case "$resolved" in
+    "$secrets_root"/*) ;;
+    *) blocked "$label must resolve inside ~/Documents/Secrets" ;;
+  esac
+  [[ "$(stat -f '%Lp' "$resolved")" == "600" ]] || blocked "$label must use mode 600"
 }
 
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] \
   || blocked "signer migration packaging requires a clean Git worktree"
-secret_mode_is_600 "$secret_file" || blocked "release signing env must exist with mode 600"
-secret_mode_is_600 "$old_secret_file" || blocked "old signer env must exist with mode 600"
-secret_mode_is_600 "$lineage_file" || blocked "signing lineage must exist with mode 600"
-[[ -f "$old_keystore" ]] || blocked "old signer keystore is missing"
+require_secret_file "$secret_file" "release signing env"
+require_secret_file "$old_secret_file" "old signer env"
+require_secret_file "$lineage_file" "signing lineage"
+require_secret_file "$old_keystore" "old signer keystore"
 [[ "$version_code" =~ ^[1-9][0-9]*$ && "$version_code" -gt 3 ]] \
   || blocked "migration versionCode must be greater than the installed versionCode 3"
 [[ -n "$version_name" ]] || blocked "migration versionName must not be blank"
@@ -54,7 +64,7 @@ required=(
 for name in "${required[@]}"; do
   [[ -n "${!name:-}" ]] || blocked "missing required signing variable: $name"
 done
-secret_mode_is_600 "$MH_SAVE_SYNC_ANDROID_KEYSTORE" || blocked "release keystore must use mode 600"
+require_secret_file "$MH_SAVE_SYNC_ANDROID_KEYSTORE" "release keystore"
 
 if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -65,6 +75,19 @@ apksigner="$(find "$sdk_root/build-tools" -maxdepth 2 -type f -name apksigner | 
 aapt="$(find "$sdk_root/build-tools" -maxdepth 2 -type f -name aapt | sort -V | tail -n 1)"
 [[ -x "$apksigner" ]] || blocked "apksigner is unavailable"
 [[ -x "$aapt" ]] || blocked "aapt is unavailable"
+
+old_cert_sha256="$(
+  keytool -list -v \
+    -keystore "$old_keystore" \
+    -alias "$old_alias" \
+    -storepass:env "$old_store_password_env" \
+    | sed -n 's/^[[:space:]]*SHA256: //p' \
+    | tr -d ':' \
+    | tr '[:upper:]' '[:lower:]' \
+    | head -n 1
+)"
+[[ "$old_cert_sha256" == "$expected_old_cert_sha256" ]] \
+  || blocked "old signer keystore certificate does not match the installed APK"
 
 export MH_SAVE_SYNC_ANDROID_VERSION_CODE="$version_code"
 export MH_SAVE_SYNC_ANDROID_VERSION_NAME="$version_name"
@@ -108,8 +131,18 @@ trap cleanup EXIT
 "$apksigner" lineage --in "$artifact" --print-certs > "$lineage_report"
 "$aapt" dump badging "$artifact" > "$badging_report"
 
-grep -Fqx 'Verified using v3 scheme (APK Signature Scheme v3): true' "$signature_report" \
-  || blocked "migration APK is not v3 signed"
+expected_scheme_lines=(
+  'Verified using v1 scheme (JAR signing): false'
+  'Verified using v2 scheme (APK Signature Scheme v2): false'
+  'Verified using v3 scheme (APK Signature Scheme v3): true'
+  'Verified using v3.1 scheme (APK Signature Scheme v3.1): false'
+  'Verified using v4 scheme (APK Signature Scheme v4): false'
+  'Number of signers: 1'
+)
+for expected_line in "${expected_scheme_lines[@]}"; do
+  grep -Fqx "$expected_line" "$signature_report" \
+    || blocked "migration APK signature scheme/signer count mismatch"
+done
 actual_current_cert_sha256="$(
   sed -n \
     -e 's/^Signer #1 certificate SHA-256 digest: //p' \

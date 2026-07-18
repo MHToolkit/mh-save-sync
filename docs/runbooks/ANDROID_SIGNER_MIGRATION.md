@@ -26,17 +26,22 @@ Read-only `apksigner verify --verbose --print-certs` confirms:
   `ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb`;
 - v1 `false`, v2 `true`, v3 `false`, v3.1 `false`, v4 `false`.
 
-The fingerprint is an exact match for `~/.android/debug.keystore` alias
-`androiddebugkey`, so the predecessor private key required to authorize the
-rotation remains locally controllable. The production certificate SHA-256 is
+The fingerprint is an exact match for the predecessor key that has now been
+sealed at `~/Documents/Secrets/mh-save-sync-android-old-signer.keystore` with
+mode `0600`, so the private key required to authorize the rotation remains
+locally controllable without depending on mutable Android SDK state. The
+production certificate SHA-256 is
 `faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3`.
 
 ## Platform decision
 
 Android 9 introduced APK key rotation through APK Signature Scheme v3. The new
 APK embeds a proof-of-rotation linked list in which each prior key signs its
-successor. Android 13 and newer also make `checkSignatures` recognize the newest
-certificate. Android 16 is therefore inside the supported platform range.
+successor. AOSP explicitly says rotation is not recommended on Android 12
+(API 31) and earlier. Android 13 (API 33) and newer make `checkSignatures`
+recognize the newest certificate. Android 16 is therefore inside the supported
+and recommended platform range, while this migration's authorized device gate
+is deliberately limited to API 33 or newer.
 
 Official sources, accessed 2026-07-18:
 
@@ -60,6 +65,8 @@ The binary lineage is stored at:
 
 The predecessor password environment is stored separately at
 `~/Documents/Secrets/mh-save-sync-android-old-signer.env`, also mode `0600`.
+The sealed predecessor keystore is
+`~/Documents/Secrets/mh-save-sync-android-old-signer.keystore`, mode `0600`.
 
 It must remain mode `0600`. The old and production keystores, passwords, and the
 lineage binary never enter Git, build logs, evidence JSON, or release archives.
@@ -113,6 +120,7 @@ lineage rather than a legacy v2 signature.
 ## Authorized device migration gate
 
 No device action belongs to this PR. A later, explicitly authorized acceptance
+is permitted only when the target reports API level 33 or newer. It
 must first export the recovery phrase and a redacted application-state inventory,
 then record hashes of the app-private database and preferences through a
 platform-supported backup path if available. Only after those checkpoints may
