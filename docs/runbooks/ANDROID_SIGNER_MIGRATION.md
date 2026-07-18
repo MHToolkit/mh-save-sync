@@ -59,6 +59,13 @@ capability Android 16 rejects an in-place signer rotation with
 UID, rollback, or authenticator capabilities. In particular, rollback remains
 false so the debug key cannot retake control after migration.
 
+`signature-permission=true` is a migration-window capability, not a permanent
+trust decision for the predecessor debug key. After the known Alpha install
+base has migrated, a later production release must revoke that predecessor
+capability while keeping rollback false. Removing the AndroidX permission from
+the manifest is not an acceptable shortcut because Android 9-12 use it when
+registering non-exported dynamic receivers.
+
 ## Secret layout
 
 The binary lineage is stored at:
