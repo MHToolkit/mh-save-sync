@@ -1234,3 +1234,27 @@ Open Phase 1D gates:
 - Full redacted evidence and artifact hashes are recorded in
   `artifacts/runtime/icon-system-evidence.json`; no save bytes, recovery secret,
   device secret or token are included.
+
+### 2026-07-18 dedicated Android release signer
+
+- The repository previously had no MH Save Sync release keystore or release
+  signing Gradle contract; Android artifacts were debug-signed only.
+- A dedicated production identity now lives under `~/Documents/Secrets` with
+  the keystore, environment file and exported public certificate all mode
+  `0600`. Private key material and passwords were not added to Git or logs.
+- Production certificate SHA-256:
+  `faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3`.
+  The former debug signer `ef44f7a...adedb` remains internal-only and is not a
+  production trust root.
+- `scripts/android-package-release.sh` fails closed for missing/partial signing
+  configuration, checks the keystore file modes, builds the release APK,
+  verifies APK Signature Scheme v2 and rejects any signer other than the pinned
+  production certificate.
+- Exact commit artifact: `mh-save-sync-e76a659-release.apk`, SHA-256
+  `a729e230...bfaef`. It was intentionally not installed over the debug-signed
+  phone app because Android signer transitions require an explicit data
+  migration; uninstalling the user's configured debug app was not acceptable.
+- Public, secret-free evidence is recorded in
+  `artifacts/runtime/android-release-signing-evidence.json`. Nemessix receives
+  only the production certificate SHA-256 contract, never the private key or
+  passwords.
