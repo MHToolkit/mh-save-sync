@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">MH Save Sync B3 encrypted purple icon</title>
+  <desc id="desc">A white shield containing a save slot and verification check on a purple gradient field.</desc>
+  <defs>
+    <linearGradient id="b3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4936B7"/>
+      <stop offset="1" stop-color="#9B72F2"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="224" fill="url(#b3)"/>
+  <g transform="translate(152 152) scale(6)">
+    <path d="M60 12 99 27v28c0 26-15 43-39 54C36 98 21 81 21 55V27z" fill="#FFFFFF"/>
+    <rect x="38" y="40" width="44" height="38" rx="8" fill="#4936B7"/>
+    <path d="M46 40v15h28V40M48 69h24" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m48 89 9 8 17-19" fill="none" stroke="#4936B7" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
