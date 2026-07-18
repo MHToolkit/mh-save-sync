@@ -110,7 +110,12 @@ if swift run --package-path apps/macos MHSaveSyncMac --configured-upload \
   echo "configured upload unexpectedly succeeded against closed port" >&2
   exit 1
 fi
-grep -q -- "--secret-hex <redacted>" "$tmp/redacted-upload.err"
+if ! grep -q -- "--secret-hex <redacted>" "$tmp/redacted-upload.err"; then
+  # A real Nemessix process may already be running on the developer host. In
+  # that case the configured upload must fail closed before constructing the
+  # secret-bearing CLI command; this is an equally valid privacy outcome.
+  grep -q "Nemessix 正在运行" "$tmp/redacted-upload.err"
+fi
 if grep -q "6666666666666666666666666666666666666666666666666666666666666666" "$tmp/redacted-upload.err"; then
   echo "configured upload error leaked recovery secret" >&2
   exit 1
