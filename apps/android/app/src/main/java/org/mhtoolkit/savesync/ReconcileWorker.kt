@@ -4,73 +4,182 @@ import android.content.Context
 import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import org.json.JSONObject
 
-class ReconcileWorker(
+internal object SafGrantPolicy {
+    fun isUsable(root: String?, readablePersistedUris: Set<String>): Boolean =
+        root != null && root in readablePersistedUris
+}
+
+private data class PendingLedgerReceipt(
+    val snapshotId: String,
+    val serverEndpoint: String,
+    val treeUri: String,
+    val deviceId: String,
+    val fingerprint: String,
+)
+
+private object PendingLedgerReceiptStore {
+    private const val KEY = "pending_upload_ledger_receipt"
+
+    fun write(context: Context, receipt: PendingLedgerReceipt) {
+        val json = JSONObject()
+            .put("snapshot_id", receipt.snapshotId)
+            .put("server_endpoint", receipt.serverEndpoint)
+            .put("tree_uri", receipt.treeUri)
+            .put("device_id", receipt.deviceId)
+            .put("fingerprint", receipt.fingerprint)
+        context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putString(KEY, json.toString()).commit()
+    }
+
+    fun read(context: Context): PendingLedgerReceipt? = runCatching {
+        val raw = context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
+            .getString(KEY, null) ?: return null
+        val json = JSONObject(raw)
+        PendingLedgerReceipt(
+            snapshotId = json.getString("snapshot_id"),
+            serverEndpoint = json.getString("server_endpoint"),
+            treeUri = json.getString("tree_uri"),
+            deviceId = json.getString("device_id"),
+            fingerprint = json.getString("fingerprint"),
+        )
+    }.getOrNull()
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
+            .edit().remove(KEY).apply()
+    }
+}
+
+open class CaptureWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val preferences = applicationContext.getSharedPreferences(
-            SyncScheduler.PREFERENCES,
-            Context.MODE_PRIVATE,
+            SyncScheduler.PREFERENCES, Context.MODE_PRIVATE,
         )
-        val reason = inputData.getString("reason") ?: "periodic"
-        val endpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
-        val target = preferences.getString(
-            SyncScheduler.LAST_SYNC_TARGET,
-            "MH3G / Android Nemessix",
-        ) ?: "MH3G / Android Nemessix"
         if (!preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)) {
             return Result.success()
         }
-
+        val reason = inputData.getString("reason") ?: "periodic"
+        val endpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
         val root = preferences.getString(SyncScheduler.SAF_ROOT, null)
-        val stillGranted = root != null && applicationContext.contentResolver.persistedUriPermissions.any {
-            it.uri.toString() == root && it.isReadPermission
-        }
+        val readablePersistedUris = applicationContext.contentResolver.persistedUriPermissions
+            .filter { it.isReadPermission }
+            .map { it.uri.toString() }
+            .toSet()
+        val stillGranted = SafGrantPolicy.isUsable(root, readablePersistedUris)
         if (root != null && !stillGranted) {
             preferences.edit().remove(SyncScheduler.SAF_ROOT).apply()
         }
-        val dirty = preferences.getBoolean(SyncScheduler.DIRTY, false)
-        val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
-        val result = DurableSyncPipeline(applicationContext).execute(
+        val (generation, dirty) = SyncScheduler.dirtyGeneration(applicationContext)
+        val sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false)
+        val capture = DurableSyncPipeline(applicationContext).capture(
             reason = reason,
             treeUri = root?.takeIf { stillGranted }?.let(Uri::parse),
             serverEndpoint = endpoint,
             dirty = dirty,
             sessionActive = sessionActive,
         )
-        if (result.queued) {
-            preferences.edit().putBoolean(SyncScheduler.DIRTY, false).apply()
+        capture.queued?.let { queued ->
+            if (SyncScheduler.acknowledgeCapturedGeneration(applicationContext, generation)) {
+                capture.localFingerprint?.let { fingerprint ->
+                    PendingLedgerReceiptStore.write(
+                        applicationContext,
+                        PendingLedgerReceipt(
+                            snapshotId = queued.snapshotId,
+                            serverEndpoint = SyncServerProbe.normalizeServer(endpoint),
+                            treeUri = requireNotNull(root),
+                            deviceId = SyncServerProbe.deviceId(applicationContext),
+                            fingerprint = fingerprint,
+                        ),
+                    )
+                }
+            }
+            preferences.edit()
+                .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, queued.pendingCount)
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+                .putString(SyncScheduler.LAST_SYNC_PHASE, "已保存到本机队列")
+                .putString(
+                    SyncScheduler.LAST_SYNC_SUMMARY,
+                    "稳定快照已端到端加密并写入手机持久队列，等待符合网络和电量条件后上传。",
+                )
+                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "可以离线离开；后台稍后自动续传。")
+                .putString(SyncScheduler.LAST_SYNC_ERROR, "")
+                .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
+                .apply()
+            SyncScheduler.enqueueConstrainedDrain(applicationContext)
+            return Result.success()
         }
+        if (capture.localError != null) {
+            val revoked = capture.localError == "saf_permission_required"
+            preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+                .putString(SyncScheduler.LAST_SYNC_PHASE, if (revoked) "需要重新授权" else "本地快照未创建")
+                .putString(
+                    SyncScheduler.LAST_SYNC_SUMMARY,
+                    if (revoked) "无法读取新的存档候选；已有加密队列未删除。" else
+                        "同步安全停止：没有上传不稳定存档，也没有修改本地原始存档。",
+                )
+                .putString(
+                    SyncScheduler.LAST_SYNC_NEXT_ACTION,
+                    if (revoked) "请重新选择 Android Nemessix 存档目录。" else "确认 Nemessix 已退出后重试。",
+                )
+                .putString(SyncScheduler.LAST_SYNC_ERROR, capture.localError)
+                .apply()
+            return if (capture.localError in setOf("emulator_running", "capture_or_queue_failed")) {
+                Result.retry()
+            } else {
+                Result.success()
+            }
+        }
+        // Even when no new capture is needed, an old-endpoint queue remains visible and drainable.
+        SyncScheduler.enqueueConstrainedDrain(applicationContext)
+        return Result.success()
+    }
+}
+
+class DrainWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result {
+        val preferences = applicationContext.getSharedPreferences(
+            SyncScheduler.PREFERENCES, Context.MODE_PRIVATE,
+        )
+        val result = DurableSyncPipeline(applicationContext).drain()
+        val receipt = PendingLedgerReceiptStore.read(applicationContext)
+        if (
+            receipt != null && result.pendingCount == 0 && result.conflictCount == 0 &&
+            result.lastSnapshotId == receipt.snapshotId && result.lastCloudHead == receipt.snapshotId
+        ) {
+            runCatching {
+                SyncConsistencyLedgerStore(applicationContext).establish(
+                    binding = SyncConsistencyBinding(
+                        serverEndpoint = receipt.serverEndpoint,
+                        logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                        treeUri = receipt.treeUri,
+                        deviceId = receipt.deviceId,
+                    ),
+                    remoteHead = receipt.snapshotId,
+                    localFingerprint = receipt.fingerprint,
+                    mode = SyncEstablishmentMode.UPLOAD,
+                )
+            }.onSuccess { PendingLedgerReceiptStore.clear(applicationContext) }
+        }
+        val multipleEndpoints = result.pendingEndpointCount > 1
         val phase: String
         val summary: String
         val nextAction: String
         val error: String
         when {
-            result.localError == "server_required" -> {
-                phase = "需要服务器地址"
-                summary = "同步未执行：请先填写云存档服务器地址。"
-                nextAction = "填写服务器地址后重试；本地原始存档没有变化。"
-                error = "未配置服务器"
-            }
-            result.localError == "recovery_secret_required" -> {
+            result.lastError == "recovery_secret_required" -> {
                 phase = "需要恢复密钥"
-                summary = "同步未执行：请先导入与其他设备相同的恢复密钥。"
-                nextAction = "导入恢复密钥后重试；密钥不会上传到服务器。"
+                summary = "上传队列保留在手机上，但需要恢复密钥才能继续。"
+                nextAction = "导入与其他设备相同的恢复密钥。"
                 error = "未导入恢复密钥"
-            }
-            result.localError == "saf_permission_required" -> {
-                phase = "需要授权存档目录"
-                summary = "已有加密上传任务会继续重试，但无法读取新的 Android 存档候选。"
-                nextAction = "请重新选择 Android Nemessix 存档目录。"
-                error = "存档目录权限不可用"
-            }
-            result.localError != null -> {
-                phase = "本地快照未创建"
-                summary = "同步安全停止：没有上传不稳定存档，也没有修改本地原始存档。"
-                nextAction = "确认 Nemessix 已退出、目录权限有效后重试。"
-                error = "稳定快照或持久队列创建失败"
             }
             result.conflictCount > 0 -> {
                 phase = "检测到冲突"
@@ -80,8 +189,12 @@ class ReconcileWorker(
             }
             result.pendingCount > 0 -> {
                 phase = "离线队列待续传"
-                summary = "稳定快照已端到端加密并保存在手机队列中；云端不可用时不会丢失任务。"
-                nextAction = "保持网络可用，后台任务会自动续传。"
+                summary = if (multipleEndpoints) {
+                    "队列包含多个服务器地址的历史任务；每项会按创建时的原地址续传，不会静默迁移。"
+                } else {
+                    "加密快照仍在手机持久队列中，云端不可用不会丢失任务。"
+                }
+                nextAction = "满足 Wi-Fi、电量和充电偏好后会自动重试。"
                 error = "云端暂时不可用"
             }
             result.uploadedCount > 0 -> {
@@ -91,22 +204,25 @@ class ReconcileWorker(
                 error = ""
             }
             else -> {
-                phase = if (reason == "periodic") "定时对账完成" else "无需上传"
-                summary = "没有待续传任务，也没有需要创建的新稳定快照。"
-                nextAction = "退出游戏或收到保存完成事件后会再次检查。"
+                phase = "后台对账完成"
+                summary = "没有待续传任务。"
+                nextAction = "通过本工具启动游戏后，会在确认进程退出时创建稳定快照。"
                 error = ""
             }
         }
         preferences.edit()
             .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
-            .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+            .putString(SyncScheduler.LAST_SYNC_REASON, "constrained-drain")
             .putString(SyncScheduler.LAST_SYNC_SUMMARY, summary)
             .putString(SyncScheduler.LAST_SYNC_PHASE, phase)
             .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
             .putString(SyncScheduler.LAST_SYNC_ERROR, error)
-            .putString(SyncScheduler.LAST_SYNC_TARGET, target)
             .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, result.pendingCount)
+            .putInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, result.pendingEndpointCount)
             .apply()
         return if (result.shouldRetry) Result.retry() else Result.success()
     }
 }
+
+/** Compatibility target for WorkManager rows persisted by alpha.3. It never drains directly. */
+class ReconcileWorker(appContext: Context, params: WorkerParameters) : CaptureWorker(appContext, params)

@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(preferences.getBoolean(SyncScheduler.CHARGING_REQUIRED, false))
         }
         var sessionActive by remember {
-            mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true))
+            mutableStateOf(preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false))
         }
         var gameEnabled by remember {
             mutableStateOf(preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true))
@@ -158,6 +158,12 @@ class MainActivity : ComponentActivity() {
         }
         var syncError by remember {
             mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty())
+        }
+        var pendingUploads by remember {
+            mutableStateOf(preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0))
+        }
+        var pendingEndpoints by remember {
+            mutableStateOf(preferences.getInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, 0))
         }
         var launchGate by remember {
             mutableStateOf(DashboardContentPolicy.launchStatus(
@@ -219,7 +225,7 @@ class MainActivity : ComponentActivity() {
         fun refreshDashboardStateFromPreferences() {
             authorized = preferences.contains(SyncScheduler.SAF_ROOT)
             wifiOnly = preferences.getBoolean(SyncScheduler.WIFI_ONLY, true)
-            sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, true)
+            sessionActive = preferences.getBoolean(SyncScheduler.SESSION_ACTIVE, false)
             gameEnabled = preferences.getBoolean(SyncScheduler.GAME_MH3G_ENABLED, true)
             serverEndpoint = preferences.getString(SyncScheduler.SERVER_ENDPOINT, null).orEmpty()
             lastSummary = preferences.getString(
@@ -232,6 +238,8 @@ class MainActivity : ComponentActivity() {
                 "先完成设置，再点“检查并打开 Nemessix”。",
             ).orEmpty()
             syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
+            pendingUploads = preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
+            pendingEndpoints = preferences.getInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, 0)
             launchGateReason = preferences.getString(
                 SyncScheduler.LAUNCH_GATE_REASON,
                 "not-checked",
@@ -250,6 +258,8 @@ class MainActivity : ComponentActivity() {
                         SyncScheduler.LAST_SYNC_PHASE,
                         SyncScheduler.LAST_SYNC_NEXT_ACTION,
                         SyncScheduler.LAST_SYNC_ERROR,
+                        SyncScheduler.PENDING_UPLOAD_COUNT,
+                        SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT,
                         SyncScheduler.LAUNCH_GATE_SUMMARY,
                         SyncScheduler.LAUNCH_GATE_REASON,
                         SyncScheduler.SESSION_ACTIVE,
@@ -303,18 +313,13 @@ class MainActivity : ComponentActivity() {
             syncPhase = phase
             nextAction = action
             syncError = error
-            val stateEditor = preferences.edit()
+            preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
                 .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
                 .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
-            if (sessionActive) {
-                stateEditor.apply()
-            } else {
-                stateEditor.putBoolean(SyncScheduler.DIRTY, true).commit()
-                SyncScheduler.enqueueImmediate(this@MainActivity, "session-exit")
-            }
+                .apply()
         }
 
         fun persistNoServerStatus(reason: String, actionLabel: String) {
@@ -329,6 +334,7 @@ class MainActivity : ComponentActivity() {
 
         fun executeLocalReplaceCloud() {
             val observed = observedReplaceHead
+            val manualGeneration = SyncScheduler.dirtyGeneration(this@MainActivity).first
             persistSyncStatus(
                 reason = "user-use-local",
                 summary = "正在读取两次稳定存档并加密上传；不会修改本地原始存档。",
@@ -361,7 +367,12 @@ class MainActivity : ComponentActivity() {
                                     },
                                 "上传完成",
                                 "Mac 端下次打开游戏前核对后即可看到该版本。",
-                            )
+                            ).also {
+                                SyncScheduler.acknowledgeCapturedGeneration(
+                                    this@MainActivity,
+                                    manualGeneration,
+                                )
+                            }
                             is LocalReplaceResult.Conflict -> persistSyncStatus(
                                 "user-use-local-conflict",
                                 "确认后云端版本仍发生竞争变化，本地快照已保留为冲突分支 …${upload.snapshotId.takeLast(6)}，当前云端版本仍为 …${upload.cloudHead.takeLast(6)}。",
@@ -472,12 +483,16 @@ class MainActivity : ComponentActivity() {
 
         fun toggleSessionProtection() {
             if (sessionActive) {
-                stopService(Intent(this@MainActivity, ActiveSessionService::class.java))
+                startService(
+                    Intent(this@MainActivity, ActiveSessionService::class.java)
+                        .setAction(ActiveSessionService.ACTION_MANUAL_STOP),
+                )
                 lastSummary = SyncMessages.sessionExitSummary()
             } else {
                 ContextCompat.startForegroundService(
                     this@MainActivity,
-                    Intent(this@MainActivity, ActiveSessionService::class.java),
+                    Intent(this@MainActivity, ActiveSessionService::class.java)
+                        .setAction(ActiveSessionService.ACTION_TRACK_LAUNCH),
                 )
                 lastSummary = SyncMessages.sessionStartSummary()
             }
@@ -729,6 +744,16 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(DashboardContentPolicy.launchLabel) }
                     Text(launchGate, style = MaterialTheme.typography.bodySmall)
+                    if (sessionActive) {
+                        OutlinedButton(
+                            onClick = { toggleSessionProtection() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("我已退出 Nemessix，保存并排队上传") }
+                        Text(
+                            "Android 对其他应用进程的可见性尚未实机验证；若没有自动收敛，请用此按钮明确确认。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     val canContinueLocal = launchGateReason in setOf(
                         "prelaunch-no-server", "prelaunch-key-required", "prelaunch-cloud-unavailable",
                         "prelaunch-remote-advanced", "prelaunch-local-changed", "prelaunch-diverged",
@@ -772,6 +797,16 @@ class MainActivity : ComponentActivity() {
                         SettingSwitch("同步 MH3G", gameEnabled) {
                             gameEnabled = it
                             preferences.edit().putBoolean(SyncScheduler.GAME_MH3G_ENABLED, it).apply()
+                        }
+                        if (pendingUploads > 0) {
+                            StatusLine(
+                                "待上传队列",
+                                if (pendingEndpoints > 1) {
+                                    "$pendingUploads 项，包含 $pendingEndpoints 个原服务器地址；不会静默迁移"
+                                } else {
+                                    "$pendingUploads 项；按创建时的服务器地址续传"
+                                },
+                            )
                         }
                     }
                     CardSection("存档与密钥") {
@@ -980,6 +1015,11 @@ class MainActivity : ComponentActivity() {
         val packageName = SyncScheduler.NEMESSIX_PACKAGE
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             ?: return SyncMessages.launchNemessixMissing(packageName)
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, ActiveSessionService::class.java)
+                .setAction(ActiveSessionService.ACTION_TRACK_LAUNCH),
+        )
         startActivity(launchIntent)
         return SyncMessages.launchNemessixStarted()
     }

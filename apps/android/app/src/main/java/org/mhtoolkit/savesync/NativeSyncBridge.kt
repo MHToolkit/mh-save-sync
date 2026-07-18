@@ -26,7 +26,6 @@ object NativeSyncBridge {
 
     external fun drainUploadQueue(
         queueRoot: String,
-        serverEndpoint: String,
         recoverySecret: ByteArray,
     ): String
 

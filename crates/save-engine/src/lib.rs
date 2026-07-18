@@ -1396,7 +1396,9 @@ pub mod local_store {
                     logical_save_id TEXT,
                     base_head TEXT,
                     device_id TEXT,
-                    bundle_path TEXT
+                    bundle_path TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS leases (
                     key TEXT PRIMARY KEY,
@@ -1416,6 +1418,8 @@ pub mod local_store {
             self.ensure_upload_queue_column("base_head", "TEXT")?;
             self.ensure_upload_queue_column("device_id", "TEXT")?;
             self.ensure_upload_queue_column("bundle_path", "TEXT")?;
+            self.ensure_upload_queue_column("lease_owner", "TEXT")?;
+            self.ensure_upload_queue_column("lease_expires_at", "INTEGER")?;
             self.conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS upload_queue_snapshot_unique ON upload_queue(snapshot_id)",
                 [],
@@ -1558,28 +1562,91 @@ pub mod local_store {
                 .transpose()?)
         }
 
-        pub fn mark_uploading(&self, id: i64) -> Result<(), LocalStoreError> {
-            self.conn.execute(
-                "UPDATE upload_queue SET state='uploading' WHERE id=?1 AND state IN ('pending','uploading')",
-                params![id],
+        /// Atomically changes one pending or expired upload into an owned lease.
+        /// The UPDATE predicate and RETURNING row are a single SQLite statement,
+        /// so two WorkManager instances cannot both consume the same bundle.
+        pub fn claim_retryable_upload(
+            &self,
+            server_endpoint: Option<&str>,
+            owner: &str,
+            now_unix_ms: u64,
+            lease_expires_at: u64,
+        ) -> Result<Option<UploadQueueItem>, LocalStoreError> {
+            let mut statement = self.conn.prepare(
+                r#"UPDATE upload_queue
+                   SET state='uploading', lease_owner=?2, lease_expires_at=?4
+                   WHERE id=(
+                       SELECT id FROM upload_queue
+                       WHERE (?1 IS NULL OR server_endpoint=?1)
+                         AND server_endpoint IS NOT NULL
+                         AND logical_save_id IS NOT NULL
+                         AND device_id IS NOT NULL
+                         AND bundle_path IS NOT NULL
+                         AND (
+                           state='pending' OR
+                           (state='uploading' AND COALESCE(lease_expires_at,0)<=?3)
+                         )
+                       ORDER BY id ASC LIMIT 1
+                   )
+                   AND (
+                     state='pending' OR
+                     (state='uploading' AND COALESCE(lease_expires_at,0)<=?3)
+                   )
+                   RETURNING id,snapshot_id,server_endpoint,logical_save_id,base_head,
+                             device_id,bundle_path,attempts,last_error"#,
             )?;
-            Ok(())
+            let mut rows = statement.query(params![
+                server_endpoint,
+                owner,
+                now_unix_ms as i64,
+                lease_expires_at as i64,
+            ])?;
+            rows.next()?
+                .map(|row| {
+                    Ok(UploadQueueItem {
+                        id: row.get(0)?,
+                        snapshot_id: SnapshotId(row.get(1)?),
+                        server_endpoint: row.get(2)?,
+                        logical_save_id: row.get(3)?,
+                        base_head: row.get(4)?,
+                        device_id: row.get(5)?,
+                        bundle_path: row.get(6)?,
+                        attempts: row.get::<_, i64>(7)? as u32,
+                        last_error: row.get(8)?,
+                    })
+                })
+                .transpose()
         }
 
-        pub fn mark_upload_failed(&self, id: i64, error: &str) -> Result<(), LocalStoreError> {
-            self.conn.execute(
-                "UPDATE upload_queue SET state='pending',attempts=attempts+1,last_error=?2 WHERE id=?1",
-                params![id, error],
-            )?;
-            Ok(())
+        pub fn mark_upload_failed(
+            &self,
+            id: i64,
+            owner: &str,
+            error: &str,
+        ) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                "UPDATE upload_queue SET state='pending',attempts=attempts+1,last_error=?3,lease_owner=NULL,lease_expires_at=NULL WHERE id=?1 AND state='uploading' AND lease_owner=?2",
+                params![id, owner, error],
+            )? == 1)
         }
 
-        pub fn mark_upload_completed(&self, id: i64) -> Result<(), LocalStoreError> {
-            self.conn.execute(
-                "UPDATE upload_queue SET state='completed',last_error=NULL WHERE id=?1",
-                params![id],
-            )?;
-            Ok(())
+        pub fn renew_upload_lease(
+            &self,
+            id: i64,
+            owner: &str,
+            lease_expires_at: u64,
+        ) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                "UPDATE upload_queue SET lease_expires_at=?3 WHERE id=?1 AND state='uploading' AND lease_owner=?2",
+                params![id, owner, lease_expires_at as i64],
+            )? == 1)
+        }
+
+        pub fn mark_upload_completed(&self, id: i64, owner: &str) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                "UPDATE upload_queue SET state='completed',last_error=NULL,lease_owner=NULL,lease_expires_at=NULL WHERE id=?1 AND state='uploading' AND lease_owner=?2",
+                params![id, owner],
+            )? == 1)
         }
 
         pub fn pending_upload_count(&self) -> Result<u64, LocalStoreError> {
@@ -1597,6 +1664,22 @@ pub mod local_store {
             Ok(self.conn.query_row(
                 "SELECT COUNT(*) FROM upload_queue WHERE state IN ('pending','uploading') AND server_endpoint=?1",
                 params![server_endpoint],
+                |row| row.get::<_, i64>(0),
+            )? as u64)
+        }
+
+        pub fn pending_upload_endpoint_count(&self) -> Result<u64, LocalStoreError> {
+            Ok(self.conn.query_row(
+                "SELECT COUNT(DISTINCT server_endpoint) FROM upload_queue WHERE state IN ('pending','uploading') AND server_endpoint IS NOT NULL AND logical_save_id IS NOT NULL AND device_id IS NOT NULL AND bundle_path IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as u64)
+        }
+
+        pub fn durable_pending_upload_count(&self) -> Result<u64, LocalStoreError> {
+            Ok(self.conn.query_row(
+                "SELECT COUNT(*) FROM upload_queue WHERE state IN ('pending','uploading') AND server_endpoint IS NOT NULL AND logical_save_id IS NOT NULL AND device_id IS NOT NULL AND bundle_path IS NOT NULL",
+                [],
                 |row| row.get::<_, i64>(0),
             )? as u64)
         }
@@ -2218,6 +2301,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.pending_upload_count().unwrap(), 1);
+        assert_eq!(store.durable_pending_upload_count().unwrap(), 0);
+        assert!(
+            store
+                .claim_retryable_upload(None, "worker", 1, 2)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2247,16 +2337,30 @@ mod tests {
         assert_eq!(queued[0].attempts, 0);
         assert_eq!(queued[0].base_head.as_deref(), Some("base-a"));
 
-        store
-            .mark_upload_failed(queued[0].id, "network unavailable")
+        let claimed = store
+            .claim_retryable_upload(Some("https://sync.example.test"), "test-worker", 10, 20)
+            .unwrap()
             .unwrap();
+        assert!(
+            store
+                .mark_upload_failed(claimed.id, "test-worker", "network unavailable")
+                .unwrap()
+        );
         let retry = store
             .retryable_uploads("https://sync.example.test", 10)
             .unwrap();
         assert_eq!(retry[0].attempts, 1);
         assert_eq!(retry[0].last_error.as_deref(), Some("network unavailable"));
 
-        store.mark_upload_completed(retry[0].id).unwrap();
+        let claimed = store
+            .claim_retryable_upload(Some("https://sync.example.test"), "test-worker-2", 20, 30)
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .mark_upload_completed(claimed.id, "test-worker-2")
+                .unwrap()
+        );
         assert!(
             store
                 .retryable_uploads("https://sync.example.test", 10)
@@ -2264,6 +2368,98 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.pending_upload_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn sqlite_upload_queue_claim_is_atomic_and_owner_scoped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.sqlite");
+        let first = crate::local_store::LocalStore::open(&path).unwrap();
+        first
+            .enqueue_upload(
+                &SnapshotId("snap-claimed".into()),
+                "slot-a",
+                "device-a",
+                b"encrypted-manifest",
+                7,
+                "https://sync.example.test",
+                "mh3g-nemessix-jp-slot1",
+                None,
+                "objects/snap-claimed.mhsavebundle",
+            )
+            .unwrap();
+        let second = crate::local_store::LocalStore::open(&path).unwrap();
+
+        let claimed = first
+            .claim_retryable_upload(Some("https://sync.example.test"), "worker-a", 100, 200)
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.snapshot_id, SnapshotId("snap-claimed".into()));
+        assert!(
+            second
+                .claim_retryable_upload(Some("https://sync.example.test"), "worker-b", 100, 200,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !second
+                .mark_upload_completed(claimed.id, "worker-b")
+                .unwrap()
+        );
+        assert!(
+            !second
+                .renew_upload_lease(claimed.id, "worker-b", 500)
+                .unwrap()
+        );
+        assert!(
+            first
+                .renew_upload_lease(claimed.id, "worker-a", 500)
+                .unwrap()
+        );
+        assert!(first.mark_upload_completed(claimed.id, "worker-a").unwrap());
+    }
+
+    #[test]
+    fn sqlite_upload_queue_recovers_expired_claim_after_worker_crash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.sqlite");
+        let crashed = crate::local_store::LocalStore::open(&path).unwrap();
+        crashed
+            .enqueue_upload(
+                &SnapshotId("snap-crashed".into()),
+                "slot-a",
+                "device-a",
+                b"encrypted-manifest",
+                7,
+                "https://old.example.test",
+                "mh3g-nemessix-jp-slot1",
+                None,
+                "objects/snap-crashed.mhsavebundle",
+            )
+            .unwrap();
+        let first_claim = crashed
+            .claim_retryable_upload(None, "crashed-worker", 100, 150)
+            .unwrap()
+            .unwrap();
+        drop(crashed);
+
+        let restarted = crate::local_store::LocalStore::open(&path).unwrap();
+        assert!(
+            restarted
+                .claim_retryable_upload(None, "new-worker", 149, 300)
+                .unwrap()
+                .is_none()
+        );
+        let recovered = restarted
+            .claim_retryable_upload(None, "new-worker", 150, 300)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.id, first_claim.id);
+        assert!(
+            restarted
+                .mark_upload_failed(recovered.id, "new-worker", "network unavailable")
+                .unwrap()
+        );
     }
 
     #[test]

@@ -13,8 +13,11 @@ import java.util.concurrent.TimeUnit
 
 object SyncScheduler {
     const val REAL_SYNC_PIPELINE_AVAILABLE = true
+    const val SAVE_COMPLETE_IPC_AVAILABLE = false
+    // ActivityManager cross-package visibility is not yet proven on the target device/API.
+    const val PROCESS_EXIT_RUNTIME_VERIFIED = false
     const val LOCAL_REPLACE_PIPELINE_AVAILABLE = true
-    // Enabled only for Nemessix builds exposing the pinned SaveQuiescenceV1 lease.
+    // Restore uses the certificate-pinned SaveQuiescenceV1 lease; it is not save-complete IPC.
     const val CLOUD_RESTORE_PIPELINE_AVAILABLE = true
     const val CLOUD_DOWNLOAD_PIPELINE_AVAILABLE = true
     const val PENDING_RESTORE_RECOVERY_COUNT = "pending_restore_recovery_count"
@@ -22,8 +25,12 @@ object SyncScheduler {
     const val SAF_ROOT = "saf_root"
     const val WIFI_ONLY = "wifi_only"
     const val CHARGING_REQUIRED = "charging_required"
-    const val DIRTY = "save_dirty"
+    const val DIRTY_GENERATION = "save_dirty_generation"
+    const val CAPTURED_GENERATION = "save_captured_generation"
+    private const val LEGACY_DIRTY = "save_dirty"
+    private const val SESSION_TRACKING_VERSION = "session_tracking_version"
     const val PENDING_UPLOAD_COUNT = "pending_upload_count"
+    const val PENDING_UPLOAD_ENDPOINT_COUNT = "pending_upload_endpoint_count"
     const val SERVER_ENDPOINT = "server_endpoint"
     const val LAST_SYNC_SUMMARY = "last_sync_summary"
     const val LAST_SYNC_TARGET = "last_sync_target"
@@ -39,21 +46,40 @@ object SyncScheduler {
     const val GAME_MH3G_ENABLED = "game_mh3g_enabled"
     const val NATIVE_BRIDGE_HEALTH = "native_bridge_health"
     const val NEMESSIX_PACKAGE = "io.github.vincentadamnemessisx.nemessix"
-    private const val PERIODIC_NAME = "save-reconcile-periodic"
-    private const val IMMEDIATE_NAME = "save-reconcile-immediate"
+    private const val PERIODIC_NAME = "save-capture-periodic"
+    private const val CAPTURE_NAME = "save-capture-immediate"
+    private const val DRAIN_NAME = "save-upload-drain"
+    private val dirtyLock = Any()
+
+    internal fun canAcknowledgeGeneration(observed: Long, current: Long): Boolean =
+        observed == current
+
+    internal fun captureConstraints(chargingRequired: Boolean): Constraints =
+        Constraints.Builder()
+            .setRequiresBatteryNotLow(true)
+            .setRequiresCharging(chargingRequired)
+            .build()
+
+    internal fun drainConstraints(wifiOnly: Boolean, chargingRequired: Boolean): Constraints =
+        Constraints.Builder()
+            .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .setRequiresCharging(chargingRequired)
+            .build()
 
     fun ensureDefaults(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         val defaultLastSyncSummary =
             "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。"
-        val defaultLaunchGateSummary =
-            "启动前会重新核对手机与云端版本。"
+        val defaultLaunchGateSummary = "启动前会重新核对手机与云端版本。"
         val defaultPhase = "暂无后台任务"
         val defaultNextAction = "先完成设置，再点“检查并打开 Nemessix”。"
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
-                .putBoolean(SESSION_ACTIVE, true)
+                .putBoolean(SESSION_ACTIVE, false)
+                .putLong(DIRTY_GENERATION, 0)
+                .putLong(CAPTURED_GENERATION, 0)
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
                 .putString(LAST_SYNC_SUMMARY, defaultLastSyncSummary)
                 .putString(LAST_SYNC_PHASE, defaultPhase)
@@ -63,6 +89,20 @@ object SyncScheduler {
                 .putString(LAUNCH_GATE_REASON, "not-checked")
                 .apply()
         }
+        if (preferences.getInt(SESSION_TRACKING_VERSION, 0) < 1) {
+            val editor = preferences.edit()
+                .putInt(SESSION_TRACKING_VERSION, 1)
+                // Alpha.3 defaulted this flag to true without real process tracking.
+                .putBoolean(SESSION_ACTIVE, false)
+            if (preferences.getBoolean(LEGACY_DIRTY, false)) {
+                val current = preferences.getLong(DIRTY_GENERATION, 0)
+                editor.putLong(
+                    DIRTY_GENERATION,
+                    if (current == Long.MAX_VALUE) Long.MAX_VALUE else current + 1,
+                ).remove(LEGACY_DIRTY)
+            }
+            editor.commit()
+        }
         val oldLastReason = preferences.getString(LAST_SYNC_REASON, null)
         val oldLaunchReason = preferences.getString(LAUNCH_GATE_REASON, null)
         val cleanLastReason = SyncMessages.sanitizeLegacyPrelaunchReason(oldLastReason)
@@ -71,16 +111,14 @@ object SyncScheduler {
             defaultLastSyncSummary
         } else {
             SyncMessages.sanitizeLegacyUserCopy(
-                preferences.getString(LAST_SYNC_SUMMARY, null),
-                defaultLastSyncSummary,
+                preferences.getString(LAST_SYNC_SUMMARY, null), defaultLastSyncSummary,
             )
         }
         val cleanLaunchGateSummary = if (oldLaunchReason == "prelaunch-remote-head") {
             defaultLaunchGateSummary
         } else {
             SyncMessages.sanitizeLegacyUserCopy(
-                preferences.getString(LAUNCH_GATE_SUMMARY, null),
-                defaultLaunchGateSummary,
+                preferences.getString(LAUNCH_GATE_SUMMARY, null), defaultLaunchGateSummary,
             )
         }
         val cleanNextAction = SyncMessages.sanitizeLegacyUserCopy(
@@ -105,40 +143,61 @@ object SyncScheduler {
 
     fun ensurePeriodic(context: Context) {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val network = if (preferences.getBoolean(WIFI_ONLY, true)) {
-            NetworkType.UNMETERED
-        } else {
-            NetworkType.CONNECTED
-        }
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(network)
-            .setRequiresBatteryNotLow(true)
-            .setRequiresCharging(preferences.getBoolean(CHARGING_REQUIRED, false))
-            .build()
-        val request = PeriodicWorkRequestBuilder<ReconcileWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(constraints)
+        val captureConstraints = captureConstraints(
+            preferences.getBoolean(CHARGING_REQUIRED, false),
+        )
+        val request = PeriodicWorkRequestBuilder<CaptureWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(captureConstraints)
             .setInputData(Data.Builder().putString("reason", "periodic").build())
             .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            PERIODIC_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
-            request,
+            PERIODIC_NAME, ExistingPeriodicWorkPolicy.UPDATE, request,
         )
     }
 
-    fun enqueueImmediate(context: Context, reason: String) {
-        val request = OneTimeWorkRequestBuilder<ReconcileWorker>()
+    fun enqueueCapture(context: Context, reason: String) {
+        val request = OneTimeWorkRequestBuilder<CaptureWorker>()
             .setInputData(Data.Builder().putString("reason", reason).build())
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            IMMEDIATE_NAME,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
-            request,
+            CAPTURE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request,
         )
     }
 
-    fun markDirty(context: Context) {
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit().putBoolean(DIRTY, true).apply()
+    fun enqueueConstrainedDrain(context: Context) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val constraints = drainConstraints(
+            wifiOnly = preferences.getBoolean(WIFI_ONLY, true),
+            chargingRequired = preferences.getBoolean(CHARGING_REQUIRED, false),
+        )
+        val request = OneTimeWorkRequestBuilder<DrainWorker>()
+            .setConstraints(constraints)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DRAIN_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request,
+        )
     }
+
+    fun markDirty(context: Context): Long = synchronized(dirtyLock) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val current = preferences.getLong(DIRTY_GENERATION, 0)
+        val next = if (current == Long.MAX_VALUE) Long.MAX_VALUE else current + 1
+        check(preferences.edit().putLong(DIRTY_GENERATION, next).commit())
+        next
+    }
+
+    fun dirtyGeneration(context: Context): Pair<Long, Boolean> = synchronized(dirtyLock) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val current = preferences.getLong(DIRTY_GENERATION, 0)
+        current to (current > preferences.getLong(CAPTURED_GENERATION, 0))
+    }
+
+    fun acknowledgeCapturedGeneration(context: Context, observed: Long): Boolean =
+        synchronized(dirtyLock) {
+            val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            if (!canAcknowledgeGeneration(observed, preferences.getLong(DIRTY_GENERATION, 0))) {
+                return@synchronized false
+            }
+            preferences.edit().putLong(CAPTURED_GENERATION, observed).commit()
+        }
 }
