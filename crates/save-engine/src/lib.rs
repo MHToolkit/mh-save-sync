@@ -33,6 +33,18 @@ pub enum EngineError {
     MissingChunk(String),
     #[error("restore refused while emulator is running")]
     EmulatorRunning,
+    #[error("invalid encrypted chunk metadata")]
+    InvalidChunkMetadata,
+    #[error("encrypted chunk identifier does not match plaintext")]
+    ChunkIdMismatch,
+    #[error("restored file failed integrity verification")]
+    FileIntegrityMismatch,
+}
+
+const AEAD_TAG_SIZE: u64 = 16;
+
+fn max_compressed_chunk_size() -> u64 {
+    zstd::zstd_safe::compress_bound(DEFAULT_CHUNK_SIZE) as u64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -474,6 +486,7 @@ fn restore_snapshot_to_folder_with_failpoint(
     let keys = derive_account_keys(secret)?;
     let manifest = decrypt_manifest(secret, snapshot)?;
     validate_manifest_entries(&manifest.entries, 10_000, 128 * 1024 * 1024)?;
+    validate_restore_manifest_chunks(&manifest, snapshot)?;
 
     remove_restore_dir_if_present(&paths.stage)?;
     fs::create_dir(&paths.stage)?;
@@ -494,19 +507,33 @@ fn restore_snapshot_to_folder_with_failpoint(
                     .chunks
                     .get(&cref.id)
                     .ok_or_else(|| EngineError::MissingChunk(cref.id.clone()))?;
+                validate_chunk_metadata(cref, blob)?;
                 let compressed = decrypt_bytes(
                     &keys,
                     format!("mh-save-sync/chunk/v1/{}", cref.id).as_bytes(),
                     blob,
                 )?;
-                let plaintext = zstd::bulk::decompress(&compressed, cref.plaintext_size as usize)?;
-                total += plaintext.len() as u64;
+                if compressed.len() as u64 != cref.compressed_size {
+                    return Err(EngineError::InvalidChunkMetadata);
+                }
+                let plaintext_limit = usize::try_from(cref.plaintext_size)
+                    .map_err(|_| EngineError::InvalidChunkMetadata)?;
+                let plaintext = zstd::bulk::decompress(&compressed, plaintext_limit)?;
+                if plaintext.len() as u64 != cref.plaintext_size {
+                    return Err(EngineError::InvalidChunkMetadata);
+                }
+                if chunk_id(&keys, &plaintext) != cref.id {
+                    return Err(EngineError::ChunkIdMismatch);
+                }
+                total = total
+                    .checked_add(plaintext.len() as u64)
+                    .ok_or(EngineError::InvalidChunkMetadata)?;
                 hasher.update(&plaintext);
                 writer.write_all(&plaintext)?;
             }
             writer.sync_all()?;
             if total != entry.size || hex::encode(hasher.finalize()) != entry.plaintext_sha256 {
-                return Err(EngineError::MissingChunk(entry.path.clone()));
+                return Err(EngineError::FileIntegrityMismatch);
             }
         }
         sync_tree(&paths.stage)?;
@@ -555,6 +582,88 @@ fn restore_snapshot_to_folder_with_failpoint(
     sync_dir(&paths.parent)?;
     interrupt_if(failpoint, RestoreFailpoint::ReceiptLost, "receipt-lost")?;
     Ok(paths.backup)
+}
+
+fn validate_restore_manifest_chunks(
+    manifest: &SnapshotManifest,
+    snapshot: &EncryptedSnapshot,
+) -> Result<(), EngineError> {
+    for entry in &manifest.entries {
+        if entry.kind == FileKind::Tombstone {
+            if entry.size != 0 || !entry.chunks.is_empty() {
+                return Err(EngineError::InvalidChunkMetadata);
+            }
+            continue;
+        }
+        if entry.size == 0 {
+            if !entry.chunks.is_empty() {
+                return Err(EngineError::InvalidChunkMetadata);
+            }
+            continue;
+        }
+        let expected_chunks = entry
+            .size
+            .checked_add(DEFAULT_CHUNK_SIZE as u64 - 1)
+            .ok_or(EngineError::InvalidChunkMetadata)?
+            / DEFAULT_CHUNK_SIZE as u64;
+        if entry.chunks.len() as u64 != expected_chunks {
+            return Err(EngineError::InvalidChunkMetadata);
+        }
+        let mut declared_total = 0u64;
+        for (index, chunk) in entry.chunks.iter().enumerate() {
+            let is_last = index + 1 == entry.chunks.len();
+            let expected_plaintext_size = if is_last {
+                let remainder = entry.size % DEFAULT_CHUNK_SIZE as u64;
+                if remainder == 0 {
+                    DEFAULT_CHUNK_SIZE as u64
+                } else {
+                    remainder
+                }
+            } else {
+                DEFAULT_CHUNK_SIZE as u64
+            };
+            if chunk.plaintext_size != expected_plaintext_size {
+                return Err(EngineError::InvalidChunkMetadata);
+            }
+            let blob = snapshot
+                .chunks
+                .get(&chunk.id)
+                .ok_or_else(|| EngineError::MissingChunk(chunk.id.clone()))?;
+            validate_chunk_metadata(chunk, blob)?;
+            declared_total = declared_total
+                .checked_add(chunk.plaintext_size)
+                .ok_or(EngineError::InvalidChunkMetadata)?;
+        }
+        if declared_total != entry.size {
+            return Err(EngineError::InvalidChunkMetadata);
+        }
+    }
+    Ok(())
+}
+
+fn validate_chunk_metadata(
+    chunk: &save_domain::ChunkRef,
+    blob: &EncryptedBlob,
+) -> Result<(), EngineError> {
+    if chunk.id.len() != 64 || !chunk.id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(EngineError::InvalidChunkMetadata);
+    }
+    if chunk.plaintext_size == 0 || chunk.plaintext_size > DEFAULT_CHUNK_SIZE as u64 {
+        return Err(EngineError::InvalidChunkMetadata);
+    }
+    if chunk.compressed_size == 0 || chunk.compressed_size > max_compressed_chunk_size() {
+        return Err(EngineError::InvalidChunkMetadata);
+    }
+    let expected_ciphertext_size = chunk
+        .compressed_size
+        .checked_add(AEAD_TAG_SIZE)
+        .ok_or(EngineError::InvalidChunkMetadata)?;
+    if chunk.ciphertext_size != expected_ciphertext_size
+        || chunk.ciphertext_size != blob.ciphertext.len() as u64
+    {
+        return Err(EngineError::InvalidChunkMetadata);
+    }
+    Ok(())
 }
 
 /// Recovers one native-folder restore transaction after process or power loss.
@@ -1814,6 +1923,180 @@ mod tests {
         );
         assert_old_tree(&target);
         assert!(!root.path().join("escaped.bin").exists());
+    }
+
+    fn replace_encrypted_manifest(
+        secret: &[u8; 32],
+        snapshot: &mut EncryptedSnapshot,
+        manifest: &SnapshotManifest,
+    ) {
+        let keys = derive_account_keys(secret).unwrap();
+        snapshot.encrypted_manifest = encrypt_bytes(
+            &keys,
+            b"mh-save-sync/manifest/v1",
+            &serde_json::to_vec(manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn restore_rejects_chunk_plaintext_size_above_protocol_limit_before_moving_target() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [54u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        manifest.entries[0].chunks[0].plaintext_size = DEFAULT_CHUNK_SIZE as u64 + 1;
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::InvalidChunkMetadata));
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_rejects_chunk_size_metadata_that_does_not_match_ciphertext() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [55u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        manifest.entries[0].chunks[0].compressed_size += 1;
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::InvalidChunkMetadata));
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_rejects_oversized_compressed_chunk_before_decryption() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [57u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        manifest.entries[0].chunks[0].compressed_size = max_compressed_chunk_size() + 1;
+        manifest.entries[0].chunks[0].ciphertext_size =
+            manifest.entries[0].chunks[0].compressed_size + AEAD_TAG_SIZE;
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::InvalidChunkMetadata));
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_rejects_manifest_chunk_total_before_creating_staging_files() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [58u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        manifest.entries[0].size = 1;
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::InvalidChunkMetadata));
+        assert_old_tree(&target);
+        assert!(
+            !root
+                .path()
+                .join(".active-save.mhsave-restore-stage")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn restore_rejects_non_final_short_chunk_even_when_declared_total_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [59u8; 32];
+        let (source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        let entry = &mut manifest.entries[0];
+        let original = fs::read(source.path().join(&entry.path)).unwrap();
+        entry.chunks.push(entry.chunks[0].clone());
+        entry.size = (original.len() * 2) as u64;
+        let mut repeated = original.clone();
+        repeated.extend_from_slice(&original);
+        entry.plaintext_sha256 = hex::encode(Sha256::digest(&repeated));
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::InvalidChunkMetadata));
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_integrity_error_never_contains_decrypted_manifest_path() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [60u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        let sensitive_path = manifest.entries[0].path.clone();
+        manifest.entries[0].plaintext_sha256 = "00".repeat(32);
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::FileIntegrityMismatch));
+        assert!(!error.to_string().contains(&sensitive_path));
+        assert_old_tree(&target);
+    }
+
+    #[test]
+    fn restore_rejects_chunk_id_not_bound_to_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("active-save");
+        write_old_tree(&target);
+        let secret = [56u8; 32];
+        let (_source, mut snapshot) = snapshot_with_new_tree(&secret);
+        let mut manifest = decrypt_manifest(&secret, &snapshot).unwrap();
+        let original_id = manifest.entries[0].chunks[0].id.clone();
+        let fake_id = "a".repeat(64);
+        let keys = derive_account_keys(&secret).unwrap();
+        let original_blob = snapshot.chunks.remove(&original_id).unwrap();
+        let compressed = decrypt_bytes(
+            &keys,
+            format!("mh-save-sync/chunk/v1/{original_id}").as_bytes(),
+            &original_blob,
+        )
+        .unwrap();
+        let replacement = encrypt_bytes(
+            &keys,
+            format!("mh-save-sync/chunk/v1/{fake_id}").as_bytes(),
+            &compressed,
+        )
+        .unwrap();
+        manifest.entries[0].chunks[0].id = fake_id.clone();
+        manifest.entries[0].chunks[0].ciphertext_size = replacement.ciphertext.len() as u64;
+        snapshot.chunks.insert(fake_id, replacement);
+        replace_encrypted_manifest(&secret, &mut snapshot, &manifest);
+
+        let error = restore_snapshot_to_folder(&secret, &snapshot, &target, EmulatorState::Stopped)
+            .unwrap_err();
+
+        assert!(matches!(error, EngineError::ChunkIdMismatch));
+        assert_old_tree(&target);
     }
 
     #[test]
