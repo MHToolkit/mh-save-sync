@@ -22,6 +22,8 @@ object NativeSyncBridge {
         logicalSaveId: String,
         baseHead: String?,
         deviceId: String,
+        treeUri: String,
+        localFingerprint: String,
         captureOwner: String,
         captureGeneration: Long,
     ): String
@@ -42,6 +44,24 @@ object NativeSyncBridge {
         queueRoot: String,
         recoverySecret: ByteArray,
     ): String
+
+    external fun readConsistencyBaseline(
+        queueRoot: String,
+        serverEndpoint: String,
+        logicalSaveId: String,
+        treeUri: String,
+        deviceId: String,
+    ): String
+
+    external fun migrateLegacyConsistencyReceipt(
+        queueRoot: String,
+        snapshotId: String,
+        serverEndpoint: String,
+        logicalSaveId: String,
+        treeUri: String,
+        deviceId: String,
+        localFingerprint: String,
+    ): Boolean
 
     external fun fetchCloudHead(
         serverEndpoint: String,

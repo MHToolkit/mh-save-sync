@@ -25,7 +25,8 @@ is not represented as a save-complete event.
 3. The encrypted `.mhsavebundle` is written with temp-file + fsync + rename and
    the object directory is synced.
 4. A SQLite WAL transaction records snapshot, server, logical save, exact CAS
-   base/parent, device and relative bundle path as `pending`.
+   base/parent, device, SAF tree binding, stable local fingerprint and relative
+   bundle path as `pending`.
 5. Plaintext staging is deleted.
 6. A capture-only Worker finishes successfully while offline, then schedules a
    separate drain Worker carrying unmetered/connected, battery-not-low and
@@ -34,7 +35,16 @@ is not represented as a save-complete event.
    lease. Completion/failure updates require the same owner; an expired lease
    is reclaimable after a crash. It then uses the existing signed E2EE upload
    protocol. Failure increments `attempts` and records only a redacted code;
-   success marks the row `completed` before deleting the encrypted bundle.
+   success marks the row `completed` and upserts the owner-scoped consistency
+   baseline in the same SQLite transaction before deleting the encrypted
+   bundle. A non-conflict response whose HEAD is not the uploaded snapshot
+   fails closed and remains retryable.
+
+The next capture chooses its base in this order: latest pending local snapshot,
+durable SQLite consistency HEAD for the exact endpoint/logical-save/tree/device
+binding, then the legacy UI ledger only when no durable baseline exists. Thus a
+process kill after the server commit but before Kotlin updates the UI cannot
+reuse an older HEAD and manufacture a false conflict.
 
 Multiple offline captures chain from the latest pending snapshot ID. They do
 not use mtime and do not silently replace a different remote HEAD. A stale base
@@ -71,9 +81,14 @@ emulator directory.
 ## Migration and rollback
 
 Migration is additive. On open, the client adds nullable upload metadata,
-`lease_owner`, `lease_expires_at` and a unique snapshot index to existing
-SQLite databases. Legacy rows without durable bundle metadata are not treated
-as uploadable Android jobs. The old `ReconcileWorker` class remains as a
+`lease_owner`, `lease_expires_at`, `tree_uri`, `local_fingerprint`, the
+`sync_consistency` table and a unique snapshot index to existing SQLite
+databases. The former alpha SharedPreferences pending receipt is accepted only
+as a one-time migration source: before drain, JNI attaches it to the matching
+pending SQLite row using snapshot/endpoint/logical-save/device predicates, and
+the preference is cleared only after that durable update succeeds. New queue
+items never use SharedPreferences as the receipt truth. Legacy rows without
+durable bundle metadata are not treated as uploadable Android jobs. The old `ReconcileWorker` class remains as a
 capture-only compatibility target so persisted WorkManager rows do not resolve
 to a missing class after upgrade. The alpha.3 boolean dirty bit migrates to one
 dirty generation, and its unproven default `session_active=true` is reset once

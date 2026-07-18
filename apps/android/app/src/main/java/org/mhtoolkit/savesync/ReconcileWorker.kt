@@ -118,7 +118,7 @@ internal object DrainStatusPolicy {
     }
 }
 
-private data class PendingLedgerReceipt(
+private data class LegacyPendingLedgerReceipt(
     val snapshotId: String,
     val serverEndpoint: String,
     val treeUri: String,
@@ -126,36 +126,36 @@ private data class PendingLedgerReceipt(
     val fingerprint: String,
 )
 
-private object PendingLedgerReceiptStore {
+private object LegacyPendingLedgerReceiptMigrator {
     private const val KEY = "pending_upload_ledger_receipt"
 
-    fun write(context: Context, receipt: PendingLedgerReceipt) {
-        val json = JSONObject()
-            .put("snapshot_id", receipt.snapshotId)
-            .put("server_endpoint", receipt.serverEndpoint)
-            .put("tree_uri", receipt.treeUri)
-            .put("device_id", receipt.deviceId)
-            .put("fingerprint", receipt.fingerprint)
-        context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
-            .edit().putString(KEY, json.toString()).commit()
-    }
-
-    fun read(context: Context): PendingLedgerReceipt? = runCatching {
-        val raw = context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
-            .getString(KEY, null) ?: return null
-        val json = JSONObject(raw)
-        PendingLedgerReceipt(
-            snapshotId = json.getString("snapshot_id"),
-            serverEndpoint = json.getString("server_endpoint"),
-            treeUri = json.getString("tree_uri"),
-            deviceId = json.getString("device_id"),
-            fingerprint = json.getString("fingerprint"),
+    fun migrate(context: Context) {
+        val preferences = context.getSharedPreferences(
+            SyncScheduler.PREFERENCES,
+            Context.MODE_PRIVATE,
         )
-    }.getOrNull()
-
-    fun clear(context: Context) {
-        context.getSharedPreferences(SyncScheduler.PREFERENCES, Context.MODE_PRIVATE)
-            .edit().remove(KEY).apply()
+        val receipt = runCatching {
+            val json = JSONObject(preferences.getString(KEY, null) ?: return)
+            LegacyPendingLedgerReceipt(
+                snapshotId = json.getString("snapshot_id"),
+                serverEndpoint = json.getString("server_endpoint"),
+                treeUri = json.getString("tree_uri"),
+                deviceId = json.getString("device_id"),
+                fingerprint = json.getString("fingerprint"),
+            )
+        }.getOrNull() ?: return
+        val migrated = runCatching {
+            NativeSyncBridge.migrateLegacyConsistencyReceipt(
+                SyncScheduler.queueRoot(context).absolutePath,
+                receipt.snapshotId,
+                receipt.serverEndpoint,
+                SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
+                receipt.treeUri,
+                receipt.deviceId,
+                receipt.fingerprint,
+            )
+        }.getOrDefault(false)
+        if (migrated) preferences.edit().remove(KEY).commit()
     }
 }
 
@@ -224,18 +224,6 @@ open class CaptureWorker(
             captureGeneration = claim.generation,
         )
         capture.queued?.let { queued ->
-            capture.localFingerprint?.let { fingerprint ->
-                PendingLedgerReceiptStore.write(
-                    applicationContext,
-                    PendingLedgerReceipt(
-                        snapshotId = queued.snapshotId,
-                        serverEndpoint = SyncServerProbe.normalizeServer(endpoint),
-                        treeUri = requireNotNull(root),
-                        deviceId = SyncServerProbe.deviceId(applicationContext),
-                        fingerprint = fingerprint,
-                    ),
-                )
-            }
             preferences.edit()
                 .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, queued.pendingCount)
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
@@ -320,30 +308,12 @@ class DrainWorker(
         val preferences = applicationContext.getSharedPreferences(
             SyncScheduler.PREFERENCES, Context.MODE_PRIVATE,
         )
+        LegacyPendingLedgerReceiptMigrator.migrate(applicationContext)
         val result = DurableSyncPipeline(applicationContext).drain()
         val displayedPendingCount = if (result.queueStateKnown) {
             result.pendingCount
         } else {
             preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
-        }
-        val receipt = PendingLedgerReceiptStore.read(applicationContext)
-        if (
-            receipt != null && result.pendingCount == 0 && result.conflictCount == 0 &&
-            result.lastSnapshotId == receipt.snapshotId && result.lastCloudHead == receipt.snapshotId
-        ) {
-            runCatching {
-                SyncConsistencyLedgerStore(applicationContext).establish(
-                    binding = SyncConsistencyBinding(
-                        serverEndpoint = receipt.serverEndpoint,
-                        logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
-                        treeUri = receipt.treeUri,
-                        deviceId = receipt.deviceId,
-                    ),
-                    remoteHead = receipt.snapshotId,
-                    localFingerprint = receipt.fingerprint,
-                    mode = SyncEstablishmentMode.UPLOAD,
-                )
-            }.onSuccess { PendingLedgerReceiptStore.clear(applicationContext) }
         }
         val status = DrainStatusPolicy.decide(result)
         preferences.edit()

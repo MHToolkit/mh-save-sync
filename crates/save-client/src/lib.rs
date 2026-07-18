@@ -773,6 +773,70 @@ pub fn finish_android_capture_generation(
     }
 }
 
+pub fn read_android_consistency_baseline(
+    queue_root: &Path,
+    server: &str,
+    logical_save_id: &str,
+    tree_uri: &str,
+    device_id: &str,
+) -> anyhow::Result<String> {
+    validate_logical_save_id(logical_save_id)?;
+    let state = queue_root.join("state.sqlite");
+    if !state.is_file() {
+        return Ok("null".into());
+    }
+    let store = save_engine::local_store::LocalStore::open(&state)?;
+    let baseline = store.consistency_baseline(
+        server.trim_end_matches('/'),
+        logical_save_id,
+        tree_uri,
+        device_id,
+    )?;
+    Ok(match baseline {
+        Some(value) => serde_json::json!({
+            "schema_version": 1,
+            "server_endpoint": value.server_endpoint,
+            "logical_save_id": value.logical_save_id,
+            "tree_uri": value.tree_uri,
+            "device_id": value.device_id,
+            "established_remote_head": value.established_remote_head,
+            "local_fingerprint": value.local_fingerprint,
+            "established_at_millis": value.established_at_millis,
+            "mode": value.mode,
+        })
+        .to_string(),
+        None => "null".into(),
+    })
+}
+
+pub fn migrate_android_legacy_consistency_receipt(
+    queue_root: &Path,
+    snapshot_id: &str,
+    server: &str,
+    logical_save_id: &str,
+    tree_uri: &str,
+    device_id: &str,
+    local_fingerprint: &str,
+) -> anyhow::Result<bool> {
+    anyhow::ensure!(
+        snapshot_id.len() == 64 && snapshot_id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid snapshot id"
+    );
+    validate_logical_save_id(logical_save_id)?;
+    anyhow::ensure!(!tree_uri.is_empty(), "missing tree binding");
+    anyhow::ensure!(!device_id.is_empty(), "missing device binding");
+    anyhow::ensure!(!local_fingerprint.is_empty(), "missing local fingerprint");
+    let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
+    Ok(store.attach_upload_consistency(
+        snapshot_id,
+        server.trim_end_matches('/'),
+        logical_save_id,
+        tree_uri,
+        device_id,
+        local_fingerprint,
+    )?)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn queue_android_stable_stage(
     staging_root: &Path,
@@ -782,6 +846,8 @@ pub fn queue_android_stable_stage(
     logical_save_id: &str,
     observed_base_head: Option<&str>,
     device_id: &str,
+    tree_uri: &str,
+    local_fingerprint: &str,
     capture_claim: Option<(&str, u64)>,
 ) -> anyhow::Result<AndroidQueueReport> {
     let server = server.trim_end_matches('/');
@@ -790,12 +856,19 @@ pub fn queue_android_stable_stage(
         "invalid server endpoint"
     );
     validate_logical_save_id(logical_save_id)?;
+    anyhow::ensure!(!tree_uri.is_empty(), "missing tree binding");
+    anyhow::ensure!(!local_fingerprint.is_empty(), "missing local fingerprint");
     std::fs::create_dir_all(queue_root.join("objects"))?;
     let store = save_engine::local_store::LocalStore::open(&queue_root.join("state.sqlite"))?;
-    let parent = store
-        .latest_retryable_snapshot(server, logical_save_id)?
-        .map(|snapshot| snapshot.0)
-        .or_else(|| observed_base_head.map(str::to_owned));
+    let parent = if let Some(snapshot) = store.latest_retryable_snapshot(server, logical_save_id)? {
+        Some(snapshot.0)
+    } else if let Some(baseline) =
+        store.consistency_baseline(server, logical_save_id, tree_uri, device_id)?
+    {
+        Some(baseline.established_remote_head)
+    } else {
+        observed_base_head.map(str::to_owned)
+    };
     let descriptor = save_adapters::nemessix_android();
     let mut options = SnapshotOptions::fixture(GameKey::new("mh3g", "jp", "none", "slot1"));
     options.logical_save_id = LogicalSaveId(logical_save_id.to_owned());
@@ -824,6 +897,8 @@ pub fn queue_android_stable_stage(
         logical_save_id,
         parent.as_deref(),
         &relative_bundle,
+        tree_uri,
+        local_fingerprint,
         capture_claim.map(|(owner, generation)| (logical_save_id, owner, generation)),
     ) {
         let _ = std::fs::remove_file(&bundle);
@@ -975,7 +1050,37 @@ pub async fn drain_android_upload_queue(
             {
                 Ok(upload) => {
                     heartbeat.abort();
-                    if !matches!(store.mark_upload_completed(job.id, &owner), Ok(true)) {
+                    if !matches!(
+                        upload.outcome.as_str(),
+                        "first-snapshot" | "fast-forward" | "conflict"
+                    ) || (upload.outcome != "conflict"
+                        && upload.snapshot_id != upload.cloud_head)
+                    {
+                        let _ = store.mark_upload_failed(
+                            job.id,
+                            &owner,
+                            "server_commit_receipt_mismatch",
+                        );
+                        report.failed_count += 1;
+                        report.last_error = Some("server_commit_receipt_mismatch".into());
+                        failed_endpoints.insert(endpoint.clone());
+                        continue;
+                    }
+                    let established_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let establish = upload.outcome != "conflict";
+                    if !matches!(
+                        store.mark_upload_completed(
+                            job.id,
+                            &owner,
+                            &upload.cloud_head,
+                            establish,
+                            established_at,
+                        ),
+                        Ok(true)
+                    ) {
                         report.failed_count += 1;
                         report.last_error = Some("local_queue_unavailable".into());
                         report.queue_state_known = false;
@@ -2148,6 +2253,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
     logical: jni::objects::JString<'local>,
     base: jni::objects::JString<'local>,
     device: jni::objects::JString<'local>,
+    tree_uri: jni::objects::JString<'local>,
+    local_fingerprint: jni::objects::JString<'local>,
     capture_owner: jni::objects::JString<'local>,
     capture_generation: jni::sys::jlong,
 ) -> jni::sys::jstring {
@@ -2158,6 +2265,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
             let server: String = env.get_string(&server)?.into();
             let logical: String = env.get_string(&logical)?.into();
             let device: String = env.get_string(&device)?.into();
+            let tree_uri: String = env.get_string(&tree_uri)?.into();
+            let local_fingerprint: String = env.get_string(&local_fingerprint)?.into();
             let capture_owner: String = env.get_string(&capture_owner)?.into();
             let capture_generation = u64::try_from(capture_generation)?;
             let base = if base.is_null() {
@@ -2177,6 +2286,8 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
                 &logical,
                 base.as_deref(),
                 &device,
+                &tree_uri,
+                &local_fingerprint,
                 Some((&capture_owner, capture_generation)),
             )?;
             Ok(serde_json::to_string(&report)?)
@@ -2193,6 +2304,82 @@ pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_queueStableS
     env.new_string(output)
         .map(|value| value.into_raw())
         .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_readConsistencyBaseline<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    server: jni::objects::JString<'local>,
+    logical: jni::objects::JString<'local>,
+    tree_uri: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let queue_root: String = env.get_string(&queue_root)?.into();
+            let server: String = env.get_string(&server)?.into();
+            let logical: String = env.get_string(&logical)?.into();
+            let tree_uri: String = env.get_string(&tree_uri)?.into();
+            let device: String = env.get_string(&device)?.into();
+            read_android_consistency_baseline(
+                Path::new(&queue_root),
+                &server,
+                &logical,
+                &tree_uri,
+                &device,
+            )
+        },
+    ));
+    let output = match result {
+        Ok(Ok(json)) => json,
+        Ok(Err(_)) | Err(_) => "null".into(),
+    };
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_mhtoolkit_savesync_NativeSyncBridge_migrateLegacyConsistencyReceipt<
+    'local,
+>(
+    mut env: jni::JNIEnv<'local>,
+    _class: jni::objects::JClass<'local>,
+    queue_root: jni::objects::JString<'local>,
+    snapshot: jni::objects::JString<'local>,
+    server: jni::objects::JString<'local>,
+    logical: jni::objects::JString<'local>,
+    tree_uri: jni::objects::JString<'local>,
+    device: jni::objects::JString<'local>,
+    local_fingerprint: jni::objects::JString<'local>,
+) -> jni::sys::jboolean {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<bool> {
+        let queue_root: String = env.get_string(&queue_root)?.into();
+        let snapshot: String = env.get_string(&snapshot)?.into();
+        let server: String = env.get_string(&server)?.into();
+        let logical: String = env.get_string(&logical)?.into();
+        let tree_uri: String = env.get_string(&tree_uri)?.into();
+        let device: String = env.get_string(&device)?.into();
+        let local_fingerprint: String = env.get_string(&local_fingerprint)?.into();
+        migrate_android_legacy_consistency_receipt(
+            Path::new(&queue_root),
+            &snapshot,
+            &server,
+            &logical,
+            &tree_uri,
+            &device,
+            &local_fingerprint,
+        )
+    }))
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or(false) as jni::sys::jboolean
 }
 
 #[cfg(target_os = "android")]
@@ -2377,7 +2564,14 @@ mod tests {
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 4096];
                 loop {
-                    let read = stream.read(&mut buffer).unwrap();
+                    let read = match stream.read(&mut buffer) {
+                        Ok(read) => read,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => panic!("request read failed: {error}"),
+                    };
                     request.extend_from_slice(&buffer[..read]);
                     let header_end = request.windows(4).position(|v| v == b"\r\n\r\n");
                     if let Some(header_end) = header_end {
@@ -2414,7 +2608,7 @@ mod tests {
                         .to_string()
                 } else if first.contains("/commit ") {
                     serde_json::json!({
-                        "outcome":"created",
+                        "outcome":"first-snapshot",
                         "head":snapshot_id,
                         "conflict_snapshot":null
                     })
@@ -2448,6 +2642,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2497,6 +2693,8 @@ mod tests {
             logical,
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             Some((&owner, generation)),
         )
         .unwrap();
@@ -2521,6 +2719,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             Some("cloud-base"),
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2533,6 +2733,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             Some("cloud-base"),
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2566,6 +2768,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2601,6 +2805,35 @@ mod tests {
         assert!(!bundle.exists());
         assert!(paths.iter().any(|path| path.contains("/commit ")));
         assert!(store.retryable_uploads(&server, 1).unwrap().is_empty());
+
+        // Simulate process death after native drain committed the upload and before any
+        // Kotlin UI/SharedPreferences update. A fresh process must derive the next base
+        // from SQLite's durable receipt, not the stale caller-provided cloud base.
+        drop(store);
+        std::fs::write(source.path().join("system"), b"after-process-restart").unwrap();
+        let next = queue_android_stable_stage(
+            source.path(),
+            queue.path(),
+            &server,
+            &secret,
+            "mh3g-nemessix-jp-slot1",
+            Some("stale-head-before-upload"),
+            "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint-next",
+            None,
+        )
+        .unwrap();
+        let reopened =
+            save_engine::local_store::LocalStore::open(&queue.path().join("state.sqlite")).unwrap();
+        let jobs = reopened.retryable_uploads(&server, 10).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].snapshot_id.0, next.snapshot_id);
+        assert_eq!(
+            jobs[0].base_head.as_deref(),
+            Some(queued.snapshot_id.as_str()),
+            "durable upload receipt must prevent a false conflict after process death",
+        );
     }
 
     #[test]
@@ -2619,6 +2852,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2674,6 +2909,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();
@@ -2689,6 +2926,8 @@ mod tests {
             "mh3g-nemessix-jp-slot1",
             None,
             "android-fixture",
+            "content://fixture/tree",
+            "fixture-fingerprint",
             None,
         )
         .unwrap();

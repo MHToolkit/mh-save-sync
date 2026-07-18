@@ -121,9 +121,22 @@ internal class DurableSyncPipeline(private val context: Context) {
                     )
                     // Capture is deliberately offline-only. Never probe the server here: the
                     // immutable queue item keeps its original endpoint and base for later drain.
-                    val baseline = SyncConsistencyLedgerStore(context).read()
+                    val baseline = runCatching {
+                        SyncConsistencyLedgerCodec.decode(
+                            NativeSyncBridge.readConsistencyBaseline(
+                                queueRoot.absolutePath,
+                                server,
+                                binding.logicalSaveId,
+                                binding.treeUri,
+                                binding.deviceId,
+                            ),
+                        )
+                    }.getOrNull()
                         ?.takeIf { it.binding == binding }
                         ?.establishedRemoteHead
+                        ?: SyncConsistencyLedgerStore(context).read()
+                            ?.takeIf { it.binding == binding }
+                            ?.establishedRemoteHead
                     val queued = DurableQueueResult.parse(
                         NativeSyncBridge.queueStableStage(
                             stagingRoot = stage.root.absolutePath,
@@ -133,6 +146,8 @@ internal class DurableSyncPipeline(private val context: Context) {
                             logicalSaveId = SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
                             baseHead = baseline,
                             deviceId = deviceId,
+                            treeUri = binding.treeUri,
+                            localFingerprint = stage.fingerprint,
                             captureOwner = captureOwner,
                             captureGeneration = captureGeneration,
                         ),

@@ -66,6 +66,8 @@ struct InMemoryState {
     snapshots: BTreeMap<String, SnapshotRow>,
     snapshot_accounts: BTreeMap<String, String>,
     snapshot_chunks: BTreeMap<String, Vec<String>>,
+    commit_receipts: BTreeMap<String, CommitReceipt>,
+    upload_commit_receipts: BTreeMap<String, String>,
     accounts: BTreeMap<String, Vec<u8>>,
     devices: BTreeMap<String, MemoryDevice>,
     challenges: BTreeMap<Uuid, MemoryChallenge>,
@@ -128,6 +130,36 @@ struct UploadSession {
     required_chunks: BTreeSet<String>,
     uploaded_chunks: BTreeSet<String>,
     manifest_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CommitReceipt {
+    upload_id: Uuid,
+    account_handle: String,
+    device_cert_id: String,
+    snapshot_id: SnapshotId,
+    logical_save_id: String,
+    parents: Vec<SnapshotId>,
+    manifest_id: String,
+    required_chunks: Vec<String>,
+    response: CommitSnapshotResponse,
+}
+
+fn normalized_snapshot_ids(values: &[SnapshotId]) -> Vec<String> {
+    let mut values = values
+        .iter()
+        .map(|value| value.0.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn normalized_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1549,14 +1581,43 @@ fn commit_memory(
     auth: &AuthContext,
 ) -> Result<CommitSnapshotResponse, BackendError> {
     let mut guard = inner.lock().unwrap();
+    let upload_receipt_key = scoped_key(&auth.account_handle, &upload_id.to_string());
+    if let Some(snapshot_key) = guard.upload_commit_receipts.get(&upload_receipt_key) {
+        let receipt = guard
+            .commit_receipts
+            .get(snapshot_key)
+            .ok_or_else(|| BackendError::Unavailable("commit receipt incomplete".into()))?;
+        if receipt.account_handle == auth.account_handle
+            && receipt.device_cert_id == auth.device_cert_id
+            && receipt.snapshot_id == req.snapshot_id
+        {
+            return Ok(receipt.response.clone());
+        }
+        return Err(BackendError::Conflict(
+            "upload already committed with different snapshot id".into(),
+        ));
+    }
     let session = guard
         .uploads
-        .remove(&upload_id)
+        .get(&upload_id)
+        .cloned()
         .ok_or_else(|| BackendError::NotFound("upload".into()))?;
     if session.account_handle.as_deref() != Some(&auth.account_handle)
         || session.device_cert_id.as_deref() != Some(&auth.device_cert_id)
     {
         return Err(BackendError::NotFound("upload".into()));
+    }
+    let account = session.account_handle.as_deref().unwrap_or_default();
+    let snapshot_key = scoped_key(account, &req.snapshot_id.0);
+    if let Some(receipt) = guard.commit_receipts.get(&snapshot_key) {
+        if memory_receipt_matches(receipt, upload_id, &session, &req, auth) {
+            let response = receipt.response.clone();
+            guard.uploads.remove(&upload_id);
+            return Ok(response);
+        }
+        return Err(BackendError::Conflict(
+            "snapshot id already committed with different content".into(),
+        ));
     }
     for chunk in &session.required_chunks {
         if !guard
@@ -1576,18 +1637,18 @@ fn commit_memory(
     {
         return Err(BackendError::Conflict("manifest not durable".into()));
     }
-    let account = session.account_handle.as_deref().unwrap_or_default();
     let logical_key = scoped_key(account, &session.logical_save_id);
-    let snapshot_key = scoped_key(account, &req.snapshot_id.0);
     let current = guard.heads.get(&logical_key).cloned();
     let (kind, head, conflict) = cas_outcome(&session.base_head, &current, &req.snapshot_id);
+    let parents = session.parents.clone();
+    let required_chunks = normalized_strings(session.required_chunks.iter().cloned());
     guard.snapshots.insert(
         snapshot_key.clone(),
         SnapshotRow {
             snapshot_id: req.snapshot_id.clone(),
             logical_save_id: session.logical_save_id.clone(),
-            parents: session.parents,
-            manifest_id,
+            parents: parents.clone(),
+            manifest_id: manifest_id.clone(),
             conflict,
             resolved: false,
         },
@@ -1595,18 +1656,54 @@ fn commit_memory(
     guard
         .snapshot_accounts
         .insert(snapshot_key.clone(), auth.account_handle.clone());
-    guard.snapshot_chunks.insert(
-        snapshot_key,
-        session.required_chunks.iter().cloned().collect(),
-    );
+    guard
+        .snapshot_chunks
+        .insert(snapshot_key.clone(), required_chunks.clone());
     if !conflict {
         guard.heads.insert(logical_key, req.snapshot_id.clone());
     }
-    Ok(CommitSnapshotResponse {
+    let response = CommitSnapshotResponse {
         outcome: kind,
         head,
-        conflict_snapshot: conflict.then_some(req.snapshot_id),
-    })
+        conflict_snapshot: conflict.then_some(req.snapshot_id.clone()),
+    };
+    guard.commit_receipts.insert(
+        snapshot_key.clone(),
+        CommitReceipt {
+            upload_id,
+            account_handle: auth.account_handle.clone(),
+            device_cert_id: auth.device_cert_id.clone(),
+            snapshot_id: req.snapshot_id,
+            logical_save_id: session.logical_save_id,
+            parents,
+            manifest_id,
+            required_chunks,
+            response: response.clone(),
+        },
+    );
+    guard.upload_commit_receipts.insert(
+        scoped_key(&auth.account_handle, &upload_id.to_string()),
+        snapshot_key,
+    );
+    guard.uploads.remove(&upload_id);
+    Ok(response)
+}
+
+fn memory_receipt_matches(
+    receipt: &CommitReceipt,
+    upload_id: Uuid,
+    session: &UploadSession,
+    req: &CommitSnapshotRequest,
+    auth: &AuthContext,
+) -> bool {
+    receipt.account_handle == auth.account_handle
+        && receipt.device_cert_id == auth.device_cert_id
+        && receipt.snapshot_id == req.snapshot_id
+        && receipt.logical_save_id == session.logical_save_id
+        && receipt.manifest_id == session.manifest_id.as_deref().unwrap_or_default()
+        && normalized_snapshot_ids(&receipt.parents) == normalized_snapshot_ids(&session.parents)
+        && receipt.required_chunks == normalized_strings(session.required_chunks.iter().cloned())
+        && (receipt.upload_id == upload_id || receipt.snapshot_id == req.snapshot_id)
 }
 
 async fn commit_persistent(
@@ -1627,6 +1724,57 @@ enum CommitFailpoint {
     AfterDatabaseCommit,
 }
 
+fn commit_outcome_name(kind: &CommitOutcomeKind) -> &'static str {
+    match kind {
+        CommitOutcomeKind::FastForward => "fast-forward",
+        CommitOutcomeKind::Conflict => "conflict",
+        CommitOutcomeKind::FirstSnapshot => "first-snapshot",
+    }
+}
+
+fn parse_commit_outcome(value: &str) -> Result<CommitOutcomeKind, BackendError> {
+    match value {
+        "fast-forward" => Ok(CommitOutcomeKind::FastForward),
+        "conflict" => Ok(CommitOutcomeKind::Conflict),
+        "first-snapshot" => Ok(CommitOutcomeKind::FirstSnapshot),
+        _ => Err(BackendError::Unavailable("invalid commit receipt".into())),
+    }
+}
+
+async fn persistent_receipt_by_upload(
+    p: &PersistentState,
+    account: &[u8],
+    device: &[u8],
+    upload_id: Uuid,
+    snapshot_id: &SnapshotId,
+) -> Result<Option<CommitSnapshotResponse>, BackendError> {
+    let row = sqlx::query(
+        "SELECT snapshot_id,outcome,outcome_head,conflict_snapshot_id \
+         FROM snapshot_commit_receipts \
+         WHERE account_handle=$1 AND device_cert_id=$2 AND upload_id=$3",
+    )
+    .bind(account)
+    .bind(device)
+    .bind(upload_id)
+    .fetch_optional(&p.pool)
+    .await
+    .map_err(db_unavailable)?;
+    let Some(row) = row else { return Ok(None) };
+    let committed_snapshot: String = row.get("snapshot_id");
+    if committed_snapshot != snapshot_id.0 {
+        return Err(BackendError::Conflict(
+            "upload already committed with different snapshot id".into(),
+        ));
+    }
+    Ok(Some(CommitSnapshotResponse {
+        outcome: parse_commit_outcome(row.get::<String, _>("outcome").as_str())?,
+        head: SnapshotId(row.get("outcome_head")),
+        conflict_snapshot: row
+            .get::<Option<String>, _>("conflict_snapshot_id")
+            .map(SnapshotId),
+    }))
+}
+
 fn configured_commit_failpoint() -> CommitFailpoint {
     CommitFailpoint::Disabled
 }
@@ -1642,9 +1790,25 @@ async fn commit_persistent_with_failpoint(
         .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
     let auth_device = hex::decode(&auth.device_cert_id)
         .map_err(|_| BackendError::Invalid("invalid auth device".into()))?;
+    if let Some(response) =
+        persistent_receipt_by_upload(p, &auth_account, &auth_device, upload_id, &req.snapshot_id)
+            .await?
+    {
+        return Ok(response);
+    }
     let pre = sqlx::query("SELECT encode(account_handle,'hex') AS account_hex, logical_save_id, manifest_id, required_chunks FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now()")
-        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&p.pool).await.map_err(db_unavailable)?
-        .ok_or_else(|| BackendError::NotFound("upload".into()))?;
+        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&p.pool).await.map_err(db_unavailable)?;
+    let Some(pre) = pre else {
+        return persistent_receipt_by_upload(
+            p,
+            &auth_account,
+            &auth_device,
+            upload_id,
+            &req.snapshot_id,
+        )
+        .await?
+        .ok_or_else(|| BackendError::NotFound("upload".into()));
+    };
     let account_hex: String = pre.get("account_hex");
     let manifest_id: String = pre.get("manifest_id");
     let chunks = json_string_array(&pre.get::<serde_json::Value, _>("required_chunks"));
@@ -1659,13 +1823,71 @@ async fn commit_persistent_with_failpoint(
 
     let mut tx = p.pool.begin().await.map_err(db_unavailable)?;
     let row = sqlx::query("SELECT account_handle,device_cert_id,logical_save_id,base_head,parents,required_chunks,manifest_id FROM upload_sessions WHERE id=$1 AND account_handle=$2 AND device_cert_id=$3 AND expires_at>now() FOR UPDATE")
-        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&mut *tx).await.map_err(db_unavailable)?
-        .ok_or_else(|| BackendError::NotFound("upload".into()))?;
+        .bind(upload_id).bind(&auth_account).bind(&auth_device).fetch_optional(&mut *tx).await.map_err(db_unavailable)?;
+    let Some(row) = row else {
+        tx.rollback().await.map_err(db_unavailable)?;
+        return persistent_receipt_by_upload(
+            p,
+            &auth_account,
+            &auth_device,
+            upload_id,
+            &req.snapshot_id,
+        )
+        .await?
+        .ok_or_else(|| BackendError::NotFound("upload".into()));
+    };
     let account: Vec<u8> = row.get("account_handle");
     let device: Vec<u8> = row.get("device_cert_id");
     let logical_save_id: String = row.get("logical_save_id");
     let base_head: Option<String> = row.get("base_head");
     let parents = json_string_array(&row.get::<serde_json::Value, _>("parents"));
+    let normalized_parents = normalized_strings(parents.clone());
+    let normalized_chunks = normalized_strings(chunks.clone());
+    let existing = sqlx::query(
+        "SELECT device_cert_id,logical_save_id,manifest_id,parents,required_chunks,\
+                outcome,outcome_head,conflict_snapshot_id \
+         FROM snapshot_commit_receipts WHERE account_handle=$1 AND snapshot_id=$2",
+    )
+    .bind(&account)
+    .bind(&req.snapshot_id.0)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
+    if let Some(existing) = existing {
+        let existing_device: Vec<u8> = existing.get("device_cert_id");
+        let existing_logical: String = existing.get("logical_save_id");
+        let existing_manifest: String = existing.get("manifest_id");
+        let existing_parents = normalized_strings(json_string_array(
+            &existing.get::<serde_json::Value, _>("parents"),
+        ));
+        let existing_chunks = normalized_strings(json_string_array(
+            &existing.get::<serde_json::Value, _>("required_chunks"),
+        ));
+        if existing_device != device
+            || existing_logical != logical_save_id
+            || existing_manifest != manifest_id
+            || existing_parents != normalized_parents
+            || existing_chunks != normalized_chunks
+        {
+            return Err(BackendError::Conflict(
+                "snapshot id already committed with different content".into(),
+            ));
+        }
+        let response = CommitSnapshotResponse {
+            outcome: parse_commit_outcome(existing.get::<String, _>("outcome").as_str())?,
+            head: SnapshotId(existing.get("outcome_head")),
+            conflict_snapshot: existing
+                .get::<Option<String>, _>("conflict_snapshot_id")
+                .map(SnapshotId),
+        };
+        sqlx::query("DELETE FROM upload_sessions WHERE id=$1")
+            .bind(upload_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_unavailable)?;
+        tx.commit().await.map_err(db_unavailable)?;
+        return Ok(response);
+    }
     validate_parent_set_tx(
         &mut tx,
         &account,
@@ -1686,7 +1908,7 @@ async fn commit_persistent_with_failpoint(
     let current_id = current.as_ref().map(|x| SnapshotId(x.clone()));
     let (kind, head, conflict) = cas_outcome(&base, &current_id, &req.snapshot_id);
     sqlx::query("INSERT INTO snapshots(id,account_handle,logical_save_id,encrypted_manifest_object,committing_device_cert_id,conflict) VALUES ($1,$2,$3,$4,$5,$6)")
-        .bind(&req.snapshot_id.0).bind(&account).bind(&logical_save_id).bind(&manifest_id).bind(device).bind(conflict)
+        .bind(&req.snapshot_id.0).bind(&account).bind(&logical_save_id).bind(&manifest_id).bind(&device).bind(conflict)
         .execute(&mut *tx).await.map_err(db_unavailable)?;
     for parent in &parents {
         sqlx::query("INSERT INTO snapshot_parents(account_handle,snapshot_id,parent_snapshot_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
@@ -1709,6 +1931,31 @@ async fn commit_persistent_with_failpoint(
             ));
         }
     }
+    let response = CommitSnapshotResponse {
+        outcome: kind,
+        head,
+        conflict_snapshot: conflict.then_some(req.snapshot_id.clone()),
+    };
+    sqlx::query(
+        "INSERT INTO snapshot_commit_receipts(\
+            account_handle,upload_id,snapshot_id,device_cert_id,logical_save_id,manifest_id,\
+            parents,required_chunks,outcome,outcome_head,conflict_snapshot_id\
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+    )
+    .bind(&account)
+    .bind(upload_id)
+    .bind(&req.snapshot_id.0)
+    .bind(&device)
+    .bind(&logical_save_id)
+    .bind(&manifest_id)
+    .bind(serde_json::json!(normalized_parents))
+    .bind(serde_json::json!(normalized_chunks))
+    .bind(commit_outcome_name(&response.outcome))
+    .bind(&response.head.0)
+    .bind(response.conflict_snapshot.as_ref().map(|value| &value.0))
+    .execute(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
     sqlx::query("DELETE FROM upload_sessions WHERE id=$1")
         .bind(upload_id)
         .execute(&mut *tx)
@@ -1729,11 +1976,7 @@ async fn commit_persistent_with_failpoint(
     }
     #[cfg(not(test))]
     let _ = failpoint;
-    Ok(CommitSnapshotResponse {
-        outcome: kind,
-        head,
-        conflict_snapshot: conflict.then_some(req.snapshot_id),
-    })
+    Ok(response)
 }
 
 async fn get_encrypted_bundle(
@@ -2825,6 +3068,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn memory_commit_replay_is_idempotent_and_content_bound() {
+        let account = hex::encode([0x41; 20]);
+        let device = hex::encode([0x42; 16]);
+        let auth = AuthContext {
+            account_handle: account.clone(),
+            device_cert_id: device.clone(),
+        };
+        let upload_id = Uuid::new_v4();
+        let inner = Arc::new(Mutex::new(InMemoryState::default()));
+        {
+            let mut guard = inner.lock().unwrap();
+            guard.manifests.insert(
+                scoped_key(&account, "manifest-a"),
+                b"encrypted-manifest".to_vec(),
+            );
+            guard.uploads.insert(
+                upload_id,
+                UploadSession {
+                    account_handle: Some(account.clone()),
+                    device_cert_id: Some(device.clone()),
+                    logical_save_id: "save-a".into(),
+                    base_head: None,
+                    parents: vec![],
+                    required_chunks: BTreeSet::new(),
+                    uploaded_chunks: BTreeSet::new(),
+                    manifest_id: Some("manifest-a".into()),
+                },
+            );
+        }
+        let request = CommitSnapshotRequest {
+            snapshot_id: SnapshotId("snapshot-a".into()),
+        };
+        let first = commit_memory(&inner, upload_id, request.clone(), &auth).unwrap();
+        let replay = commit_memory(&inner, upload_id, request.clone(), &auth).unwrap();
+        assert_eq!(replay.head, first.head);
+        assert!(matches!(replay.outcome, CommitOutcomeKind::FirstSnapshot));
+
+        let mismatched_upload = Uuid::new_v4();
+        {
+            let mut guard = inner.lock().unwrap();
+            guard.manifests.insert(
+                scoped_key(&account, "manifest-b"),
+                b"different-encrypted-manifest".to_vec(),
+            );
+            guard.uploads.insert(
+                mismatched_upload,
+                UploadSession {
+                    account_handle: Some(account),
+                    device_cert_id: Some(device),
+                    logical_save_id: "save-b".into(),
+                    base_head: None,
+                    parents: vec![],
+                    required_chunks: BTreeSet::new(),
+                    uploaded_chunks: BTreeSet::new(),
+                    manifest_id: Some("manifest-b".into()),
+                },
+            );
+        }
+        assert!(matches!(
+            commit_memory(&inner, mismatched_upload, request, &auth),
+            Err(BackendError::Conflict(_))
+        ));
+    }
+
     #[tokio::test]
     async fn delete_tombstone_and_offline_modify_form_conflict_branches() {
         let state = AppState::default();
@@ -3465,6 +3773,62 @@ mod tests {
             Some("after-snapshot")
         );
         assert!(!upload_exists(&pool, after_upload).await);
+        let retry = commit_persistent_with_failpoint(
+            &persistent,
+            after_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("after-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::Disabled,
+        )
+        .await
+        .expect("lost commit response must be safely replayable");
+        assert!(matches!(retry.outcome, CommitOutcomeKind::FirstSnapshot));
+        assert_eq!(retry.head.0, "after-snapshot");
+
+        let mismatched_upload = insert_commit_fixture(
+            &pool,
+            &store,
+            &account,
+            &device,
+            "different-save",
+            "different-manifest",
+        )
+        .await;
+        let mismatch = commit_persistent_with_failpoint(
+            &persistent,
+            mismatched_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("after-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::Disabled,
+        )
+        .await;
+        assert!(matches!(mismatch, Err(BackendError::Conflict(_))));
+
+        let later_upload = insert_commit_fixture(
+            &pool,
+            &store,
+            &account,
+            &device,
+            "later-save",
+            "later-manifest",
+        )
+        .await;
+        let later = commit_persistent_with_failpoint(
+            &persistent,
+            later_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("later-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::Disabled,
+        )
+        .await
+        .expect("a replay must not poison later commits");
+        assert_eq!(later.head.0, "later-snapshot");
         sqlx::query("UPDATE objects SET created_at=now()-interval '2 days' WHERE account_handle=$1 AND object_id='after-manifest'")
             .bind(&account)
             .execute(&pool)

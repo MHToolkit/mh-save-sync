@@ -1298,7 +1298,7 @@ pub fn import_encrypted_bundle(path: &Path) -> Result<EncryptedSnapshot, EngineE
 }
 
 pub mod local_store {
-    use rusqlite::{Connection, params};
+    use rusqlite::{Connection, OptionalExtension, params};
     use save_domain::SnapshotId;
     use std::path::Path;
 
@@ -1313,6 +1313,18 @@ pub mod local_store {
         pub bundle_path: String,
         pub attempts: u32,
         pub last_error: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DurableConsistencyBaseline {
+        pub server_endpoint: String,
+        pub logical_save_id: String,
+        pub tree_uri: String,
+        pub device_id: String,
+        pub established_remote_head: String,
+        pub local_fingerprint: String,
+        pub established_at_millis: u64,
+        pub mode: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1405,6 +1417,8 @@ pub mod local_store {
                     base_head TEXT,
                     device_id TEXT,
                     bundle_path TEXT,
+                    tree_uri TEXT,
+                    local_fingerprint TEXT,
                     lease_owner TEXT,
                     lease_expires_at INTEGER
                 );
@@ -1420,6 +1434,17 @@ pub mod local_store {
                     lease_owner TEXT,
                     lease_expires_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS sync_consistency (
+                    server_endpoint TEXT NOT NULL,
+                    logical_save_id TEXT NOT NULL,
+                    tree_uri TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    established_remote_head TEXT NOT NULL,
+                    local_fingerprint TEXT NOT NULL,
+                    established_at_millis INTEGER NOT NULL,
+                    mode TEXT NOT NULL CHECK(mode IN ('upload','restore')),
+                    PRIMARY KEY(server_endpoint,logical_save_id,tree_uri,device_id)
+                );
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
@@ -1433,6 +1458,8 @@ pub mod local_store {
             self.ensure_upload_queue_column("base_head", "TEXT")?;
             self.ensure_upload_queue_column("device_id", "TEXT")?;
             self.ensure_upload_queue_column("bundle_path", "TEXT")?;
+            self.ensure_upload_queue_column("tree_uri", "TEXT")?;
+            self.ensure_upload_queue_column("local_fingerprint", "TEXT")?;
             self.ensure_upload_queue_column("lease_owner", "TEXT")?;
             self.ensure_upload_queue_column("lease_expires_at", "INTEGER")?;
             self.conn.execute(
@@ -1575,6 +1602,8 @@ pub mod local_store {
             logical_save_id: &str,
             base_head: Option<&str>,
             bundle_path: &str,
+            tree_uri: &str,
+            local_fingerprint: &str,
             capture_claim: Option<(&str, &str, u64)>,
         ) -> Result<(), LocalStoreError> {
             let transaction = self.conn.unchecked_transaction()?;
@@ -1591,8 +1620,9 @@ pub mod local_store {
             )?;
             transaction.execute(
                 r#"INSERT OR IGNORE INTO upload_queue(
-                    snapshot_id,state,server_endpoint,logical_save_id,base_head,device_id,bundle_path
-                ) VALUES (?1,'pending',?2,?3,?4,?5,?6)"#,
+                    snapshot_id,state,server_endpoint,logical_save_id,base_head,device_id,bundle_path,
+                    tree_uri,local_fingerprint
+                ) VALUES (?1,'pending',?2,?3,?4,?5,?6,?7,?8)"#,
                 params![
                     snapshot_id.0,
                     server_endpoint,
@@ -1600,6 +1630,8 @@ pub mod local_store {
                     base_head,
                     device_id,
                     bundle_path,
+                    tree_uri,
+                    local_fingerprint,
                 ],
             )?;
             if let Some((capture_key, capture_owner, generation)) = capture_claim {
@@ -1741,10 +1773,118 @@ pub mod local_store {
             )? == 1)
         }
 
-        pub fn mark_upload_completed(&self, id: i64, owner: &str) -> Result<bool, LocalStoreError> {
-            Ok(self.conn.execute(
+        pub fn mark_upload_completed(
+            &self,
+            id: i64,
+            owner: &str,
+            cloud_head: &str,
+            establish_consistency: bool,
+            established_at_millis: u64,
+        ) -> Result<bool, LocalStoreError> {
+            let transaction = self.conn.unchecked_transaction()?;
+            let row = transaction.query_row(
+                "SELECT snapshot_id,server_endpoint,logical_save_id,tree_uri,device_id,local_fingerprint FROM upload_queue WHERE id=?1 AND state='uploading' AND lease_owner=?2",
+                params![id, owner],
+                |row| Ok((
+                    row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?,
+                )),
+            ).optional()?;
+            let Some((snapshot_id, server, logical, tree, device, fingerprint)) = row else {
+                return Ok(false);
+            };
+            if establish_consistency {
+                let (Some(server), Some(logical), Some(tree), Some(device), Some(fingerprint)) =
+                    (server, logical, tree, device, fingerprint)
+                else {
+                    return Ok(false);
+                };
+                if snapshot_id != cloud_head {
+                    return Ok(false);
+                }
+                transaction.execute(
+                    r#"INSERT INTO sync_consistency(
+                        server_endpoint,logical_save_id,tree_uri,device_id,
+                        established_remote_head,local_fingerprint,established_at_millis,mode
+                    ) VALUES (?1,?2,?3,?4,?5,?6,?7,'upload')
+                    ON CONFLICT(server_endpoint,logical_save_id,tree_uri,device_id) DO UPDATE SET
+                        established_remote_head=excluded.established_remote_head,
+                        local_fingerprint=excluded.local_fingerprint,
+                        established_at_millis=excluded.established_at_millis,
+                        mode='upload'"#,
+                    params![
+                        server,
+                        logical,
+                        tree,
+                        device,
+                        cloud_head,
+                        fingerprint,
+                        established_at_millis as i64
+                    ],
+                )?;
+            }
+            let updated = transaction.execute(
                 "UPDATE upload_queue SET state='completed',last_error=NULL,lease_owner=NULL,lease_expires_at=NULL WHERE id=?1 AND state='uploading' AND lease_owner=?2",
                 params![id, owner],
+            )?;
+            transaction.commit()?;
+            Ok(updated == 1)
+        }
+
+        pub fn consistency_baseline(
+            &self,
+            server_endpoint: &str,
+            logical_save_id: &str,
+            tree_uri: &str,
+            device_id: &str,
+        ) -> Result<Option<DurableConsistencyBaseline>, LocalStoreError> {
+            Ok(self
+                .conn
+                .query_row(
+                    r#"SELECT established_remote_head,local_fingerprint,established_at_millis,mode
+                   FROM sync_consistency WHERE server_endpoint=?1 AND logical_save_id=?2
+                     AND tree_uri=?3 AND device_id=?4"#,
+                    params![server_endpoint, logical_save_id, tree_uri, device_id],
+                    |row| {
+                        Ok(DurableConsistencyBaseline {
+                            server_endpoint: server_endpoint.to_owned(),
+                            logical_save_id: logical_save_id.to_owned(),
+                            tree_uri: tree_uri.to_owned(),
+                            device_id: device_id.to_owned(),
+                            established_remote_head: row.get(0)?,
+                            local_fingerprint: row.get(1)?,
+                            established_at_millis: row.get::<_, i64>(2)? as u64,
+                            mode: row.get(3)?,
+                        })
+                    },
+                )
+                .optional()?)
+        }
+
+        pub fn attach_upload_consistency(
+            &self,
+            snapshot_id: &str,
+            server_endpoint: &str,
+            logical_save_id: &str,
+            tree_uri: &str,
+            device_id: &str,
+            local_fingerprint: &str,
+        ) -> Result<bool, LocalStoreError> {
+            Ok(self.conn.execute(
+                r#"UPDATE upload_queue SET tree_uri=?4,local_fingerprint=?6
+                   WHERE snapshot_id=?1 AND server_endpoint=?2 AND logical_save_id=?3
+                     AND device_id=?5 AND state IN ('pending','uploading')
+                     AND (tree_uri IS NULL OR tree_uri=?4)
+                     AND (local_fingerprint IS NULL OR local_fingerprint=?6)"#,
+                params![
+                    snapshot_id,
+                    server_endpoint,
+                    logical_save_id,
+                    tree_uri,
+                    device_id,
+                    local_fingerprint
+                ],
             )? == 1)
         }
 
@@ -2441,6 +2581,8 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 Some("base-a"),
                 "objects/snap-durable.mhsavebundle",
+                "content://fixture/tree",
+                "fingerprint-a",
                 None,
             )
             .unwrap();
@@ -2474,7 +2616,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .mark_upload_completed(claimed.id, "test-worker-2")
+                .mark_upload_completed(claimed.id, "test-worker-2", "snap-durable", true, 30)
                 .unwrap()
         );
         assert!(
@@ -2484,6 +2626,102 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.pending_upload_count().unwrap(), 0);
+        let baseline = store
+            .consistency_baseline(
+                "https://sync.example.test",
+                "mh3g-nemessix-jp-slot1",
+                "content://fixture/tree",
+                "device-a",
+            )
+            .unwrap()
+            .expect("upload completion and consistency receipt must commit atomically");
+        assert_eq!(baseline.established_remote_head, "snap-durable");
+        assert_eq!(baseline.local_fingerprint, "fingerprint-a");
+        drop(store);
+        let reopened =
+            crate::local_store::LocalStore::open(&tmp.path().join("state.sqlite")).unwrap();
+        assert_eq!(
+            reopened
+                .consistency_baseline(
+                    "https://sync.example.test",
+                    "mh3g-nemessix-jp-slot1",
+                    "content://fixture/tree",
+                    "device-a",
+                )
+                .unwrap()
+                .unwrap()
+                .established_remote_head,
+            "snap-durable",
+            "process restart after HTTP success must retain the established HEAD",
+        );
+    }
+
+    #[test]
+    fn sqlite_migrates_legacy_queue_receipt_into_durable_consistency() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.sqlite");
+        let legacy = rusqlite::Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                r#"CREATE TABLE upload_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    server_endpoint TEXT,
+                    logical_save_id TEXT,
+                    base_head TEXT,
+                    device_id TEXT,
+                    bundle_path TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at INTEGER
+                );
+                INSERT INTO upload_queue(
+                    snapshot_id,state,server_endpoint,logical_save_id,device_id,bundle_path
+                ) VALUES (
+                    'legacy-snapshot','pending','https://sync.example.test',
+                    'mh3g-nemessix-jp-slot1','device-a','objects/legacy.mhsavebundle'
+                );"#,
+            )
+            .unwrap();
+        drop(legacy);
+
+        let store = crate::local_store::LocalStore::open(&path).unwrap();
+        assert!(
+            store
+                .attach_upload_consistency(
+                    "legacy-snapshot",
+                    "https://sync.example.test",
+                    "mh3g-nemessix-jp-slot1",
+                    "content://legacy/tree",
+                    "device-a",
+                    "legacy-fingerprint",
+                )
+                .unwrap()
+        );
+        let claimed = store
+            .claim_retryable_upload(None, "migration-worker", 1, 2)
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .mark_upload_completed(claimed.id, "migration-worker", "legacy-snapshot", true, 99,)
+                .unwrap()
+        );
+        drop(store);
+        let reopened = crate::local_store::LocalStore::open(&path).unwrap();
+        let baseline = reopened
+            .consistency_baseline(
+                "https://sync.example.test",
+                "mh3g-nemessix-jp-slot1",
+                "content://legacy/tree",
+                "device-a",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(baseline.established_remote_head, "legacy-snapshot");
+        assert_eq!(baseline.local_fingerprint, "legacy-fingerprint");
     }
 
     #[test]
@@ -2502,6 +2740,8 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 None,
                 "objects/snap-claimed.mhsavebundle",
+                "content://fixture/tree",
+                "fingerprint-claimed",
                 None,
             )
             .unwrap();
@@ -2520,7 +2760,7 @@ mod tests {
         );
         assert!(
             !second
-                .mark_upload_completed(claimed.id, "worker-b")
+                .mark_upload_completed(claimed.id, "worker-b", "snap-claimed", true, 300)
                 .unwrap()
         );
         assert!(
@@ -2533,7 +2773,11 @@ mod tests {
                 .renew_upload_lease(claimed.id, "worker-a", 500)
                 .unwrap()
         );
-        assert!(first.mark_upload_completed(claimed.id, "worker-a").unwrap());
+        assert!(
+            first
+                .mark_upload_completed(claimed.id, "worker-a", "snap-claimed", true, 300)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -2552,6 +2796,8 @@ mod tests {
                 "mh3g-nemessix-jp-slot1",
                 None,
                 "objects/snap-crashed.mhsavebundle",
+                "content://fixture/tree",
+                "fingerprint-crashed",
                 None,
             )
             .unwrap();
@@ -2653,6 +2899,8 @@ mod tests {
                     "mh3g-nemessix-jp-slot1",
                     None,
                     "objects/snap-one.mhsavebundle",
+                    "content://fixture/tree",
+                    "fingerprint-one",
                     None,
                 )
                 .unwrap();

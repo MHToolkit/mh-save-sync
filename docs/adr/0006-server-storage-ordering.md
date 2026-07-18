@@ -20,6 +20,13 @@ Commit ordering is:
    snapshot/parent rows;
 4. compare-and-swap the logical-save HEAD from `base_head`.
 
+The same transaction also records an account-scoped commit receipt keyed by
+upload ID and snapshot ID. It binds the committing device, logical save,
+manifest, normalized parent set, normalized object-reference set and original
+CAS response. A retry after response loss returns that response only when the
+opaque content contract matches; a different payload reusing the same snapshot
+ID is rejected.
+
 HEAD never references absent objects. A failed CAS records the immutable
 snapshot as a conflict branch. Missing-set queries make uploads resumable.
 Uncommitted objects are orphan candidates and are reclaimed only after a grace
@@ -44,7 +51,11 @@ service.
 
 Recovery needs a transactionally consistent PostgreSQL backup plus versioned
 object backup. Restore tooling verifies every referenced object before exposing
-readiness.
+readiness. Migration `007_commit_receipts.sql` is additive. Rollback may stop
+writing/reading receipts only after all pre-rollback client queues have either
+received their commit response or been reconciled from snapshot history;
+dropping the table earlier reopens the response-loss retry ambiguity but does
+not alter immutable snapshots or HEAD rows.
 ## Phase1-alpha evidence
 
 `save-server` now has both an in-memory test backend and a persistent
@@ -74,8 +85,11 @@ backup: PostgreSQL sha256=7d4b439072fd79fd9ad012dee9b1eba589140b5857381116d66b4c
 backup: MinIO tar sha256=b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f
 restore: readiness 200 and dangling_snapshot_objects=0
 crash/GC: before-commit rollback leaves no snapshot or HEAD and the orphan is
-  reclaimable; after-commit response loss leaves snapshot/HEAD durable and GC
-  retains the referenced object
+  reclaimable; after-commit response loss leaves snapshot/HEAD durable, a
+  content-bound commit receipt makes the same upload retry return its original
+  CAS outcome, and GC retains the referenced object. Reusing the snapshot ID
+  with different logical save, manifest, parents, device or object references
+  fails closed; the replay does not poison later commits.
 GC Compose: 1,005 untracked keys crossed the S3 listing page boundary; dry-run
   found 1,006 total candidates, delete removed exactly 1,006, PostgreSQL and
   MinIO retained only the referenced object, and failure stderr exposed no key
