@@ -912,6 +912,13 @@ async fn begin_snapshot(
                     "authenticated identity mismatch".into(),
                 ));
             }
+            validate_parent_set_memory(
+                &guard,
+                account,
+                &req.logical_save_id,
+                req.base_head.as_ref(),
+                &req.parents,
+            )?;
             let upload_id = Uuid::new_v4();
             let missing = req
                 .chunk_ids
@@ -1650,6 +1657,34 @@ fn validate_parent_shape(
     Ok(())
 }
 
+fn validate_parent_set_memory(
+    state: &InMemoryState,
+    account: &str,
+    logical_save_id: &str,
+    base: Option<&SnapshotId>,
+    parents: &[SnapshotId],
+) -> Result<(), ApiError> {
+    validate_parent_shape(base, parents)?;
+    for parent in parents {
+        let key = scoped_key(account, &parent.0);
+        let belongs_to_save = state
+            .snapshots
+            .get(&key)
+            .is_some_and(|row| row.logical_save_id == logical_save_id)
+            && state
+                .snapshot_accounts
+                .get(&key)
+                .is_some_and(|owner| owner == account);
+        if !belongs_to_save {
+            return Err(BackendError::Invalid(
+                "parent does not belong to this account and logical save".into(),
+            )
+            .api());
+        }
+    }
+    Ok(())
+}
+
 async fn validate_parent_set_persistent(
     p: &PersistentState,
     account: &[u8],
@@ -1955,6 +1990,73 @@ mod tests {
         }))
     }
 
+    fn fixture_auth(device_byte: u8) -> Option<Extension<AuthContext>> {
+        Some(Extension(AuthContext {
+            account_handle: hex::encode([0x11; 20]),
+            device_cert_id: hex::encode([device_byte; 16]),
+        }))
+    }
+
+    #[derive(Serialize)]
+    struct FixtureManifest<'a> {
+        created_unix_ms: u64,
+        mutation: &'a str,
+    }
+
+    async fn commit_fixture_snapshot(
+        state: &AppState,
+        snapshot_byte: u8,
+        device_byte: u8,
+        base: Option<u8>,
+        parents: &[u8],
+        created_unix_ms: u64,
+        mutation: &str,
+    ) -> Result<CommitSnapshotResponse, ApiError> {
+        let manifest_id = id(snapshot_byte.wrapping_add(100));
+        let auth = fixture_auth(device_byte);
+        let begin = begin_snapshot(
+            State(state.clone()),
+            auth.clone(),
+            Json(BeginSnapshotRequest {
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([device_byte; 16])),
+                logical_save_id: "three-device-save".into(),
+                base_head: base.map(|byte| SnapshotId(id(byte))),
+                parents: parents.iter().map(|byte| SnapshotId(id(*byte))).collect(),
+                encrypted_manifest_id: manifest_id.clone(),
+                chunk_ids: vec![],
+            }),
+        )
+        .await?;
+        let bytes = serde_json::to_vec(&FixtureManifest {
+            created_unix_ms,
+            mutation,
+        })
+        .unwrap();
+        let (sha256, bytes_b64) = sha_b64(&bytes);
+        put_manifest(
+            State(state.clone()),
+            auth.clone(),
+            Path(begin.0.upload_id),
+            Json(PutManifestRequest {
+                manifest_id,
+                sha256,
+                bytes_b64,
+            }),
+        )
+        .await?;
+        commit_snapshot(
+            State(state.clone()),
+            auth,
+            Path(begin.0.upload_id),
+            Json(CommitSnapshotRequest {
+                snapshot_id: SnapshotId(id(snapshot_byte)),
+            }),
+        )
+        .await
+        .map(|response| response.0)
+    }
+
     #[test]
     fn reissued_device_certificate_is_idempotent_when_identity_matches() {
         assert!(device_registration_matches_existing_identity(
@@ -2131,6 +2233,151 @@ mod tests {
         assert!(validate_parent_shape(Some(&parent), std::slice::from_ref(&parent)).is_ok());
         assert!(validate_parent_shape(Some(&parent), &[]).is_err());
         assert!(validate_parent_shape(None, &[parent.clone(), parent]).is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_backend_rejects_unknown_parent_before_upload() {
+        let state = AppState::default();
+        let result = begin_snapshot(
+            State(state),
+            fixture_auth(0x31),
+            Json(BeginSnapshotRequest {
+                account_handle: Some(hex::encode([0x11; 20])),
+                device_cert_id: Some(hex::encode([0x31; 16])),
+                logical_save_id: "three-device-save".into(),
+                base_head: Some(SnapshotId(id(9))),
+                parents: vec![SnapshotId(id(9))],
+                encrypted_manifest_id: id(109),
+                chunk_ids: vec![],
+            }),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err((StatusCode::BAD_REQUEST, message))
+                if message == "parent does not belong to this account and logical save"
+        ));
+    }
+
+    #[tokio::test]
+    async fn three_devices_retain_fast_forward_and_every_offline_branch() {
+        let state = AppState::default();
+
+        let a = commit_fixture_snapshot(&state, 10, 0x31, None, &[], 1_000, "initial")
+            .await
+            .unwrap();
+        assert!(matches!(a.outcome, CommitOutcomeKind::FirstSnapshot));
+
+        let b = commit_fixture_snapshot(&state, 11, 0x32, Some(10), &[10], 2_000, "modify")
+            .await
+            .unwrap();
+        assert!(matches!(b.outcome, CommitOutcomeKind::FastForward));
+        assert_eq!(b.head, SnapshotId(id(11)));
+
+        let c = commit_fixture_snapshot(&state, 12, 0x33, Some(10), &[10], 1_500, "modify")
+            .await
+            .unwrap();
+        assert!(matches!(c.outcome, CommitOutcomeKind::Conflict));
+        assert_eq!(c.head, SnapshotId(id(11)));
+        assert_eq!(c.conflict_snapshot, Some(SnapshotId(id(12))));
+
+        let a_branch = commit_fixture_snapshot(&state, 13, 0x31, Some(10), &[10], 3_000, "modify")
+            .await
+            .unwrap();
+        assert!(matches!(a_branch.outcome, CommitOutcomeKind::Conflict));
+        let c_branch = commit_fixture_snapshot(&state, 14, 0x33, Some(12), &[12], 4_000, "modify")
+            .await
+            .unwrap();
+        assert!(matches!(c_branch.outcome, CommitOutcomeKind::Conflict));
+
+        let auth = fixture_auth(0x31).unwrap().0;
+        let rows = history(&state, &auth.account_handle, "three-device-save", false)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 5, "no branch may be erased or overwritten");
+        for (snapshot, parent) in [(11, 10), (12, 10), (13, 10), (14, 12)] {
+            assert!(rows.iter().any(|row| {
+                row.snapshot_id == SnapshotId(id(snapshot))
+                    && row.parents == vec![SnapshotId(id(parent))]
+            }));
+        }
+        assert_eq!(
+            get_head(
+                State(state),
+                Extension(auth),
+                Path("three-device-save".into())
+            )
+            .await
+            .unwrap()
+            .0,
+            SnapshotId(id(11)),
+            "offline branches must never replace the fast-forward HEAD"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_tombstone_and_offline_modify_form_conflict_branches() {
+        let state = AppState::default();
+        commit_fixture_snapshot(&state, 20, 0x31, None, &[], 10, "initial")
+            .await
+            .unwrap();
+        let delete = commit_fixture_snapshot(&state, 21, 0x32, Some(20), &[20], 20, "tombstone")
+            .await
+            .unwrap();
+        let modify = commit_fixture_snapshot(&state, 22, 0x33, Some(20), &[20], 30, "modify")
+            .await
+            .unwrap();
+
+        assert!(matches!(delete.outcome, CommitOutcomeKind::FastForward));
+        assert!(matches!(modify.outcome, CommitOutcomeKind::Conflict));
+        assert_eq!(modify.head, SnapshotId(id(21)));
+        assert_eq!(modify.conflict_snapshot, Some(SnapshotId(id(22))));
+
+        let auth = fixture_auth(0x31).unwrap().0;
+        let rows = history(&state, &auth.account_handle, "three-device-save", false)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|row| row.snapshot_id == SnapshotId(id(21))));
+        assert!(rows.iter().any(|row| {
+            row.snapshot_id == SnapshotId(id(22))
+                && row.conflict
+                && row.parents == vec![SnapshotId(id(20))]
+        }));
+    }
+
+    #[tokio::test]
+    async fn extreme_clock_drift_does_not_change_cas_topology() {
+        async fn topology(timestamps: [u64; 3]) -> Vec<(String, String, Option<String>)> {
+            let state = AppState::default();
+            let first =
+                commit_fixture_snapshot(&state, 30, 0x31, None, &[], timestamps[0], "initial")
+                    .await
+                    .unwrap();
+            let fast_forward =
+                commit_fixture_snapshot(&state, 31, 0x32, Some(30), &[30], timestamps[1], "modify")
+                    .await
+                    .unwrap();
+            let conflict =
+                commit_fixture_snapshot(&state, 32, 0x33, Some(30), &[30], timestamps[2], "modify")
+                    .await
+                    .unwrap();
+            [first, fast_forward, conflict]
+                .into_iter()
+                .map(|response| {
+                    (
+                        format!("{:?}", response.outcome),
+                        response.head.0,
+                        response.conflict_snapshot.map(|id| id.0),
+                    )
+                })
+                .collect()
+        }
+
+        let normal = topology([1_000, 2_000, 1_500]).await;
+        let drifted = topology([u64::MAX, 0, u64::MAX - 1]).await;
+        assert_eq!(normal, drifted);
     }
 
     #[tokio::test]
