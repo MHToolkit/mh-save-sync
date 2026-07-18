@@ -56,7 +56,8 @@ class NemessixQuiescenceClient(private val context: Context) {
             putString("challenge_hex", challenge)
         })
         response.denial()?.fail()
-        check(response.getInt("protocol") == 1 && response.getString("state") == "QUIESCENT") {
+        check(response.getInt("protocol") == 1) { "nemessix_quiescence_protocol_mismatch" }
+        check(response.getString("state") == "QUIESCENT") {
             "nemessix_quiescence_denied"
         }
         check(response.getString("challenge_hex") == challenge) { "nemessix_quiescence_challenge_mismatch" }

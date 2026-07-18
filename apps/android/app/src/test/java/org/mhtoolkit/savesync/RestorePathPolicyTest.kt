@@ -3,6 +3,8 @@ package org.mhtoolkit.savesync
 import java.nio.file.Files
 import kotlin.io.path.writeText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
@@ -161,6 +163,94 @@ class RestorePathPolicyTest {
         root.resolve("pending-b").deleteRecursively()
         assertEquals(0, RestoreRecovery.pendingCount(root))
         root.deleteRecursively()
+    }
+
+    @Test
+    fun acquireFailureRemovesPlaceholderOperation() {
+        val operation = Files.createTempDirectory("restore-acquire-failure").toFile()
+        val placeholder = DurableRestoreLease(
+            NemessixQuiescenceLease("", "a".repeat(64), "operation-a", ""),
+            "tree-a",
+        )
+
+        runCatching {
+            RestoreLeaseAcquireCoordinator.acquire(
+                operation = operation,
+                placeholder = placeholder,
+                acquireLease = { error("nemessix_quiescence_unauthorized") },
+            )
+        }
+
+        assertFalse(operation.exists())
+    }
+
+    @Test
+    fun durableWriteFailureKeepsPlaceholderForRecovery() {
+        val operation = Files.createTempDirectory("restore-acquire-durable-write").toFile()
+        val placeholder = DurableRestoreLease(
+            NemessixQuiescenceLease("", "b".repeat(64), "operation-b", ""),
+            "tree-b",
+        )
+        var writes = 0
+
+        runCatching {
+            RestoreLeaseAcquireCoordinator.acquire(
+                operation = operation,
+                placeholder = placeholder,
+                writeLease = { target, lease ->
+                    writes += 1
+                    if (writes == 2) error("durable write failed")
+                    RestoreLeaseStore.write(target, lease)
+                },
+                acquireLease = {
+                    NemessixQuiescenceLease("c".repeat(64), "b".repeat(64), "operation-b", "build")
+                },
+            )
+        }
+
+        assertTrue(operation.resolve("lease.json").isFile)
+        assertEquals("", RestoreLeaseStore.read(operation).lease.leaseId)
+        operation.deleteRecursively()
+    }
+
+    @Test
+    fun ambiguousAcquireFailureKeepsPlaceholderForRecovery() {
+        val operation = Files.createTempDirectory("restore-acquire-ambiguous").toFile()
+        val placeholder = DurableRestoreLease(
+            NemessixQuiescenceLease("", "d".repeat(64), "operation-d", ""),
+            "tree-d",
+        )
+
+        runCatching {
+            RestoreLeaseAcquireCoordinator.acquire(
+                operation = operation,
+                placeholder = placeholder,
+                acquireLease = { error("nemessix_quiescence_challenge_mismatch") },
+            )
+        }
+
+        assertTrue(operation.resolve("lease.json").isFile)
+        operation.deleteRecursively()
+    }
+
+    @Test
+    fun unavailableAcquireResponseKeepsPlaceholderForStatusRecovery() {
+        val operation = Files.createTempDirectory("restore-acquire-unavailable").toFile()
+        val placeholder = DurableRestoreLease(
+            NemessixQuiescenceLease("", "e".repeat(64), "operation-e", ""),
+            "tree-e",
+        )
+
+        runCatching {
+            RestoreLeaseAcquireCoordinator.acquire(
+                operation = operation,
+                placeholder = placeholder,
+                acquireLease = { error("nemessix_quiescence_unavailable") },
+            )
+        }
+
+        assertTrue(operation.resolve("lease.json").isFile)
+        operation.deleteRecursively()
     }
 
     private class SimulatedProcessDeath : Error()

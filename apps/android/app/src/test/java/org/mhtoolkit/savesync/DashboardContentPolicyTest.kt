@@ -63,13 +63,13 @@ class DashboardContentPolicyTest {
             ),
         )
         assertEquals(
-            RestoreFailureKind.NEMESSIX_AUTH_OR_VERSION,
+            RestoreFailureKind.MH_SAVE_SYNC_NOT_TRUSTED,
             DashboardContentPolicy.restoreFailureKind(
                 IllegalStateException("nemessix_quiescence_unauthorized"),
             ),
         )
         assertEquals(
-            RestoreFailureKind.NEMESSIX_AUTH_OR_VERSION,
+            RestoreFailureKind.NEMESSIX_PROTOCOL_MISMATCH,
             DashboardContentPolicy.restoreFailureKind(
                 IllegalStateException("nemessix_quiescence_protocol_mismatch"),
             ),
@@ -123,8 +123,15 @@ class DashboardContentPolicyTest {
         val unauthorized = DashboardContentPolicy.restoreFailureGuidance(
             IllegalStateException("nemessix_quiescence_unauthorized"),
         )
-        assertEquals("需要更新应用", unauthorized.phase)
-        assertTrue(unauthorized.action.contains("更新 Nemessix 和 MH Save Sync"))
+        assertEquals("需要更新 MH Save Sync", unauthorized.phase)
+        assertTrue(unauthorized.summary.contains("签名"))
+        assertTrue(unauthorized.action.contains("正式签名迁移版"))
+
+        val protocolMismatch = DashboardContentPolicy.restoreFailureGuidance(
+            IllegalStateException("nemessix_quiescence_protocol_mismatch"),
+        )
+        assertEquals("安全接口不兼容", protocolMismatch.phase)
+        assertFalse(protocolMismatch.summary.contains("密钥"))
 
         val unavailable = DashboardContentPolicy.restoreFailureGuidance(
             IllegalStateException("nemessix_quiescence_unavailable"),

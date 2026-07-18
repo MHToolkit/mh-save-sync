@@ -2,7 +2,9 @@ package org.mhtoolkit.savesync
 
 enum class RestoreFailureKind {
     EMULATOR_RUNNING,
-    NEMESSIX_AUTH_OR_VERSION,
+    MH_SAVE_SYNC_NOT_TRUSTED,
+    NEMESSIX_PROTOCOL_MISMATCH,
+    NEMESSIX_UNTRUSTED,
     NEMESSIX_UNAVAILABLE,
     OTHER,
 }
@@ -46,7 +48,9 @@ object DashboardContentPolicy {
         val codes = generateSequence(error as Throwable?) { it.cause }.mapNotNull { it.message }.toSet()
         return when {
             "nemessix_quiescence_emulator_running" in codes -> RestoreFailureKind.EMULATOR_RUNNING
-            codes.any { it in NEMESSIX_AUTH_OR_VERSION_ERRORS } -> RestoreFailureKind.NEMESSIX_AUTH_OR_VERSION
+            "nemessix_quiescence_unauthorized" in codes -> RestoreFailureKind.MH_SAVE_SYNC_NOT_TRUSTED
+            "nemessix_quiescence_protocol_mismatch" in codes -> RestoreFailureKind.NEMESSIX_PROTOCOL_MISMATCH
+            "nemessix_quiescence_untrusted_emulator" in codes -> RestoreFailureKind.NEMESSIX_UNTRUSTED
             codes.any { it in NEMESSIX_UNAVAILABLE_ERRORS } -> RestoreFailureKind.NEMESSIX_UNAVAILABLE
             else -> RestoreFailureKind.OTHER
         }
@@ -59,10 +63,20 @@ object DashboardContentPolicy {
                 "等待退出游戏", "请从最近任务退出 Nemessix，再点“恢复云端存档”。",
                 "Nemessix 尚未完全退出",
             )
-            RestoreFailureKind.NEMESSIX_AUTH_OR_VERSION -> RestoreFailureGuidance(
-                "restore-nemessix-incompatible", "Nemessix 未授权本次恢复，或双方版本不兼容；未覆盖本地存档。",
-                "需要更新应用", "请更新 Nemessix 和 MH Save Sync 后重试。",
-                "Nemessix 授权或版本不兼容",
+            RestoreFailureKind.MH_SAVE_SYNC_NOT_TRUSTED -> RestoreFailureGuidance(
+                "restore-client-not-trusted", "Nemessix 未信任当前 MH Save Sync 的应用签名；尚未下载或覆盖本地存档。",
+                "需要更新 MH Save Sync", "请安装正式签名迁移版；不要卸载或清除应用数据。",
+                "MH Save Sync 签名未获 Nemessix 授权",
+            )
+            RestoreFailureKind.NEMESSIX_PROTOCOL_MISMATCH -> RestoreFailureGuidance(
+                "restore-protocol-mismatch", "双方安全恢复接口版本不兼容；尚未覆盖本地存档。",
+                "安全接口不兼容", "请更新 Nemessix 和 MH Save Sync 后重试。",
+                "安全恢复协议不兼容",
+            )
+            RestoreFailureKind.NEMESSIX_UNTRUSTED -> RestoreFailureGuidance(
+                "restore-nemessix-untrusted", "当前 Nemessix 的应用签名未通过安全校验；尚未覆盖本地存档。",
+                "Nemessix 身份异常", "请安装 MHToolkit 正式发布的 Nemessix 后重试。",
+                "Nemessix 签名未通过校验",
             )
             RestoreFailureKind.NEMESSIX_UNAVAILABLE -> RestoreFailureGuidance(
                 "restore-nemessix-unavailable", "当前 Nemessix 未提供安全恢复接口；未覆盖本地存档。",
@@ -85,11 +99,6 @@ object DashboardContentPolicy {
             else -> "可以同步"
         }
 
-    private val NEMESSIX_AUTH_OR_VERSION_ERRORS = setOf(
-        "nemessix_quiescence_unauthorized",
-        "nemessix_quiescence_protocol_mismatch",
-        "nemessix_quiescence_untrusted_emulator",
-    )
     private val NEMESSIX_UNAVAILABLE_ERRORS = setOf(
         "nemessix_quiescence_unavailable",
         "nemessix_quiescence_untrusted_provider",
