@@ -1137,7 +1137,8 @@ Open Phase 1D gates:
 
 - real macOS Nemessix save-complete IPC and emulator-readable restore/relaunch
   proof; stopped stable snapshot proof exists for the observed local save root;
-- Android Nemessix restore proof against a real authorized save root;
+- Android Nemessix emulator-readable readback after the already completed real
+  stopped SAF restore; core launch alone does not satisfy Runtime Verified;
 - Android Azahar or Citra MMJ modification producing a macOS conflict branch;
 - exported `.mhsavebundle` restore in a real emulator-readable no-server
   environment; fixture byte-for-byte recovery is already covered;
