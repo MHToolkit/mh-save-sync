@@ -107,15 +107,15 @@ trap cleanup EXIT
 "$apksigner" lineage --in "$artifact" --print-certs > "$lineage_report"
 "$aapt" dump badging "$artifact" > "$badging_report"
 
-grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' "$signature_report" \
+grep -Fqx 'Verified using v3 scheme (APK Signature Scheme v3): true' "$signature_report" \
   || blocked "migration APK is not v3 signed"
-grep -q "^Signer #1 certificate SHA-256 digest: $expected_new_cert_sha256$" "$signature_report" \
+grep -Fqx "Signer #1 certificate SHA-256 digest: $expected_new_cert_sha256" "$signature_report" \
   || blocked "migration APK current signer is not the production certificate"
-grep -q "^Signer #1 in lineage certificate SHA-256 digest: $expected_old_cert_sha256$" "$lineage_report" \
+grep -Fqx "Signer #1 in lineage certificate SHA-256 digest: $expected_old_cert_sha256" "$lineage_report" \
   || blocked "lineage does not begin with the installed debug certificate"
-grep -q '^Has installed data capability: true$' "$lineage_report" \
+grep -Fqx 'Has installed data capability: true' "$lineage_report" \
   || blocked "old signer lacks installed-data migration capability"
-grep -q "^Signer #2 in lineage certificate SHA-256 digest: $expected_new_cert_sha256$" "$lineage_report" \
+grep -Fqx "Signer #2 in lineage certificate SHA-256 digest: $expected_new_cert_sha256" "$lineage_report" \
   || blocked "lineage does not terminate at the production certificate"
 grep -q "versionCode='$version_code'" "$badging_report" \
   || blocked "migration APK versionCode mismatch"
