@@ -1,9 +1,10 @@
 {
   "android_release_signing": true,
-  "verified_at": "2026-07-18T13:45:00+08:00",
-  "source_commit": "e76a659efd437dc087ba6b9f14c0bae8489093c8",
-  "artifact": "/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/release/mh-save-sync-e76a659-release.apk",
-  "artifact_sha256": "a729e2305ac976990a7efc59a826b2e8c8d18c5341b75b8a6710549d1debfaef",
+  "verified_at": "2026-07-18T14:05:34+08:00",
+  "source_commit": "e03db18b0b9fc288a8da0b727776eab1ee1d5cbf",
+  "artifact": "mh-save-sync-e03db18-release.apk",
+  "artifact_location": "local MHSaveSync release backup directory",
+  "artifact_sha256": "d0e82258641f29fb8a15b5781c4c27175682591c8d194c73c3da929edb9ff926",
   "package": "org.mhtoolkit.savesync",
   "version_code": 3,
   "version_name": "0.1.0-alpha.3",
@@ -11,6 +12,7 @@
     "subject": "CN=MH Save Sync Release, O=MHToolkit, C=CN",
     "certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
     "apk_signature_v2": true,
+    "signer_count": 1,
     "private_key_location": "redacted; local Secrets directory only"
   },
   "debug_signer": {
@@ -20,6 +22,7 @@
   "verification": {
     "unsigned_release_rejected": true,
     "partial_environment_rejected": true,
+    "dirty_worktree_rejected": true,
     "gradle_test_debug_lint_debug_assemble_release": "pass",
     "apksigner_certificate_match": "pass",
     "secret_file_modes": "0600",
