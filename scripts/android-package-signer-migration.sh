@@ -110,7 +110,11 @@ trap cleanup EXIT
 grep -Fqx 'Verified using v3 scheme (APK Signature Scheme v3): true' "$signature_report" \
   || blocked "migration APK is not v3 signed"
 actual_current_cert_sha256="$(
-  sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature_report" | head -n 1
+  sed -n \
+    -e 's/^Signer #1 certificate SHA-256 digest: //p' \
+    -e 's/^V3\.0 Signer: certificate SHA-256 digest: //p' \
+    -e 's/^V3 Signer: certificate SHA-256 digest: //p' \
+    "$signature_report" | head -n 1
 )"
 actual_old_cert_sha256="$(
   sed -n 's/^Signer #1 in lineage certificate SHA-256 digest: //p' "$lineage_report" | head -n 1
