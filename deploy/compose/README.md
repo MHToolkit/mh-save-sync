@@ -101,8 +101,12 @@ Because this Compose stack enables MinIO versioning, collection is explicitly
 two-stage. The Rust server records the current version ID before removing the
 logical object and durably queues that boundary with the opaque key. The Compose
 wrapper lists versions once per leased batch and deletes the captured version
-plus older generations over stdin before acknowledging the queue lease. A newer
-version uploaded between the two phases is preserved.
+plus older generations over stdin before acknowledging the queue lease. Keys
+do not enter host Compose arguments or the final JSON output; claimed rows,
+version listings and deletion plans exist only in a mode-0700 ephemeral
+directory removed on exit. MinIO deletion stderr is discarded and replaced by
+the fixed `physical purge failed` error. A newer version uploaded between the
+two phases is preserved.
 `physical_purge_pending` must be zero before claiming storage was physically
 reclaimed. A non-MinIO S3 deployment must provide equivalent bucket lifecycle
 or provider-specific version purge processing.

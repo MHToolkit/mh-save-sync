@@ -52,8 +52,9 @@ if [[ "$delete" == true ]]; then
 fi
 
 # Phase 1 removes current objects and queues opaque storage keys. On versioned
-# MinIO, phase 2 consumes those keys only over stdin and removes every version.
-# Keys never appear in command arguments, stdout, or the final JSON report.
+# MinIO, phase 2 keeps leased keys in a protected ephemeral directory and sends
+# the deletion plan over stdin. Keys never enter host compose arguments or the
+# final JSON report, and failed mc stderr is replaced with a fixed error.
 if [[ "$physical_only" == true ]]; then
   logical_json='{"eligible":0,"deleted":0,"dry_run":false,"physical_purge_pending":0}'
 else
@@ -71,6 +72,7 @@ fi
 
 physical_purged=0
 purge_tmp="$(mktemp -d)"
+chmod 700 "$purge_tmp"
 trap 'rm -rf "$purge_tmp"' EXIT
 while :; do
   lease_token="$(python3 - <<'PYUUID'
@@ -147,7 +149,7 @@ with plan_path.open("w") as plan:
         for _, version_id in generations[boundary:]:
             plan.write(f"{key}\t{version_id}\n")
 PYPLAN
-  compose exec -T minio sh -c '
+  if ! compose exec -T minio sh -c '
       set -eu
       user="$(cat /run/secrets/minio_root_user)"
       password="$(cat /run/secrets/minio_root_password)"
@@ -158,7 +160,10 @@ PYPLAN
         [ -n "$key" ] || continue
         mc rm --force --version-id "$version_id" "purge/$bucket/$key" >/dev/null
       done
-    ' <"$plan_file"
+    ' <"$plan_file" >/dev/null 2>"$purge_tmp/delete-error"; then
+    echo "physical purge failed" >&2
+    exit 70
+  fi
   compose exec -T postgres psql -qAt -v ON_ERROR_STOP=1 \
     -U mh_save_sync -d mh_save_sync -c \
     "DELETE FROM orphan_gc_purge_queue WHERE lease_token='$lease_token';" >/dev/null

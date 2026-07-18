@@ -123,6 +123,39 @@ VALUES ('33333333-3333-4333-8333-333333333333',decode('$account','hex'),decode('
         'gc-save','[]','["tracked-orphan"]','new-manifest',now()+interval '1 hour');
 SQL
 
+failing_runtime="$tmp/failing-runtime"
+cat >"$failing_runtime" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"exec -T minio sh -c"* && "$*" == *"mc rm --force --version-id"* ]]; then
+  cat >/dev/null
+  echo "mc delete failed: accounts/1111111111111111111111111111111111111111/chunks/tracked-orphan sensitive-version-id" >&2
+  exit 42
+fi
+exec "${MH_SAVE_SYNC_REAL_RUNTIME:?}" "$@"
+SH
+chmod +x "$failing_runtime"
+set +e
+purge_error="$(env \
+  MH_SAVE_SYNC_REAL_RUNTIME="$runtime" \
+  CONTAINER_RUNTIME="$failing_runtime" \
+  COMPOSE_PROJECT_NAME="$project" \
+  COMPOSE_ENV_FILE="$env_file" \
+  deploy/compose/scripts/gc-orphans.sh --physical-only 2>&1)"
+purge_status=$?
+set -e
+[[ $purge_status -ne 0 ]]
+[[ "$purge_error" == *"physical purge failed"* ]]
+[[ "$purge_error" != *"$account"* ]]
+[[ "$purge_error" != *"tracked-orphan"* ]]
+[[ "$purge_error" != *"sensitive-version-id"* ]]
+lease_state="$(compose exec -T postgres psql -U mh_save_sync -d mh_save_sync -Atc \
+  "SELECT count(*),count(*) FILTER (WHERE lease_token IS NOT NULL) FROM orphan_gc_purge_queue;")"
+[[ "$lease_state" == "1006|1000" ]]
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -U mh_save_sync -d mh_save_sync -c \
+  "UPDATE orphan_gc_purge_queue SET lease_until=now()-interval '1 second' WHERE lease_token IS NOT NULL;" \
+  >/dev/null
+
 physical_json="$(env "${common_env[@]}" deploy/compose/scripts/gc-orphans.sh --physical-only)"
 python3 - "$physical_json" <<'PY'
 import json, sys

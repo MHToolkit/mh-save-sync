@@ -44,9 +44,12 @@ upload root.
 S3 current-version deletion is not called physical GC when bucket versioning is
 enabled. Logical deletion captures the then-current version ID and enqueues that
 generation boundary with the opaque storage key in migration 006. The MinIO
-Compose wrapper leases that queue, streams keys only through stdin, deletes the
-captured version and older generations, and acknowledges only after success.
-A newer version uploaded after logical GC is therefore preserved.
+Compose wrapper leases that queue, keeps key-bearing intermediate state only in
+a mode-0700 ephemeral directory, streams the deletion plan through stdin, and
+deletes the captured version and older generations. Keys do not enter host
+Compose arguments or the final report. Deletion stderr is redacted to a fixed
+error, and the queue is acknowledged only after success. A newer version
+uploaded after logical GC is therefore preserved.
 Other S3 providers require an equivalent lifecycle/version-purge worker; a
 non-zero `physical_purge_pending` is an explicit incomplete state.
 
