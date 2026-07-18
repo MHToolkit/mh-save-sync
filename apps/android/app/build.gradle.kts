@@ -18,6 +18,18 @@ val releaseSigningValues = releaseSigningVariables.mapValues { (_, environmentNa
 val releaseSigningConfigured = releaseSigningValues.values.all { !it.isNullOrBlank() }
 val releaseSigningPartiallyConfigured =
     releaseSigningValues.values.any { !it.isNullOrBlank() } && !releaseSigningConfigured
+val androidVersionCode = providers.environmentVariable("MH_SAVE_SYNC_ANDROID_VERSION_CODE")
+    .map { value ->
+        value.toIntOrNull()?.takeIf { it > 0 }
+            ?: throw GradleException("MH_SAVE_SYNC_ANDROID_VERSION_CODE must be a positive integer")
+    }
+    .getOrElse(3)
+val androidVersionName = providers.environmentVariable("MH_SAVE_SYNC_ANDROID_VERSION_NAME")
+    .map { value ->
+        value.takeIf { it.isNotBlank() }
+            ?: throw GradleException("MH_SAVE_SYNC_ANDROID_VERSION_NAME must not be blank")
+    }
+    .getOrElse("0.1.0-alpha.3")
 
 if (releaseSigningPartiallyConfigured) {
     throw GradleException(
@@ -43,8 +55,8 @@ android {
         applicationId = "org.mhtoolkit.savesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.0-alpha.3"
+        versionCode = androidVersionCode
+        versionName = androidVersionName
     }
 
     buildFeatures {
