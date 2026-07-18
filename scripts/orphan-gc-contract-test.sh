@@ -15,6 +15,14 @@ cat > "$tmp/bin/docker" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${MH_SAVE_SYNC_FAKE_RUNTIME_LOG:?}"
+if [[ "$*" == *"exec -T server /app/mh-save-server"* ]]; then
+  printf '{"eligible":2,"deleted":0,"dry_run":true,"physical_purge_pending":0}\n'
+elif [[ "$*" == *"exec -T minio sh -c"* ]]; then
+  cat >/dev/null
+  printf '0\n'
+elif [[ "$*" == *"SELECT count(*) FROM orphan_gc_purge_queue"* ]]; then
+  printf '0\n'
+fi
 SH
 chmod +x "$tmp/bin/docker"
 

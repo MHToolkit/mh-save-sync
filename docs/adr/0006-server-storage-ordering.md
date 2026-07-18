@@ -41,6 +41,13 @@ leaves an expiring lease that can be reclaimed; missing S3 objects are treated
 as already swept only when PostgreSQL proves they are not a snapshot or active
 upload root.
 
+S3 current-version deletion is not called physical GC when bucket versioning is
+enabled. Logical deletion enqueues the opaque storage key in migration 006.
+The MinIO Compose wrapper leases that queue, streams keys only through stdin,
+executes version-aware purge, and acknowledges only after every version is gone.
+Other S3 providers require an equivalent lifecycle/version-purge worker; a
+non-zero `physical_purge_pending` is an explicit incomplete state.
+
 The phase1-alpha implementation uses the Rust `object_store` S3 backend with
 S3 SHA256 upload checksums enabled. Compose initializes and versions the MinIO
 bucket before the API starts. Multipart upload, incomplete-upload lifecycle
@@ -92,7 +99,8 @@ crash/GC: before-commit rollback leaves no snapshot or HEAD and the orphan is
   fails closed; the replay does not poison later commits.
 GC Compose: 1,005 untracked keys crossed the S3 listing page boundary; dry-run
   found 1,006 total candidates, delete removed exactly 1,006, PostgreSQL and
-  MinIO retained only the referenced object, and failure stderr exposed no key
+  MinIO version listing retained exactly one referenced live version and zero
+  orphan noncurrent versions/delete markers; failure stderr exposed no key
 ```
 
 Multipart upload, quota enforcement, lifecycle cleanup and remote-host

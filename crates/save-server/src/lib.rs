@@ -221,6 +221,7 @@ pub struct OrphanGcReport {
     pub eligible: u64,
     pub deleted: u64,
     pub dry_run: bool,
+    pub physical_purge_pending: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,6 +484,7 @@ async fn collect_orphan_objects(
             eligible: tracked + untracked,
             deleted: 0,
             dry_run: true,
+            physical_purge_pending: purge_queue_count(persistent).await?,
         });
     }
 
@@ -501,7 +503,16 @@ async fn collect_orphan_objects(
         eligible,
         deleted,
         dry_run: false,
+        physical_purge_pending: purge_queue_count(persistent).await?,
     })
+}
+
+async fn purge_queue_count(persistent: &PersistentState) -> Result<u64, BackendError> {
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM orphan_gc_purge_queue")
+        .fetch_one(&persistent.pool)
+        .await
+        .map_err(db_unavailable)?;
+    Ok(count as u64)
 }
 
 async fn preview_tracked_orphans(
@@ -696,6 +707,15 @@ async fn sweep_claimed_orphan(
         .execute(&mut *tx)
         .await
         .map_err(db_unavailable)?;
+    sqlx::query(
+        "INSERT INTO orphan_gc_purge_queue(account_handle,storage_key) VALUES ($1,$2) \
+         ON CONFLICT (account_handle,storage_key) DO NOTHING",
+    )
+    .bind(&mark.account)
+    .bind(&mark.storage_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
     delete_orphan_mark_tx(&mut tx, mark).await?;
     tx.commit().await.map_err(db_unavailable)?;
     Ok(true)
@@ -3685,6 +3705,11 @@ mod tests {
             .unwrap();
         assert_eq!(swept.eligible, 4);
         assert_eq!(swept.deleted, 4);
+        let purge_pending: i64 = sqlx::query_scalar("SELECT count(*) FROM orphan_gc_purge_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(purge_pending, 4);
         assert!(persistent_object_row_exists(&pool, &account_a, "shared").await);
         assert!(persistent_object_row_exists(&pool, &account_a, "active").await);
         assert!(persistent_object_row_exists(&pool, &account_a, "young").await);

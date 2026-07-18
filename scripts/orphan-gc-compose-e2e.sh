@@ -83,6 +83,13 @@ WHERE account_handle=decode('$account','hex') AND id='gc-save';
 SQL
 
 sleep 2
+versions_before="$(compose exec -T minio sh -c '
+  user="$(cat /run/secrets/minio_root_user)"
+  password="$(cat /run/secrets/minio_root_password)"
+  mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
+  mc find --versions "fixture/mh-save-sync/accounts/'"$account"'" | wc -l | tr -d " "
+')"
+[[ "$versions_before" -ge 1007 ]]
 common_env=(
   CONTAINER_RUNTIME="$runtime"
   COMPOSE_PROJECT_NAME="$project"
@@ -92,14 +99,14 @@ dry_json="$(env "${common_env[@]}" deploy/compose/scripts/gc-orphans.sh --grace-
 python3 - "$dry_json" <<'PY'
 import json, sys
 value = json.loads(sys.argv[1])
-assert value == {"eligible": 1006, "deleted": 0, "dry_run": True}, value
+assert value == {"eligible": 1006, "deleted": 0, "dry_run": True, "physical_purge_pending": 0, "physical_purged": 0}, value
 PY
 
 delete_json="$(env "${common_env[@]}" deploy/compose/scripts/gc-orphans.sh --grace-seconds 1 --delete)"
 python3 - "$delete_json" <<'PY'
 import json, sys
 value = json.loads(sys.argv[1])
-assert value == {"eligible": 1006, "deleted": 1006, "dry_run": False}, value
+assert value == {"eligible": 1006, "deleted": 1006, "dry_run": False, "physical_purge_pending": 0, "physical_purged": 1006}, value
 PY
 
 db_state="$(compose exec -T postgres psql -U mh_save_sync -d mh_save_sync -Atc \
@@ -112,6 +119,13 @@ remaining="$(compose exec -T minio sh -c '
   mc find "fixture/mh-save-sync/accounts/'"$account"'" | wc -l | tr -d " "
 ')"
 [[ "$remaining" == "1" ]]
+versions_after="$(compose exec -T minio sh -c '
+  user="$(cat /run/secrets/minio_root_user)"
+  password="$(cat /run/secrets/minio_root_password)"
+  mc alias set fixture http://127.0.0.1:9000 "$user" "$password" >/dev/null
+  mc find --versions "fixture/mh-save-sync/accounts/'"$account"'" | wc -l | tr -d " "
+')"
+[[ "$versions_after" == "1" ]]
 
 leak_marker="page-1004"
 compose stop minio >/dev/null
@@ -124,4 +138,4 @@ set -e
 [[ "$error_output" != *"$leak_marker"* ]]
 [[ "$error_output" != *"$account"* ]]
 
-echo "orphan GC Compose E2E: PASS (1005-key paginated S3 scan + tracked orphan + redaction)"
+echo "orphan GC Compose E2E: PASS (paginated scan + physical version purge + redaction)"

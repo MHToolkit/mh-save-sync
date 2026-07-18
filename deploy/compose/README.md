@@ -97,6 +97,14 @@ recoverable mark/lease row and an account/object-scoped PostgreSQL advisory lock
 slow S3 deletion does not lock the global upload or snapshot tables. Output
 contains aggregate counts only.
 
+Because this Compose stack enables MinIO versioning, collection is explicitly
+two-stage. The Rust server removes current objects and durably queues opaque
+keys; the Compose wrapper then uses `mc rm --versions` over stdin to purge every
+noncurrent version and delete marker before acknowledging the queue lease.
+`physical_purge_pending` must be zero before claiming storage was physically
+reclaimed. A non-MinIO S3 deployment must provide equivalent bucket lifecycle
+or provider-specific version purge processing.
+
 Preview objects older than the default seven-day grace period:
 
     deploy/compose/scripts/gc-orphans.sh
