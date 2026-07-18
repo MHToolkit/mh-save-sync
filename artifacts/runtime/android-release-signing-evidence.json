@@ -1,0 +1,34 @@
+{
+  "android_release_signing": true,
+  "verified_at": "2026-07-18T14:16:07+08:00",
+  "source_commit": "b6d6aa5ea5ca8097a1da1f4812589dd65e35e92b",
+  "artifact": "mh-save-sync-b6d6aa5-release.apk",
+  "artifact_location": "local MHSaveSync release backup directory",
+  "artifact_sha256": "eda2c2ff237476608e836b1ad48c60fa84cda17b9a63575abf8d3ffe9edc06f0",
+  "package": "org.mhtoolkit.savesync",
+  "version_code": 3,
+  "version_name": "0.1.0-alpha.3",
+  "signer": {
+    "subject": "CN=MH Save Sync Release, O=MHToolkit, C=CN",
+    "certificate_sha256": "faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3",
+    "apk_signature_v2": true,
+    "signer_count": 1,
+    "private_key_location": "redacted; local Secrets directory only"
+  },
+  "debug_signer": {
+    "certificate_sha256": "ef44f7a19b5029bda21cb2644b8d3ec49d17633d49e0e165b42f991cfe5adedb",
+    "production_trust_root": false
+  },
+  "verification": {
+    "unsigned_release_rejected": true,
+    "abbreviated_release_tasks_rejected": true,
+    "partial_environment_rejected": true,
+    "dirty_worktree_rejected": true,
+    "gradle_test_debug_lint_debug_assemble_release": "pass",
+    "apksigner_certificate_match": "pass",
+    "secret_file_modes": "0600",
+    "installed_on_device": false
+  },
+  "nemessix_contract": "Production SaveQuiescenceV1 must pin only faa3b4e94c753bb385b3f2961de7191e5ca9f7e124f0e4a45526b3524efd28f3. Debug ef44...adedb is internal-only.",
+  "privacy": "No keystore bytes, password, private key, recovery secret, device secret, token or save data is included."
+}

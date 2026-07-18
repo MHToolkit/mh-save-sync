@@ -6,6 +6,35 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseSigningVariables = mapOf(
+    "keystore" to "MH_SAVE_SYNC_ANDROID_KEYSTORE",
+    "storePassword" to "MH_SAVE_SYNC_ANDROID_STORE_PASSWORD",
+    "keyAlias" to "MH_SAVE_SYNC_ANDROID_KEY_ALIAS",
+    "keyPassword" to "MH_SAVE_SYNC_ANDROID_KEY_PASSWORD",
+)
+val releaseSigningValues = releaseSigningVariables.mapValues { (_, environmentName) ->
+    providers.environmentVariable(environmentName).orNull
+}
+val releaseSigningConfigured = releaseSigningValues.values.all { !it.isNullOrBlank() }
+val releaseSigningPartiallyConfigured =
+    releaseSigningValues.values.any { !it.isNullOrBlank() } && !releaseSigningConfigured
+
+if (releaseSigningPartiallyConfigured) {
+    throw GradleException(
+        "Android release signing is only partially configured; set all MH_SAVE_SYNC_ANDROID_* variables",
+    )
+}
+gradle.taskGraph.whenReady {
+    val releaseTaskScheduled = allTasks.any { task ->
+        task.project == project && task.name.contains("release", ignoreCase = true)
+    }
+    if (releaseTaskScheduled && !releaseSigningConfigured) {
+        throw GradleException(
+            "Android release signing is not configured; use scripts/android-package-release.sh",
+        )
+    }
+}
+
 android {
     namespace = "org.mhtoolkit.savesync"
     compileSdk = 36
@@ -14,12 +43,31 @@ android {
         applicationId = "org.mhtoolkit.savesync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.0-alpha.1"
+        versionCode = 3
+        versionName = "0.1.0-alpha.3"
     }
 
     buildFeatures {
         compose = true
+    }
+
+    signingConfigs {
+        create("release") {
+            if (releaseSigningConfigured) {
+                storeFile = file(requireNotNull(releaseSigningValues["keystore"]))
+                storePassword = requireNotNull(releaseSigningValues["storePassword"])
+                keyAlias = requireNotNull(releaseSigningValues["keyAlias"])
+                keyPassword = requireNotNull(releaseSigningValues["keyPassword"])
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))

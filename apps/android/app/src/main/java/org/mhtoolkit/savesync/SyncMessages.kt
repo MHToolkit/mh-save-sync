@@ -31,6 +31,7 @@ object SyncMessages {
         "发现云端版本，请先选择上传或恢复",
         "云端有版本，请先确认同步方向",
         "发现云端版本后，请先选一个动作",
+        "Mac 端启动前检查后即可看到该版本",
     )
 
     fun serverLabel(endpoint: String?): String =

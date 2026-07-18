@@ -843,6 +843,15 @@ final class MenuController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let url = Bundle.main.url(
+            forResource: "mh-save-sync-menubar-template",
+            withExtension: "png"
+        ), let image = NSImage(contentsOf: url) {
+            image.isTemplate = true
+            image.size = NSSize(width: 18, height: 18)
+            item.button?.image = image
+            item.button?.imagePosition = .imageLeading
+        }
         item.button?.title = context.menuBarTitle
         item.button?.toolTip = "MH 云存档同步 · macOS Alpha"
         let menu = NSMenu()

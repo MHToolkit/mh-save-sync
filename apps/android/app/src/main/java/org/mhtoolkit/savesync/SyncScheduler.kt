@@ -46,7 +46,7 @@ object SyncScheduler {
         val defaultLaunchGateSummary =
             "启动前会重新核对手机与云端版本。"
         val defaultPhase = "暂无后台任务"
-        val defaultNextAction = "先填写服务器地址并授权存档目录，然后做启动前检查。"
+        val defaultNextAction = "先完成设置，再点“检查并打开 Nemessix”。"
         if (!preferences.contains(LAST_SYNC_TARGET)) {
             preferences.edit()
                 .putBoolean(GAME_MH3G_ENABLED, true)
@@ -80,14 +80,20 @@ object SyncScheduler {
                 defaultLaunchGateSummary,
             )
         }
+        val cleanNextAction = SyncMessages.sanitizeLegacyUserCopy(
+            preferences.getString(LAST_SYNC_NEXT_ACTION, null),
+            "Mac 端同步后即可看到该版本。",
+        )
         if (
             cleanLastSyncSummary != preferences.getString(LAST_SYNC_SUMMARY, null) ||
             cleanLaunchGateSummary != preferences.getString(LAUNCH_GATE_SUMMARY, null) ||
+            cleanNextAction != preferences.getString(LAST_SYNC_NEXT_ACTION, null) ||
             cleanLastReason != oldLastReason || cleanLaunchReason != oldLaunchReason
         ) {
             preferences.edit()
                 .putString(LAST_SYNC_SUMMARY, cleanLastSyncSummary)
                 .putString(LAUNCH_GATE_SUMMARY, cleanLaunchGateSummary)
+                .putString(LAST_SYNC_NEXT_ACTION, cleanNextAction)
                 .putString(LAST_SYNC_REASON, cleanLastReason)
                 .putString(LAUNCH_GATE_REASON, cleanLaunchReason)
                 .apply()

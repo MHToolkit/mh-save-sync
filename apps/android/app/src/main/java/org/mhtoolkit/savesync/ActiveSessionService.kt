@@ -19,7 +19,7 @@ class ActiveSessionService : Service() {
             ),
         )
         val notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(R.drawable.ic_stat_save_sync)
             .setContentTitle(SyncMessages.activeSessionNotificationTitle())
             .setContentText(SyncMessages.activeSessionNotificationText())
             .setOngoing(true)

@@ -1,0 +1,65 @@
+{
+  "icon_system": "B3-encrypted-purple",
+  "verified_at": "2026-07-18T13:15:00+08:00",
+  "source_commit": "63da8e58e4fc3dc7208e7f77699e072c15becaa5",
+  "palette": {
+    "dark": "#4936B7",
+    "light": "#9B72F2",
+    "direction": "upper-left dark to lower-right light"
+  },
+  "local_gates": {
+    "android_test_lint_assemble": "pass",
+    "macos_swift_tests": "16 passed",
+    "icon_asset_smoke": "pass",
+    "deterministic_regeneration": "pass",
+    "icns_representations": 10,
+    "android_v26_monochrome_absent": true,
+    "android_v33_monochrome_present": true,
+    "android_monochrome_safe_zone": "x/y 21..87 in 108 viewport",
+    "secret_scan": "pass"
+  },
+  "artifacts": {
+    "android_apk": {
+      "path": "/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-63da8e5-debug.apk",
+      "sha256": "8e32a75bd41e0de8c28db0640d058822dda2e57bc851a795d1c2da7689958b9f",
+      "package": "org.mhtoolkit.savesync",
+      "version_code": 3,
+      "version_name": "0.1.0-alpha.3",
+      "adb_install_launch_ui_smoke": "pass"
+    },
+    "android_packaging_evidence": {
+      "path": "/Users/vincentadamnemessis/Games/Backups/MHSaveSync/apk/mh-save-sync-63da8e5-debug.evidence.json",
+      "sha256": "3c30e716f770b453f266771c4c0c49377b2d40a8cc7ea3e98d72715694aae670"
+    },
+    "macos_executable": {
+      "path": "/Applications/MH Save Sync.app/Contents/MacOS/MHSaveSyncMac",
+      "sha256": "90340bcc498e3380f97d6f0a22925af275921457e0a63347fec2d5348f86a398"
+    },
+    "macos_icns": {
+      "sha256": "37b991b4894248cd9fee0460eb2c320e53d5a48b8c2696b32d02b8477b903214"
+    },
+    "macos_menu_template": {
+      "sha256": "f83116908b0ab7e6110c641c7912e57815e6bdc247ae3b539e6070396c2b0d3b"
+    }
+  },
+  "real_device": {
+    "model": "OnePlus Ace 5 (PKG110)",
+    "installed_package_hash_matches_artifact": true,
+    "application_info_icon_visible": true,
+    "application_info_screenshot_sha256": "10cdca78e2818d7ed14715e805b8c7bda3b3372f00d49663402a94377fd3bd34",
+    "notification_resource_in_apk": "drawable/ic_stat_save_sync",
+    "notification_service_running": true,
+    "vendor_note": "OxygenOS records oplus_smallicon_use_app_icon=true and substitutes the launcher icon at runtime; the APK and Notification.Builder reference the dedicated alpha glyph.",
+    "nemessix_package_mutated": false,
+    "nemessix_version_after_validation": "3d0ec57af-vanilla",
+    "nemessix_version_code_after_validation": 33267691
+  },
+  "macos_runtime": {
+    "installed": true,
+    "process_running": true,
+    "accessibility_title": "MH 云存档 · 就绪",
+    "accessibility_description": "状态菜单",
+    "menu_accessibility_sha256": "24698df4d6586fe61dcccdf0a8548b95b68ba5b8925afe470cc588d1ea01677e"
+  },
+  "privacy": "No save bytes, recovery secret, device secret, token or plaintext save path is present."
+}

@@ -151,6 +151,8 @@ jobs:
       - name: Install pinned Android NDK
         run: sdkmanager "ndk;28.2.13676358"
       - uses: gradle/actions/setup-gradle@v5
+      - name: Reject unsigned Android release task entry points
+        run: ./scripts/android-release-signing-contract-test.sh
       - name: Build, unit test, lint and package Android Alpha evidence
         env:
           MH_SAVE_SYNC_APK_OUT_DIR: artifacts/android-alpha

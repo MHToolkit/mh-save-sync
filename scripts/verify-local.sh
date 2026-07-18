@@ -27,6 +27,7 @@ if [[ -z "${JAVA_HOME:-}" && -x "/Applications/Android Studio.app/Contents/jbr/C
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 fi
 if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+  ./scripts/android-release-signing-contract-test.sh
   ./apps/android/gradlew -p apps/android assembleDebug testDebugUnitTest lintDebug --no-daemon
 else
   echo "JAVA_HOME not set and Android Studio JBR not found; Android local gate skipped" >&2
