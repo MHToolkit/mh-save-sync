@@ -1,6 +1,13 @@
 use save_server::{AppState, router};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GcArgs {
+    grace_seconds: u64,
+    dry_run: bool,
+}
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -10,14 +17,57 @@ fn main() -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--runtime-identity-check") {
         return runtime_identity_check();
     }
+    let gc_args = args
+        .iter()
+        .any(|a| a == "--gc-orphans")
+        .then(|| parse_gc_args(args.iter().skip(1).map(String::as_str)))
+        .transpose()?;
 
     preload_secret_envs()?;
     drop_runtime_privileges()?;
     write_runtime_identity_marker()?;
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(run_server())
+        .build()?;
+    if let Some(gc_args) = gc_args {
+        return runtime.block_on(run_gc(gc_args));
+    }
+    runtime.block_on(run_server())
+}
+
+fn parse_gc_args<'a>(args: impl IntoIterator<Item = &'a str>) -> anyhow::Result<GcArgs> {
+    let mut args = args.into_iter();
+    let mut grace_seconds = 7 * 24 * 60 * 60;
+    let mut dry_run = true;
+    while let Some(arg) = args.next() {
+        match arg {
+            "--gc-orphans" => {}
+            "--grace-seconds" => {
+                grace_seconds = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--grace-seconds requires a value"))?
+                    .parse()?;
+            }
+            "--delete" => dry_run = false,
+            other => anyhow::bail!("unknown orphan GC argument: {other}"),
+        }
+    }
+    if grace_seconds == 0 {
+        anyhow::bail!("--grace-seconds must be at least 1");
+    }
+    Ok(GcArgs {
+        grace_seconds,
+        dry_run,
+    })
+}
+
+async fn run_gc(args: GcArgs) -> anyhow::Result<()> {
+    let state = AppState::persistent_from_env().await?;
+    let report = state
+        .gc_orphans(Duration::from_secs(args.grace_seconds), args.dry_run)
+        .await?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
 }
 
 async fn run_server() -> anyhow::Result<()> {
@@ -225,5 +275,19 @@ mod tests {
         );
         assert_eq!(resolve_secret(None, None).unwrap(), None);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gc_cli_is_dry_run_by_default_and_delete_is_explicit() {
+        let dry = parse_gc_args(["--gc-orphans", "--grace-seconds", "3600"]).unwrap();
+        assert_eq!(dry.grace_seconds, 3600);
+        assert!(dry.dry_run);
+
+        let delete =
+            parse_gc_args(["--gc-orphans", "--grace-seconds", "86400", "--delete"]).unwrap();
+        assert_eq!(delete.grace_seconds, 86400);
+        assert!(!delete.dry_run);
+        assert!(parse_gc_args(["--gc-orphans", "--grace-seconds", "0"]).is_err());
+        assert!(parse_gc_args(["--gc-orphans", "--unknown"]).is_err());
     }
 }

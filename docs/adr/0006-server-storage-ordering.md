@@ -25,6 +25,15 @@ snapshot as a conflict branch. Missing-set queries make uploads resumable.
 Uncommitted objects are orphan candidates and are reclaimed only after a grace
 period and a graph mark pass.
 
+Phase1 GC runs inside the server process rather than exposing storage keys to a
+shell pipeline. It defaults to dry-run and takes an explicit `--delete` flag.
+Destructive collection persists account-scoped mark/lease rows, then claims and
+revalidates one object at a time. S3 deletion holds only a per-account/object
+advisory lock shared with begin/upload, never a global hot-table lock. A crash
+leaves an expiring lease that can be reclaimed; missing S3 objects are treated
+as already swept only when PostgreSQL proves they are not a snapshot or active
+upload root.
+
 The phase1-alpha implementation uses the Rust `object_store` S3 backend with
 S3 SHA256 upload checksums enabled. Compose initializes and versions the MinIO
 bucket before the API starts. Multipart upload, incomplete-upload lifecycle
@@ -64,6 +73,12 @@ restart-resume: resumed_after_restart=true,
 backup: PostgreSQL sha256=7d4b439072fd79fd9ad012dee9b1eba589140b5857381116d66b4c47c6f0f7f3
 backup: MinIO tar sha256=b1322d19dcd6eaab71ae8e31b7af77a02ba6fc4db6cd72c6c12929f02bd7163f
 restore: readiness 200 and dangling_snapshot_objects=0
+crash/GC: before-commit rollback leaves no snapshot or HEAD and the orphan is
+  reclaimable; after-commit response loss leaves snapshot/HEAD durable and GC
+  retains the referenced object
+GC Compose: 1,005 untracked keys crossed the S3 listing page boundary; dry-run
+  found 1,006 total candidates, delete removed exactly 1,006, PostgreSQL and
+  MinIO retained only the referenced object, and failure stderr exposed no key
 ```
 
 Multipart upload, quota enforcement, lifecycle cleanup and remote-host

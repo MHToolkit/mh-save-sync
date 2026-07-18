@@ -90,3 +90,17 @@ The backup script stops only the API writer, dumps PostgreSQL, and archives the
 immutable MinIO volume. It restarts the API before returning. Restore verifies
 artifact checksums, recreates both volumes, restores both stores, waits for
 health, and checks for dangling snapshot-object references.
+
+Orphan collection is dry-run by default. PostgreSQL snapshot references and
+unexpired upload sessions are the reachability truth. Destructive runs use a
+recoverable mark/lease row and an account/object-scoped PostgreSQL advisory lock;
+slow S3 deletion does not lock the global upload or snapshot tables. Output
+contains aggregate counts only.
+
+Preview objects older than the default seven-day grace period:
+
+    deploy/compose/scripts/gc-orphans.sh
+
+Run an explicit destructive sweep with a 24-hour grace period:
+
+    deploy/compose/scripts/gc-orphans.sh --grace-seconds 86400 --delete

@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use futures_util::TryStreamExt;
 use object_store::aws::{AmazonS3Builder, Checksum};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -20,6 +21,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
@@ -90,6 +92,18 @@ struct PersistentState {
 }
 
 const READINESS_PAGE_SIZE: i64 = 256;
+const TRACKED_ORPHAN_COUNT_SQL: &str = "SELECT count(*) FROM objects o WHERE \
+     o.created_at < now() - make_interval(secs => $1::double precision) \
+     AND NOT EXISTS (SELECT 1 FROM snapshot_objects so WHERE so.account_handle=o.account_handle AND so.object_id=o.object_id) \
+     AND NOT EXISTS (SELECT 1 FROM snapshots s WHERE s.account_handle=o.account_handle AND s.encrypted_manifest_object=o.object_id) \
+     AND NOT EXISTS (SELECT 1 FROM upload_sessions us WHERE us.account_handle=o.account_handle AND us.expires_at>now() AND (us.manifest_id=o.object_id OR us.required_chunks ? o.object_id))";
+const TRACKED_ORPHAN_MARK_SQL: &str = "INSERT INTO orphan_gc_marks(account_handle,object_id,storage_key) \
+     SELECT o.account_handle,o.object_id,o.storage_key FROM objects o WHERE \
+     o.created_at < now() - make_interval(secs => $1::double precision) \
+     AND NOT EXISTS (SELECT 1 FROM snapshot_objects so WHERE so.account_handle=o.account_handle AND so.object_id=o.object_id) \
+     AND NOT EXISTS (SELECT 1 FROM snapshots s WHERE s.account_handle=o.account_handle AND s.encrypted_manifest_object=o.object_id) \
+     AND NOT EXISTS (SELECT 1 FROM upload_sessions us WHERE us.account_handle=o.account_handle AND us.expires_at>now() AND (us.manifest_id=o.object_id OR us.required_chunks ? o.object_id)) \
+     ON CONFLICT (account_handle,storage_key) DO NOTHING";
 const READINESS_OBJECT_PAGE_SQL: &str = "SELECT DISTINCT o.storage_key \
      FROM snapshots s \
      JOIN snapshot_objects so \
@@ -168,6 +182,13 @@ pub struct HealthResponse {
     pub status: String,
     pub version: String,
     pub backend: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct OrphanGcReport {
+    pub eligible: u64,
+    pub deleted: u64,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,14 +325,16 @@ impl AppState {
             .with_allow_http(allow_http)
             .with_virtual_hosted_style_request(false)
             .with_checksum_algorithm(Checksum::SHA256)
-            .build()?;
+            .build()
+            .map_err(|_| anyhow::anyhow!("object-store unavailable"))?;
         let object_store: Arc<dyn ObjectStore> = Arc::new(object_store);
         object_store
             .put(
                 &ObjectPath::from("__mh_save_sync_readiness__"),
                 Vec::new().into(),
             )
-            .await?;
+            .await
+            .map_err(|_| anyhow::anyhow!("object-store unavailable"))?;
         Ok(Self {
             backend: Backend::Persistent(Arc::new(PersistentState { pool, object_store })),
         })
@@ -394,6 +417,334 @@ impl AppState {
             }
         }
     }
+
+    pub async fn gc_orphans(
+        &self,
+        grace: Duration,
+        dry_run: bool,
+    ) -> anyhow::Result<OrphanGcReport> {
+        let Backend::Persistent(persistent) = &self.backend else {
+            anyhow::bail!("orphan GC requires the PostgreSQL + S3 backend");
+        };
+        collect_orphan_objects(persistent, grace, dry_run)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+}
+
+async fn collect_orphan_objects(
+    persistent: &PersistentState,
+    grace: Duration,
+    dry_run: bool,
+) -> Result<OrphanGcReport, BackendError> {
+    let grace_seconds = grace.as_secs_f64();
+    if !grace_seconds.is_finite() || grace_seconds < 1.0 {
+        return Err(BackendError::Invalid(
+            "orphan GC grace must be at least one second".into(),
+        ));
+    }
+
+    if dry_run {
+        let tracked = preview_tracked_orphans(persistent, grace_seconds).await?;
+        let untracked = preview_untracked_orphans(persistent, grace).await?;
+        return Ok(OrphanGcReport {
+            eligible: tracked + untracked,
+            deleted: 0,
+            dry_run: true,
+        });
+    }
+
+    mark_tracked_orphans(persistent, grace_seconds).await?;
+    mark_untracked_orphans(persistent, grace).await?;
+
+    let mut eligible = 0_u64;
+    let mut deleted = 0_u64;
+    while let Some(mark) = claim_orphan_mark(persistent).await? {
+        eligible += 1;
+        if sweep_claimed_orphan(persistent, &mark).await? {
+            deleted += 1;
+        }
+    }
+    Ok(OrphanGcReport {
+        eligible,
+        deleted,
+        dry_run: false,
+    })
+}
+
+async fn preview_tracked_orphans(
+    persistent: &PersistentState,
+    grace_seconds: f64,
+) -> Result<u64, BackendError> {
+    let count: i64 = sqlx::query_scalar(TRACKED_ORPHAN_COUNT_SQL)
+        .bind(grace_seconds)
+        .fetch_one(&persistent.pool)
+        .await
+        .map_err(db_unavailable)?;
+    Ok(count as u64)
+}
+
+async fn mark_tracked_orphans(
+    persistent: &PersistentState,
+    grace_seconds: f64,
+) -> Result<(), BackendError> {
+    sqlx::query(TRACKED_ORPHAN_MARK_SQL)
+        .bind(grace_seconds)
+        .execute(&persistent.pool)
+        .await
+        .map_err(db_unavailable)?;
+    Ok(())
+}
+
+fn parse_account_object_key(storage_key: &str) -> Option<(Vec<u8>, String)> {
+    let parts = storage_key.split('/').collect::<Vec<_>>();
+    if parts.len() != 4
+        || parts[0] != "accounts"
+        || !matches!(parts[2], "chunks" | "manifests" | "exports")
+        || parts[3].is_empty()
+    {
+        return None;
+    }
+    let account = hex::decode(parts[1]).ok()?;
+    (account.len() == 20).then(|| (account, parts[3].to_owned()))
+}
+
+fn object_is_older_than(meta: &object_store::ObjectMeta, grace: Duration) -> bool {
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    let modified = meta.last_modified.timestamp();
+    modified >= 0 && now.as_secs().saturating_sub(modified as u64) >= grace.as_secs()
+}
+
+async fn preview_untracked_orphans(
+    persistent: &PersistentState,
+    grace: Duration,
+) -> Result<u64, BackendError> {
+    let mut objects = persistent
+        .object_store
+        .list(Some(&ObjectPath::from("accounts")));
+    let mut count = 0_u64;
+    while let Some(meta) = objects.try_next().await.map_err(object_store_unavailable)? {
+        if !object_is_older_than(&meta, grace) {
+            continue;
+        }
+        let storage_key = meta.location.as_ref();
+        let Some((account, object_id)) = parse_account_object_key(storage_key) else {
+            continue;
+        };
+        if !storage_metadata_or_roots_exist(&persistent.pool, &account, &object_id, storage_key)
+            .await?
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+async fn mark_untracked_orphans(
+    persistent: &PersistentState,
+    grace: Duration,
+) -> Result<(), BackendError> {
+    let mut objects = persistent
+        .object_store
+        .list(Some(&ObjectPath::from("accounts")));
+    while let Some(meta) = objects.try_next().await.map_err(object_store_unavailable)? {
+        if !object_is_older_than(&meta, grace) {
+            continue;
+        }
+        let storage_key = meta.location.as_ref();
+        let Some((account, object_id)) = parse_account_object_key(storage_key) else {
+            continue;
+        };
+        let mut tx = persistent.pool.begin().await.map_err(db_unavailable)?;
+        lock_gc_object_tx(&mut tx, &account, &object_id).await?;
+        if !storage_metadata_or_roots_exist_tx(&mut tx, &account, &object_id, storage_key).await? {
+            sqlx::query(
+                "INSERT INTO orphan_gc_marks(account_handle,object_id,storage_key) \
+                 VALUES ($1,$2,$3) ON CONFLICT (account_handle,storage_key) DO NOTHING",
+            )
+            .bind(&account)
+            .bind(&object_id)
+            .bind(storage_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_unavailable)?;
+        }
+        tx.commit().await.map_err(db_unavailable)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ClaimedOrphan {
+    account: Vec<u8>,
+    object_id: String,
+    storage_key: String,
+    lease_token: Uuid,
+}
+
+async fn claim_orphan_mark(
+    persistent: &PersistentState,
+) -> Result<Option<ClaimedOrphan>, BackendError> {
+    let mut tx = persistent.pool.begin().await.map_err(db_unavailable)?;
+    let row = sqlx::query(
+        "SELECT account_handle,object_id,storage_key FROM orphan_gc_marks \
+         WHERE lease_until IS NULL OR lease_until<now() \
+         ORDER BY marked_at LIMIT 1 FOR UPDATE SKIP LOCKED",
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
+    let Some(row) = row else {
+        tx.rollback().await.map_err(db_unavailable)?;
+        return Ok(None);
+    };
+    let account: Vec<u8> = row.get("account_handle");
+    let object_id: String = row.get("object_id");
+    let storage_key: String = row.get("storage_key");
+    let lease_token = Uuid::new_v4();
+    sqlx::query(
+        "UPDATE orphan_gc_marks SET lease_token=$1,lease_until=now()+interval '5 minutes' \
+         WHERE account_handle=$2 AND storage_key=$3",
+    )
+    .bind(lease_token)
+    .bind(&account)
+    .bind(&storage_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
+    tx.commit().await.map_err(db_unavailable)?;
+    Ok(Some(ClaimedOrphan {
+        account,
+        object_id,
+        storage_key,
+        lease_token,
+    }))
+}
+
+async fn sweep_claimed_orphan(
+    persistent: &PersistentState,
+    mark: &ClaimedOrphan,
+) -> Result<bool, BackendError> {
+    let mut tx = persistent.pool.begin().await.map_err(db_unavailable)?;
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM orphan_gc_marks \
+         WHERE account_handle=$1 AND storage_key=$2 AND lease_token=$3 AND lease_until>now())",
+    )
+    .bind(&mark.account)
+    .bind(&mark.storage_key)
+    .bind(mark.lease_token)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_unavailable)?;
+    if !owned {
+        tx.rollback().await.map_err(db_unavailable)?;
+        return Ok(false);
+    }
+    lock_gc_object_tx(&mut tx, &mark.account, &mark.object_id).await?;
+    if object_roots_exist_tx(&mut tx, &mark.account, &mark.object_id).await? {
+        delete_orphan_mark_tx(&mut tx, mark).await?;
+        tx.commit().await.map_err(db_unavailable)?;
+        return Ok(false);
+    }
+
+    match persistent
+        .object_store
+        .delete(&ObjectPath::from(mark.storage_key.clone()))
+        .await
+    {
+        Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+        Err(error) => return Err(object_store_unavailable(error)),
+    }
+    sqlx::query("DELETE FROM objects WHERE account_handle=$1 AND object_id=$2 AND storage_key=$3")
+        .bind(&mark.account)
+        .bind(&mark.object_id)
+        .bind(&mark.storage_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_unavailable)?;
+    delete_orphan_mark_tx(&mut tx, mark).await?;
+    tx.commit().await.map_err(db_unavailable)?;
+    Ok(true)
+}
+
+async fn delete_orphan_mark_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    mark: &ClaimedOrphan,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "DELETE FROM orphan_gc_marks WHERE account_handle=$1 AND storage_key=$2 AND lease_token=$3",
+    )
+    .bind(&mark.account)
+    .bind(&mark.storage_key)
+    .bind(mark.lease_token)
+    .execute(&mut **tx)
+    .await
+    .map_err(db_unavailable)?;
+    Ok(())
+}
+
+async fn lock_gc_object_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: &[u8],
+    object_id: &str,
+) -> Result<(), BackendError> {
+    let lock_name = format!("{}:{object_id}", hex::encode(account));
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(lock_name)
+        .execute(&mut **tx)
+        .await
+        .map_err(db_unavailable)?;
+    Ok(())
+}
+
+async fn object_roots_exist_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: &[u8],
+    object_id: &str,
+) -> Result<bool, BackendError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM snapshot_objects WHERE account_handle=$1 AND object_id=$2) \
+             OR EXISTS(SELECT 1 FROM snapshots WHERE account_handle=$1 AND encrypted_manifest_object=$2) \
+             OR EXISTS(SELECT 1 FROM upload_sessions \
+                       WHERE account_handle=$1 AND expires_at>now() \
+                         AND (manifest_id=$2 OR required_chunks ? $2))",
+    )
+    .bind(account)
+    .bind(object_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_unavailable)
+}
+
+async fn storage_metadata_or_roots_exist(
+    pool: &PgPool,
+    account: &[u8],
+    object_id: &str,
+    storage_key: &str,
+) -> Result<bool, BackendError> {
+    let mut tx = pool.begin().await.map_err(db_unavailable)?;
+    let exists =
+        storage_metadata_or_roots_exist_tx(&mut tx, account, object_id, storage_key).await?;
+    tx.rollback().await.map_err(db_unavailable)?;
+    Ok(exists)
+}
+
+async fn storage_metadata_or_roots_exist_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: &[u8],
+    object_id: &str,
+    storage_key: &str,
+) -> Result<bool, BackendError> {
+    if object_roots_exist_tx(tx, account, object_id).await? {
+        return Ok(true);
+    }
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM objects WHERE storage_key=$1)")
+        .bind(storage_key)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db_unavailable)
 }
 
 pub fn router(state: AppState) -> Router {
@@ -995,9 +1346,23 @@ async fn begin_snapshot(
                 &req.parents,
             )
             .await?;
+            let mut tx = p
+                .pool
+                .begin()
+                .await
+                .map_err(db_unavailable)
+                .map_err(BackendError::api)?;
+            let lock_ids = std::iter::once(req.encrypted_manifest_id.as_str())
+                .chain(req.chunk_ids.iter().map(String::as_str))
+                .collect::<BTreeSet<_>>();
+            for id in lock_ids {
+                lock_gc_object_tx(&mut tx, &account, id)
+                    .await
+                    .map_err(BackendError::api)?;
+            }
             let mut missing = Vec::new();
             for id in &req.chunk_ids {
-                if !persistent_object_exists(p, &account_hex, id)
+                if !persistent_object_exists_tx(p, &mut tx, &account, id)
                     .await
                     .map_err(BackendError::api)?
                 {
@@ -1010,9 +1375,13 @@ async fn begin_snapshot(
                     .unwrap();
             let chunks = serde_json::to_value(&req.chunk_ids).unwrap();
             sqlx::query("INSERT INTO upload_sessions(id,account_handle,device_cert_id,logical_save_id,base_head,parents,required_chunks,manifest_id,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '24 hours')")
-                .bind(upload_id).bind(account).bind(cert).bind(req.logical_save_id)
+                .bind(upload_id).bind(&account).bind(cert).bind(req.logical_save_id)
                 .bind(req.base_head.map(|x| x.0)).bind(parents).bind(chunks).bind(req.encrypted_manifest_id)
-                .execute(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+                .execute(&mut *tx).await.map_err(db_unavailable).map_err(BackendError::api)?;
+            tx.commit()
+                .await
+                .map_err(db_unavailable)
+                .map_err(BackendError::api)?;
             Ok(Json(BeginSnapshotResponse {
                 upload_id,
                 missing_chunk_ids: missing,
@@ -1246,6 +1615,29 @@ async fn commit_persistent(
     req: CommitSnapshotRequest,
     auth: &AuthContext,
 ) -> Result<CommitSnapshotResponse, BackendError> {
+    commit_persistent_with_failpoint(p, upload_id, req, auth, configured_commit_failpoint()).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitFailpoint {
+    Disabled,
+    #[cfg(test)]
+    BeforeDatabaseCommit,
+    #[cfg(test)]
+    AfterDatabaseCommit,
+}
+
+fn configured_commit_failpoint() -> CommitFailpoint {
+    CommitFailpoint::Disabled
+}
+
+async fn commit_persistent_with_failpoint(
+    p: &PersistentState,
+    upload_id: Uuid,
+    req: CommitSnapshotRequest,
+    auth: &AuthContext,
+    failpoint: CommitFailpoint,
+) -> Result<CommitSnapshotResponse, BackendError> {
     let auth_account = hex::decode(&auth.account_handle)
         .map_err(|_| BackendError::Invalid("invalid auth account".into()))?;
     let auth_device = hex::decode(&auth.device_cert_id)
@@ -1322,7 +1714,21 @@ async fn commit_persistent(
         .execute(&mut *tx)
         .await
         .map_err(db_unavailable)?;
+    #[cfg(test)]
+    if failpoint == CommitFailpoint::BeforeDatabaseCommit {
+        return Err(BackendError::Unavailable(
+            "test failpoint before database commit".into(),
+        ));
+    }
     tx.commit().await.map_err(db_unavailable)?;
+    #[cfg(test)]
+    if failpoint == CommitFailpoint::AfterDatabaseCommit {
+        return Err(BackendError::Unavailable(
+            "test failpoint after database commit".into(),
+        ));
+    }
+    #[cfg(not(test))]
+    let _ = failpoint;
     Ok(CommitSnapshotResponse {
         outcome: kind,
         head,
@@ -1755,6 +2161,30 @@ async fn persistent_object_exists(
     }
 }
 
+async fn persistent_object_exists_tx(
+    p: &PersistentState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: &[u8],
+    object_id: &str,
+) -> Result<bool, BackendError> {
+    let row =
+        sqlx::query("SELECT storage_key FROM objects WHERE account_handle=$1 AND object_id=$2")
+            .bind(account)
+            .bind(object_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_unavailable)?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let key: String = row.get("storage_key");
+    match p.object_store.head(&ObjectPath::from(key)).await {
+        Ok(_) => Ok(true),
+        Err(object_store::Error::NotFound { .. }) => Ok(false),
+        Err(error) => Err(object_store_unavailable(error)),
+    }
+}
+
 async fn persistent_put_object(
     p: &PersistentState,
     account_hex: &str,
@@ -1764,21 +2194,30 @@ async fn persistent_put_object(
     bytes: Vec<u8>,
 ) -> Result<(), ApiError> {
     let key = format!("accounts/{account_hex}/{kind}s/{object_id}");
+    let account = hex::decode(account_hex).map_err(invalid_hex)?;
+    let mut tx = p
+        .pool
+        .begin()
+        .await
+        .map_err(db_unavailable)
+        .map_err(BackendError::api)?;
+    lock_gc_object_tx(&mut tx, &account, object_id)
+        .await
+        .map_err(BackendError::api)?;
     p.object_store
         .put(&ObjectPath::from(key.clone()), bytes.clone().into())
         .await
         .map_err(object_store_unavailable)
         .map_err(BackendError::api)?;
-    let account = hex::decode(account_hex).map_err(invalid_hex)?;
     sqlx::query("INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (account_handle,object_id) DO NOTHING")
         .bind(&account).bind(object_id).bind(kind).bind(&key).bind(bytes.len() as i64).bind(sha256)
-        .execute(&p.pool).await.map_err(db_unavailable).map_err(BackendError::api)?;
+        .execute(&mut *tx).await.map_err(db_unavailable).map_err(BackendError::api)?;
     let existing: String = sqlx::query_scalar(
         "SELECT checksum_sha256 FROM objects WHERE account_handle=$1 AND object_id=$2",
     )
-    .bind(account)
+    .bind(&account)
     .bind(object_id)
-    .fetch_one(&p.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(db_unavailable)
     .map_err(BackendError::api)?;
@@ -1787,6 +2226,17 @@ async fn persistent_put_object(
             BackendError::Conflict("object id reused with different checksum".into()).api(),
         );
     }
+    sqlx::query("DELETE FROM orphan_gc_marks WHERE account_handle=$1 AND storage_key=$2")
+        .bind(&account)
+        .bind(&key)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_unavailable)
+        .map_err(BackendError::api)?;
+    tx.commit()
+        .await
+        .map_err(db_unavailable)
+        .map_err(BackendError::api)?;
     Ok(())
 }
 
@@ -1948,8 +2398,8 @@ fn invalid_hex(_: hex::FromHexError) -> ApiError {
 fn db_unavailable(error: sqlx::Error) -> BackendError {
     BackendError::Unavailable(format!("database:{error}"))
 }
-fn object_store_unavailable<E: std::fmt::Display>(error: E) -> BackendError {
-    BackendError::Unavailable(format!("object-store:{error}"))
+fn object_store_unavailable<E>(_: E) -> BackendError {
+    BackendError::Unavailable("object-store".into())
 }
 fn json_string_array(value: &serde_json::Value) -> Vec<String> {
     value
@@ -2283,6 +2733,15 @@ mod tests {
         assert!(validate_parent_shape(Some(&parent), std::slice::from_ref(&parent)).is_ok());
         assert!(validate_parent_shape(Some(&parent), &[]).is_err());
         assert!(validate_parent_shape(None, &[parent.clone(), parent]).is_err());
+    }
+
+    #[test]
+    fn object_store_errors_never_expose_storage_keys() {
+        let secret_key = "accounts/00112233445566778899aabbccddeeff00112233/chunks/private-object";
+        let error = object_store_unavailable(format!("delete failed for {secret_key}"));
+        let rendered = error.to_string();
+        assert_eq!(rendered, "backend unavailable: object-store");
+        assert!(!rendered.contains(secret_key));
     }
 
     #[tokio::test]
@@ -2783,6 +3242,340 @@ mod tests {
             .unwrap();
         let response = ready(State(state)).await.unwrap().0;
         assert_eq!(response.status, "ready");
+    }
+
+    #[sqlx::test(migrations = "../../deploy/compose/migrations")]
+    #[ignore = "requires PostgreSQL; run scripts/server-crash-gc-test.sh"]
+    async fn orphan_gc_is_account_scoped_and_preserves_live_references(pool: PgPool) {
+        use object_store::memory::InMemory;
+        use std::time::Duration;
+
+        let account_a = vec![0x11_u8; 20];
+        let account_b = vec![0x22_u8; 20];
+        let device_a = vec![0x31_u8; 16];
+        let device_b = vec![0x32_u8; 16];
+        for (account, device) in [(&account_a, &device_a), (&account_b, &device_b)] {
+            sqlx::query("INSERT INTO accounts(account_handle,root_public_key) VALUES ($1,$2)")
+                .bind(account)
+                .bind(vec![0x44_u8; 32])
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO devices(cert_id,account_handle,device_public_key,certificate) VALUES ($1,$2,$3,$4)")
+                .bind(device)
+                .bind(account)
+                .bind(vec![0x55_u8; 32])
+                .bind(vec![0x66_u8; 32])
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO logical_saves(id,account_handle,encrypted_label) VALUES ('save',$1,$2)")
+                .bind(account)
+                .bind(Vec::<u8>::new())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let persistent = PersistentState {
+            pool: pool.clone(),
+            object_store: store.clone(),
+        };
+        for (account, suffix) in [(&account_a, "a"), (&account_b, "b")] {
+            for object_id in ["shared", "active", "young"] {
+                let key = format!("accounts/{suffix}/{object_id}");
+                store
+                    .put(&ObjectPath::from(key.clone()), vec![1].into())
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256,created_at) VALUES ($1,$2,'chunk',$3,1,'00',now()-interval '2 days')")
+                    .bind(account)
+                    .bind(object_id)
+                    .bind(key)
+                    .execute(&pool)
+                    .await
+                .unwrap();
+            }
+        }
+        let untracked_key = format!("accounts/{}/chunks/untracked", hex::encode(&account_b));
+        store
+            .put(&ObjectPath::from(untracked_key), vec![9].into())
+            .await
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1_100));
+        sqlx::query(
+            "UPDATE objects SET created_at=now() WHERE account_handle=$1 AND object_id='young'",
+        )
+        .bind(&account_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO snapshots(id,account_handle,logical_save_id,encrypted_manifest_object,committing_device_cert_id) VALUES ('snap',$1,'save','shared',$2)")
+            .bind(&account_a)
+            .bind(&device_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO snapshot_objects(account_handle,snapshot_id,object_id) VALUES ($1,'snap','shared')")
+            .bind(&account_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO upload_sessions(id,account_handle,device_cert_id,logical_save_id,parents,required_chunks,manifest_id,expires_at) VALUES ($1,$2,$3,'save','[]','[\"active\"]','manifest',now()+interval '1 hour')")
+            .bind(Uuid::new_v4())
+            .bind(&account_a)
+            .bind(&device_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let dry_run = collect_orphan_objects(&persistent, Duration::from_secs(1), true)
+            .await
+            .unwrap();
+        assert_eq!(dry_run.eligible, 4);
+        assert_eq!(dry_run.deleted, 0);
+
+        sqlx::query(
+            "INSERT INTO orphan_gc_marks(account_handle,object_id,storage_key,lease_token,lease_until) \
+             SELECT account_handle,object_id,storage_key,$1,now()-interval '1 minute' \
+             FROM objects WHERE account_handle=$2 AND object_id='shared'",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&account_b)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let swept = collect_orphan_objects(&persistent, Duration::from_secs(1), false)
+            .await
+            .unwrap();
+        assert_eq!(swept.eligible, 4);
+        assert_eq!(swept.deleted, 4);
+        assert!(persistent_object_row_exists(&pool, &account_a, "shared").await);
+        assert!(persistent_object_row_exists(&pool, &account_a, "active").await);
+        assert!(persistent_object_row_exists(&pool, &account_a, "young").await);
+        assert!(!persistent_object_row_exists(&pool, &account_b, "shared").await);
+    }
+
+    async fn persistent_object_row_exists(pool: &PgPool, account: &[u8], object_id: &str) -> bool {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE account_handle=$1 AND object_id=$2)",
+        )
+        .bind(account)
+        .bind(object_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../deploy/compose/migrations")]
+    #[ignore = "requires PostgreSQL; run scripts/server-crash-gc-test.sh"]
+    async fn commit_failpoints_prove_transactional_head_and_orphan_recovery(pool: PgPool) {
+        use object_store::memory::InMemory;
+        use std::time::Duration;
+
+        let account = vec![0x71_u8; 20];
+        let device = vec![0x72_u8; 16];
+        sqlx::query("INSERT INTO accounts(account_handle,root_public_key) VALUES ($1,$2)")
+            .bind(&account)
+            .bind(vec![0x73_u8; 32])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO devices(cert_id,account_handle,device_public_key,certificate) VALUES ($1,$2,$3,$4)")
+            .bind(&device)
+            .bind(&account)
+            .bind(vec![0x74_u8; 32])
+            .bind(vec![0x75_u8; 32])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let persistent = PersistentState {
+            pool: pool.clone(),
+            object_store: store.clone(),
+        };
+        let auth = AuthContext {
+            account_handle: hex::encode(&account),
+            device_cert_id: hex::encode(&device),
+        };
+
+        let before_upload = insert_commit_fixture(
+            &pool,
+            &store,
+            &account,
+            &device,
+            "before-save",
+            "before-manifest",
+        )
+        .await;
+        let before = commit_persistent_with_failpoint(
+            &persistent,
+            before_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("before-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::BeforeDatabaseCommit,
+        )
+        .await;
+        assert!(matches!(before, Err(BackendError::Unavailable(_))));
+        assert_eq!(snapshot_count(&pool, &account, "before-save").await, 0);
+        assert_eq!(head(&pool, &account, "before-save").await, None);
+        assert!(upload_exists(&pool, before_upload).await);
+        sqlx::query("DELETE FROM upload_sessions WHERE id=$1")
+            .bind(before_upload)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE objects SET created_at=now()-interval '2 days' WHERE account_handle=$1 AND object_id='before-manifest'")
+            .bind(&account)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let swept = collect_orphan_objects(&persistent, Duration::from_secs(1), false)
+            .await
+            .unwrap();
+        assert_eq!(swept.deleted, 1);
+
+        let after_upload = insert_commit_fixture(
+            &pool,
+            &store,
+            &account,
+            &device,
+            "after-save",
+            "after-manifest",
+        )
+        .await;
+        let after = commit_persistent_with_failpoint(
+            &persistent,
+            after_upload,
+            CommitSnapshotRequest {
+                snapshot_id: SnapshotId("after-snapshot".into()),
+            },
+            &auth,
+            CommitFailpoint::AfterDatabaseCommit,
+        )
+        .await;
+        assert!(matches!(after, Err(BackendError::Unavailable(_))));
+        assert_eq!(snapshot_count(&pool, &account, "after-save").await, 1);
+        assert_eq!(
+            head(&pool, &account, "after-save").await.as_deref(),
+            Some("after-snapshot")
+        );
+        assert!(!upload_exists(&pool, after_upload).await);
+        sqlx::query("UPDATE objects SET created_at=now()-interval '2 days' WHERE account_handle=$1 AND object_id='after-manifest'")
+            .bind(&account)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let retained = collect_orphan_objects(&persistent, Duration::from_secs(1), false)
+            .await
+            .unwrap();
+        assert_eq!(retained.deleted, 0);
+        assert!(persistent_object_row_exists(&pool, &account, "after-manifest").await);
+    }
+
+    #[sqlx::test(migrations = "../../deploy/compose/migrations")]
+    #[ignore = "requires PostgreSQL; run scripts/server-crash-gc-test.sh"]
+    async fn slow_delete_lock_does_not_block_unrelated_foreground_object(pool: PgPool) {
+        let account = vec![0x61_u8; 20];
+        let mut slow_tx = pool.begin().await.unwrap();
+        lock_gc_object_tx(&mut slow_tx, &account, "slow-orphan")
+            .await
+            .unwrap();
+        let slow = tokio::spawn(async move {
+            sqlx::query("SELECT pg_sleep(0.6)")
+                .execute(&mut *slow_tx)
+                .await
+                .unwrap();
+            slow_tx.commit().await.unwrap();
+        });
+
+        let started = std::time::Instant::now();
+        let mut foreground_tx = pool.begin().await.unwrap();
+        lock_gc_object_tx(&mut foreground_tx, &account, "foreground-object")
+            .await
+            .unwrap();
+        foreground_tx.commit().await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "unrelated foreground object was blocked by slow orphan deletion"
+        );
+        slow.await.unwrap();
+    }
+
+    async fn insert_commit_fixture(
+        pool: &PgPool,
+        store: &Arc<dyn ObjectStore>,
+        account: &[u8],
+        device: &[u8],
+        logical_save: &str,
+        manifest_id: &str,
+    ) -> Uuid {
+        sqlx::query(
+            "INSERT INTO logical_saves(id,account_handle,encrypted_label) VALUES ($1,$2,$3)",
+        )
+        .bind(logical_save)
+        .bind(account)
+        .bind(Vec::<u8>::new())
+        .execute(pool)
+        .await
+        .unwrap();
+        let key = format!("fixture/{manifest_id}");
+        store
+            .put(&ObjectPath::from(key.clone()), vec![1].into())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO objects(account_handle,object_id,object_kind,storage_key,size_bytes,checksum_sha256) VALUES ($1,$2,'manifest',$3,1,'00')")
+            .bind(account)
+            .bind(manifest_id)
+            .bind(key)
+            .execute(pool)
+            .await
+            .unwrap();
+        let upload_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO upload_sessions(id,account_handle,device_cert_id,logical_save_id,parents,required_chunks,manifest_id,expires_at) VALUES ($1,$2,$3,$4,'[]','[]',$5,now()+interval '1 hour')")
+            .bind(upload_id)
+            .bind(account)
+            .bind(device)
+            .bind(logical_save)
+            .bind(manifest_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        upload_id
+    }
+
+    async fn snapshot_count(pool: &PgPool, account: &[u8], logical_save: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM snapshots WHERE account_handle=$1 AND logical_save_id=$2",
+        )
+        .bind(account)
+        .bind(logical_save)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn head(pool: &PgPool, account: &[u8], logical_save: &str) -> Option<String> {
+        sqlx::query_scalar(
+            "SELECT head_snapshot_id FROM logical_saves WHERE account_handle=$1 AND id=$2",
+        )
+        .bind(account)
+        .bind(logical_save)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn upload_exists(pool: &PgPool, upload_id: Uuid) -> bool {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=$1)")
+            .bind(upload_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

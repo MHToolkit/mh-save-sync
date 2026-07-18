@@ -45,7 +45,8 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 | Chunk upload interruption | Upload a chunk, stop/restart server, upload manifest and commit same upload session. | resumed commit ID, no bad HEAD. | **Passed locally.** upload session survived restart and committed as first snapshot; HEAD `119beee8ef738ddf81cceba508a7ef8801b6e5cc572e9ecf44302bfc43e20fc1`. |
 | Committed object loss | Delete a MinIO object referenced by committed history. | readiness failure, then successful disaster restore. | **Passed locally.** `/ready` returned HTTP 503 with `missing-object`; destructive two-store restore returned readiness to 200 with zero dangling references. |
 | Readiness beyond 2,000 objects | One committed snapshot references 2,001 object rows; omit only the final object, then add it and retry. | first `/ready` is 503 without leaking the storage key; second is ready; no total scan cap. | **Passed locally.** Persistent readiness now uses a repeatable-read transaction and 256-row keyset pages. `scripts/readiness-fullscan-test.sh` runs the real PostgreSQL fixture; the former fixed `LIMIT 2000` regression is covered. |
-| DB commit crash | Crash after object upload before DB insert; GC later reclaims orphan after grace. | orphan list before/after GC. | Pending. |
+| DB commit crash | Inject failure immediately before and after the PostgreSQL transaction commit; expire the abandoned upload and sweep after grace. | snapshot/head/upload rows before/after, aggregate GC count, referenced object retained. | **Passed locally.** Before-commit injection rolled back snapshot/HEAD and left the uploaded manifest reclaimable; after-commit injection returned an error while snapshot/HEAD stayed durable and GC retained its object. `scripts/server-crash-gc-test.sh` runs both real PostgreSQL fixtures. |
+| Orphan GC pagination and recovery | Create 1,005 S3-only objects plus one PostgreSQL-tracked orphan and one referenced object; run real CLI dry-run/delete, then stop MinIO. | listing crosses one S3 page; exact aggregate counts; PostgreSQL and MinIO cross-check; no storage key in stderr. | **Passed locally.** Dry-run reported 1,006, delete removed 1,006, both stores retained only the referenced object, marks returned to zero, and unavailable MinIO produced only the redacted `object-store unavailable` code. `scripts/orphan-gc-compose-e2e.sh`. |
 | HEAD CAS race | Two upload sessions commit on the same base. | one fast-forward, one conflict branch; both snapshots retained. | **Passed locally.** Black-box API run produced three retained snapshots, one conflict branch and unchanged HEAD after stale-base commit. |
 | Resource idle | 10 minute idle service with no changes. | CPU, RSS, object/DB I/O. | Partial. One post-restore sample: server 0.13% CPU / 2.044 MiB RSS; PostgreSQL 1.70% / 52.18 MiB; MinIO 1.56% / 73.85 MiB. Ten-minute series remains pending. |
 
@@ -55,7 +56,11 @@ Readiness must fail if any committed HEAD references a missing manifest/chunk.
 
 - `compose.yaml` with healthchecks, resource limits, named volumes, project-local network, non-root server user and secret-file mounts: present.
 - SQL migrations: `migrations/001_init.sql` present.
-- Backup/restore/verify/orphan scripts: present. The server applies embedded SQLx migrations before accepting traffic.
+- Backup/restore/verify/orphan scripts: present. Orphan GC defaults to dry-run,
+  uses a seven-day grace period, treats snapshot references plus unexpired
+  upload sessions as roots, and uses durable mark/lease rows plus per-object
+  advisory locks rather than locking hot tables during S3 I/O. The server
+  applies embedded SQLx migrations before accepting traffic.
 - `README.md` with 5-minute local demo, upgrade/rollback and disaster-recovery runbook.
 - `.env.example` with quoted non-secret placeholders. Real `.env` is ignored and stored outside the repo.
 

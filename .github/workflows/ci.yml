@@ -87,6 +87,8 @@ jobs:
         run: ./scripts/compose-tls-config-test.sh
       - name: Verify file-secret privilege-drop deployment contract
         run: ./scripts/compose-runtime-identity-test.sh
+      - name: Verify orphan GC defaults to dry-run
+        run: ./scripts/orphan-gc-contract-test.sh
       - run: cargo run -p save-cli --bin mh-save -- crypto-vector
       - name: Verify deterministic device certificate fixture
         run: |
@@ -221,6 +223,10 @@ jobs:
           docker compose -f deploy/compose/compose.yaml restart server
           curl -fsS --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/ready
           python3 scripts/compose-resume-e2e.py finish artifacts/ci-compose-resume-state.json
+      - name: Verify database crash failpoints and orphan GC
+        run: |
+          CONTAINER_RUNTIME=docker ./scripts/server-crash-gc-test.sh
+          CONTAINER_RUNTIME=docker ./scripts/orphan-gc-compose-e2e.sh
       - name: Dump compose logs on failure
         if: failure()
         run: docker compose -f deploy/compose/compose.yaml logs --no-color --tail=200

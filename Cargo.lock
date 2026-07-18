@@ -2329,6 +2329,7 @@ dependencies = [
  "base64",
  "ciborium",
  "ed25519-dalek",
+ "futures-util",
  "hex",
  "libc",
  "object_store",

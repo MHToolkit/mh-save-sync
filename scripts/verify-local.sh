@@ -36,4 +36,6 @@ fi
 ./scripts/compose-project-volume-test.sh
 ./scripts/compose-tls-config-test.sh
 ./scripts/compose-runtime-identity-test.sh
+./scripts/orphan-gc-contract-test.sh
+./scripts/server-crash-gc-test.sh
 ./scripts/secret-scan.sh
