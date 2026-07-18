@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,6 +46,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -108,7 +113,7 @@ class MainActivity : ComponentActivity() {
             }.start()
         }
         setContent {
-            MaterialTheme {
+            SaveSyncTheme {
                 SaveSyncDashboard()
             }
         }
@@ -195,6 +200,16 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val serverEndpointFocusRequester = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
+        val uiPresentation = SaveSyncUiStatePresentation.from(
+            phase = syncPhase,
+            error = syncError,
+            pendingUploads = pendingUploads,
+            conflictCount = conflictReport?.branches?.size ?: 0,
+            sessionActive = sessionActive,
+            authorized = authorized,
+            gameEnabled = gameEnabled,
+            serverConfigured = serverEndpoint.isNotBlank(),
+        )
 
         fun refreshConflicts() {
             conflictVisible = true
@@ -616,8 +631,8 @@ class MainActivity : ComponentActivity() {
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(rememberScrollState())
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                    .padding(SaveSyncDesignTokens.screenPadding),
+                verticalArrangement = Arrangement.spacedBy(SaveSyncDesignTokens.sectionGap),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -634,17 +649,23 @@ class MainActivity : ComponentActivity() {
 
                 CardSection("存档状态") {
                     Text(
-                        DashboardContentPolicy.status(
-                            authorized,
-                            gameEnabled,
-                            serverEndpoint.isNotBlank(),
-                            sessionActive,
-                        ),
+                        uiPresentation.status,
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    Text(syncPhase, color = MaterialTheme.colorScheme.primary)
-                    if (syncError.isNotBlank()) {
-                        Text(syncError, color = MaterialTheme.colorScheme.error)
+                    Text(
+                        uiPresentation.nextAction,
+                        color = when (uiPresentation.tone) {
+                            SaveSyncUiTone.Success -> SaveSyncDesignTokens.success
+                            SaveSyncUiTone.Warning -> SaveSyncDesignTokens.warning
+                            SaveSyncUiTone.Error -> MaterialTheme.colorScheme.error
+                            SaveSyncUiTone.Neutral -> MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier
+                            .animateContentSize(animationSpec = tween(SaveSyncDesignTokens.contentMotionMillis))
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                    if (syncPhase.isNotBlank() && syncPhase != uiPresentation.status) {
+                        Text(syncPhase, style = MaterialTheme.typography.labelMedium)
                     }
                     OutlinedButton(
                         enabled = serverEndpoint.isNotBlank() && hasRecoverySecret && !conflictLoading,
@@ -849,10 +870,14 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun CardSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(animationSpec = tween(SaveSyncDesignTokens.contentMotionMillis)),
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(SaveSyncDesignTokens.contentGap),
             ) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 HorizontalDivider()
