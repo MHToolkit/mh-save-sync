@@ -193,6 +193,13 @@ class SyncMessagesTest {
                 fallback = neutral,
             ),
         )
+        assertEquals(
+            "Mac 端同步后即可看到该版本。",
+            SyncMessages.sanitizeLegacyUserCopy(
+                value = "Mac 端启动前检查后即可看到该版本。",
+                fallback = "Mac 端同步后即可看到该版本。",
+            ),
+        )
         val successful = "本地存档已设为云端最新（2 个文件）。"
         assertEquals(successful, SyncMessages.sanitizeLegacyUserCopy(successful, neutral))
     }
