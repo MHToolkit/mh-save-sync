@@ -125,4 +125,35 @@ class DurableSyncPipelineTest {
         assertTrue(result.shouldRetry)
         assertFalse(result.queueStateKnown)
     }
+
+    @Test
+    fun `drain status separates network conflict and local queue faults`() {
+        val network = DurableDrainResult(0, 0, 1, 2, 1, null, null, "network_or_server_failure", true)
+        assertEquals("离线队列待续传", DrainStatusPolicy.decide(network).phase)
+
+        val conflictAndNetwork = DurableDrainResult(
+            1, 1, 1, 1, 2, "branch", "head", "network_or_server_failure", true,
+        )
+        assertEquals("检测到冲突", DrainStatusPolicy.decide(conflictAndNetwork).phase)
+
+        val local = DurableDrainResult(0, 0, 1, 0, 0, null, null, "local_queue_unavailable", false)
+        assertEquals("本地上传队列暂不可用", DrainStatusPolicy.decide(local).phase)
+
+        val empty = DurableDrainResult(0, 0, 0, 0, 0, null, null, null, true)
+        val emptyStatus = DrainStatusPolicy.decide(empty)
+        assertTrue(emptyStatus.summary.contains("没有声称已观察到"))
+    }
+
+    @Test
+    fun `capture failure clears saf and release failure retries immediately`() {
+        assertTrue(CaptureFailurePolicy.shouldRemoveSafRoot("saf_permission_required"))
+        assertEquals(
+            CaptureFailureDisposition.REAUTHORIZE,
+            CaptureFailurePolicy.decide("saf_permission_required", leaseReleased = true),
+        )
+        assertEquals(
+            CaptureFailureDisposition.RETRY_QUEUE_UNKNOWN,
+            CaptureFailurePolicy.decide("saf_permission_required", leaseReleased = false),
+        )
+    }
 }

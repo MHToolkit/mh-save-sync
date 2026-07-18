@@ -35,6 +35,89 @@ internal data class CaptureGenerationClaim(val generation: Long, val owner: Stri
     }
 }
 
+internal enum class CaptureFailureDisposition { RETRY_QUEUE_UNKNOWN, REAUTHORIZE, RETRY_CAPTURE, COMPLETE }
+
+internal object CaptureFailurePolicy {
+    fun decide(localError: String?, leaseReleased: Boolean): CaptureFailureDisposition = when {
+        !leaseReleased -> CaptureFailureDisposition.RETRY_QUEUE_UNKNOWN
+        localError == "saf_permission_required" -> CaptureFailureDisposition.REAUTHORIZE
+        localError in setOf("emulator_running", "capture_or_queue_failed") ->
+            CaptureFailureDisposition.RETRY_CAPTURE
+        else -> CaptureFailureDisposition.COMPLETE
+    }
+
+    fun shouldRemoveSafRoot(localError: String?): Boolean =
+        localError == "saf_permission_required"
+}
+
+internal data class DrainUiStatus(
+    val phase: String,
+    val summary: String,
+    val nextAction: String,
+    val error: String,
+)
+
+internal object DrainStatusPolicy {
+    fun decide(result: DurableDrainResult): DrainUiStatus {
+        val multipleEndpoints = result.pendingEndpointCount > 1
+        return when {
+            result.lastError == "recovery_secret_required" -> DrainUiStatus(
+                "需要恢复密钥",
+                "上传队列保留在手机上，但需要恢复密钥才能继续。",
+                "导入与其他设备相同的恢复密钥。",
+                "未导入恢复密钥",
+            )
+            result.conflictCount > 0 -> DrainUiStatus(
+                "检测到冲突",
+                if (result.pendingCount > 0) {
+                    "已保留冲突分支；另有加密任务等待网络续传，没有静默覆盖。"
+                } else {
+                    "手机快照已安全上传为冲突分支，没有静默覆盖云端或本地存档。"
+                },
+                "打开冲突页面明确选择；其余任务会按约束重试。",
+                "",
+            )
+            !result.queueStateKnown || result.lastError in setOf(
+                "local_queue_unavailable",
+                "local_pipeline_failed",
+            ) -> DrainUiStatus(
+                "本地上传队列暂不可用",
+                "无法确认本地加密队列状态；不会把未知状态显示为上传完成。",
+                "后台会重试；不要清除应用数据。",
+                "本地队列读取失败",
+            )
+            result.lastError == "local_queue_integrity_failure" -> DrainUiStatus(
+                "本地加密任务校验失败",
+                "至少一个队列项目未通过完整性校验；其他原始存档和队列未被覆盖。",
+                "保留应用数据并查看诊断；后台不会把损坏项目伪报为成功。",
+                "队列完整性校验失败",
+            )
+            result.pendingCount > 0 || result.lastError == "network_or_server_failure" -> DrainUiStatus(
+                "离线队列待续传",
+                if (multipleEndpoints) {
+                    "队列包含多个原服务器地址；当前不可用地址不会阻塞其他地址。"
+                } else {
+                    "加密快照仍在手机持久队列中，网络或云端不可用不会丢失任务。"
+                },
+                "满足 Wi-Fi、电量和充电偏好后会自动重试。",
+                "云端暂时不可用",
+            )
+            result.uploadedCount > 0 -> DrainUiStatus(
+                "上传完成",
+                "Android 稳定快照已加密上传到云存档服务器。",
+                "可以在 Mac 端检查并恢复这个版本。",
+                "",
+            )
+            else -> DrainUiStatus(
+                "后台对账完成",
+                "本地加密上传队列当前为空，没有声称已观察到 Nemessix 自动退出。",
+                "退出游戏后返回本应用，点“尝试读取稳定存档并排队上传”。",
+                "",
+            )
+        }
+    }
+}
+
 private data class PendingLedgerReceipt(
     val snapshotId: String,
     val serverEndpoint: String,
@@ -168,15 +251,28 @@ open class CaptureWorker(
             SyncScheduler.enqueueConstrainedDrain(applicationContext)
             return Result.success()
         }
-        NativeSyncBridge.finishCaptureGeneration(
+        val leaseReleased = NativeSyncBridge.finishCaptureGeneration(
             queueRoot.absolutePath,
             SyncServerProbe.MH3G_NEMESSIX_LOGICAL_SAVE_ID,
             claim.owner,
             claim.generation,
             false,
         )
+        val disposition = CaptureFailurePolicy.decide(capture.localError, leaseReleased)
+        if (disposition == CaptureFailureDisposition.RETRY_QUEUE_UNKNOWN) {
+            preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_PHASE, "本地捕获队列暂不可用")
+                .putString(SyncScheduler.LAST_SYNC_SUMMARY, "无法确认捕获租约已释放；不会等待十分钟后静默重复快照。")
+                .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "后台会重试；不要清除应用数据。")
+                .putString(SyncScheduler.LAST_SYNC_ERROR, "capture_lease_release_failed")
+                .apply()
+            return Result.retry()
+        }
         if (capture.localError != null) {
-            val revoked = capture.localError == "saf_permission_required"
+            val revoked = disposition == CaptureFailureDisposition.REAUTHORIZE
+            if (CaptureFailurePolicy.shouldRemoveSafRoot(capture.localError)) {
+                preferences.edit().remove(SyncScheduler.SAF_ROOT).commit()
+            }
             preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, if (revoked) "需要重新授权" else "本地快照未创建")
@@ -191,7 +287,7 @@ open class CaptureWorker(
                 )
                 .putString(SyncScheduler.LAST_SYNC_ERROR, capture.localError)
                 .apply()
-            return if (capture.localError in setOf("emulator_running", "capture_or_queue_failed")) {
+            return if (disposition == CaptureFailureDisposition.RETRY_CAPTURE) {
                 Result.retry()
             } else {
                 Result.success()
@@ -249,60 +345,14 @@ class DrainWorker(
                 )
             }.onSuccess { PendingLedgerReceiptStore.clear(applicationContext) }
         }
-        val multipleEndpoints = result.pendingEndpointCount > 1
-        val phase: String
-        val summary: String
-        val nextAction: String
-        val error: String
-        when {
-            result.lastError == "recovery_secret_required" -> {
-                phase = "需要恢复密钥"
-                summary = "上传队列保留在手机上，但需要恢复密钥才能继续。"
-                nextAction = "导入与其他设备相同的恢复密钥。"
-                error = "未导入恢复密钥"
-            }
-            result.lastError != null || !result.queueStateKnown -> {
-                phase = "本地上传队列暂不可用"
-                summary = "无法确认本地加密队列状态；不会把未知状态显示为上传完成。"
-                nextAction = "后台会重试；不要清除应用数据。"
-                error = "本地队列读取失败"
-            }
-            result.conflictCount > 0 -> {
-                phase = "检测到冲突"
-                summary = "手机快照已安全上传为冲突分支，没有静默覆盖云端或本地存档。"
-                nextAction = "打开冲突页面，比较两边版本后明确选择。"
-                error = ""
-            }
-            result.pendingCount > 0 -> {
-                phase = "离线队列待续传"
-                summary = if (multipleEndpoints) {
-                    "队列包含多个服务器地址的历史任务；每项会按创建时的原地址续传，不会静默迁移。"
-                } else {
-                    "加密快照仍在手机持久队列中，云端不可用不会丢失任务。"
-                }
-                nextAction = "满足 Wi-Fi、电量和充电偏好后会自动重试。"
-                error = "云端暂时不可用"
-            }
-            result.uploadedCount > 0 -> {
-                phase = "上传完成"
-                summary = "Android 稳定快照已加密上传到云存档服务器。"
-                nextAction = "可以在 Mac 端检查并恢复这个版本。"
-                error = ""
-            }
-            else -> {
-                phase = "后台对账完成"
-                summary = "没有待续传任务。"
-                nextAction = "通过本工具启动游戏后，会在确认进程退出时创建稳定快照。"
-                error = ""
-            }
-        }
+        val status = DrainStatusPolicy.decide(result)
         preferences.edit()
             .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
             .putString(SyncScheduler.LAST_SYNC_REASON, "constrained-drain")
-            .putString(SyncScheduler.LAST_SYNC_SUMMARY, summary)
-            .putString(SyncScheduler.LAST_SYNC_PHASE, phase)
-            .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
-            .putString(SyncScheduler.LAST_SYNC_ERROR, error)
+            .putString(SyncScheduler.LAST_SYNC_SUMMARY, status.summary)
+            .putString(SyncScheduler.LAST_SYNC_PHASE, status.phase)
+            .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, status.nextAction)
+            .putString(SyncScheduler.LAST_SYNC_ERROR, status.error)
             .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, displayedPendingCount)
             .apply()
         if (result.queueStateKnown) {

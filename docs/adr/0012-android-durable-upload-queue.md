@@ -55,6 +55,9 @@ manual reconciliation only. Cross-package `ActivityManager` visibility remains
 unverified on the target Android build, so the capability gate is false and the
 ActivityManager automatic-exit path is disabled. The explicit UI action only
 authorizes dual-stable capture; the independent process gate still fails closed.
+An empty queue message therefore never claims that an emulator exit was
+observed. A capture-time SAF `SecurityException` removes only the persisted URI
+binding and requests reauthorization; encrypted queue objects remain intact.
 
 Queued rows retain the normalized endpoint present when they were created.
 Changing settings never hides or silently migrates old rows: a drain consumes
@@ -77,6 +80,9 @@ dirty generation, and its unproven default `session_active=true` is reset once
 when the process-evidence tracker version is installed.
 Both legacy unique WorkManager names are cancelled once; a Robolectric upgrade
 test verifies their persisted rows reach a finished state.
+If releasing a failed capture lease cannot be confirmed, WorkManager retries
+immediately and reports unknown local queue state rather than silently waiting
+for lease expiry.
 
 Rollback may leave encrypted bundles and pending rows in app-private storage;
 older clients ignore them and local emulator saves remain untouched. Reinstall
