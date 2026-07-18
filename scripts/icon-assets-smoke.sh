@@ -44,4 +44,12 @@ done
 file apps/macos/Resources/AppIcon/MHSaveSync.icns | grep -q 'Mac OS X icon' \
   || fail "MHSaveSync.icns is not a valid macOS icon container"
 
+macos_bundle='artifacts/macos/MH Save Sync.app'
+assert_file "${macos_bundle}/Contents/Resources/MHSaveSync.icns"
+assert_file "${macos_bundle}/Contents/Resources/mh-save-sync-menubar-template.png"
+bundle_icon="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' \
+  "${macos_bundle}/Contents/Info.plist" 2>/dev/null || true)"
+test "$bundle_icon" = 'MHSaveSync' \
+  || fail "macOS bundle CFBundleIconFile must be MHSaveSync"
+
 echo "icon assets smoke: ok"

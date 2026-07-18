@@ -28,6 +28,10 @@ mkdir -p "$macos" "$resources"
 
 cp "${repo_root}/apps/macos/.build/release/MHSaveSyncMac" "${macos}/MHSaveSyncMac"
 cp "$cli_bin" "${macos}/mh-save"
+cp "${repo_root}/apps/macos/Resources/AppIcon/MHSaveSync.icns" \
+  "${resources}/MHSaveSync.icns"
+cp "${repo_root}/apps/macos/Resources/AppIcon/mh-save-sync-menubar-template.png" \
+  "${resources}/mh-save-sync-menubar-template.png"
 chmod 755 "${macos}/MHSaveSyncMac" "${macos}/mh-save"
 
 cat > "${contents}/Info.plist" <<'PLIST'
@@ -44,6 +48,8 @@ cat > "${contents}/Info.plist" <<'PLIST'
   <string>MHSaveSyncMac</string>
   <key>CFBundleIdentifier</key>
   <string>org.mhtoolkit.mh-save-sync.alpha</string>
+  <key>CFBundleIconFile</key>
+  <string>MHSaveSync</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
