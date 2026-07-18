@@ -9,8 +9,10 @@
     </queries>
 
     <application
-        android:theme="@style/AppTheme"
+        android:icon="@mipmap/ic_launcher"
         android:label="MH 云存档"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

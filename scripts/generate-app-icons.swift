@@ -99,31 +99,34 @@ private func drawAppGlyph() {
 private func drawMenuBarGlyph() {
     NSColor.black.setStroke()
     let shield = NSBezierPath()
-    shield.move(to: NSPoint(x: 512, y: 96))
-    shield.line(to: NSPoint(x: 864, y: 256))
-    shield.line(to: NSPoint(x: 864, y: 512))
-    shield.curve(to: NSPoint(x: 512, y: 992), controlPoint1: NSPoint(x: 864, y: 736), controlPoint2: NSPoint(x: 736, y: 896))
-    shield.curve(to: NSPoint(x: 160, y: 512), controlPoint1: NSPoint(x: 288, y: 896), controlPoint2: NSPoint(x: 160, y: 736))
-    shield.line(to: NSPoint(x: 160, y: 256))
+    // Map the approved 32-point template into a 28-point safe area. The
+    // original preview path reaches y=31; rendering it edge-to-edge clips the
+    // antialiased stroke in a 36 px template bitmap.
+    shield.move(to: NSPoint(x: 512, y: 148))
+    shield.line(to: NSPoint(x: 820, y: 288))
+    shield.line(to: NSPoint(x: 820, y: 512))
+    shield.curve(to: NSPoint(x: 512, y: 932), controlPoint1: NSPoint(x: 820, y: 708), controlPoint2: NSPoint(x: 708, y: 848))
+    shield.curve(to: NSPoint(x: 204, y: 512), controlPoint1: NSPoint(x: 316, y: 848), controlPoint2: NSPoint(x: 204, y: 708))
+    shield.line(to: NSPoint(x: 204, y: 288))
     shield.close()
     shield.lineJoinStyle = .round
-    shield.lineWidth = 80
+    shield.lineWidth = 70
     shield.stroke()
 
     let details = NSBezierPath()
-    details.move(to: NSPoint(x: 320, y: 544))
-    details.line(to: NSPoint(x: 704, y: 544))
-    details.move(to: NSPoint(x: 384, y: 384))
-    details.line(to: NSPoint(x: 640, y: 384))
-    details.line(to: NSPoint(x: 640, y: 608))
-    details.line(to: NSPoint(x: 384, y: 608))
+    details.move(to: NSPoint(x: 344, y: 540))
+    details.line(to: NSPoint(x: 680, y: 540))
+    details.move(to: NSPoint(x: 400, y: 400))
+    details.line(to: NSPoint(x: 624, y: 400))
+    details.line(to: NSPoint(x: 624, y: 596))
+    details.line(to: NSPoint(x: 400, y: 596))
     details.close()
-    details.move(to: NSPoint(x: 384, y: 736))
-    details.line(to: NSPoint(x: 448, y: 800))
-    details.line(to: NSPoint(x: 608, y: 608))
+    details.move(to: NSPoint(x: 400, y: 708))
+    details.line(to: NSPoint(x: 456, y: 764))
+    details.line(to: NSPoint(x: 596, y: 596))
     details.lineCapStyle = .round
     details.lineJoinStyle = .round
-    details.lineWidth = 74
+    details.lineWidth = 64
     details.stroke()
 }
 
@@ -141,11 +144,10 @@ private func drawArtwork(mode: RenderMode) {
 
         NSGraphicsContext.saveGraphicsState()
         boundary.addClip()
-        // AppKit's gradient direction is evaluated after the flipped design-space
-        // transform. Reverse the stops so the raster matches the SVG's dark
-        // upper-left to light lower-right B3 direction.
-        let gradient = NSGradient(colors: [NSColor(hex: 0x9B72F2), NSColor(hex: 0x4936B7)])!
-        gradient.draw(in: NSRect(x: 40, y: 40, width: 944, height: 944), angle: 45)
+        // AppKit evaluates the angle after the flipped design-space transform.
+        // This pairing matches the SVG's dark upper-left to light lower-right.
+        let gradient = NSGradient(colors: [NSColor(hex: 0x4936B7), NSColor(hex: 0x9B72F2)])!
+        gradient.draw(in: NSRect(x: 40, y: 40, width: 944, height: 944), angle: -45)
         NSGraphicsContext.restoreGraphicsState()
         drawAppGlyph()
     }

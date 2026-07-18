@@ -49,9 +49,10 @@
 
 ### 3.1 macOS 应用图标
 
-源文件放在 `apps/macos/Resources/AppIcon/`：
+跨平台矢量母版放在 `design/icon/`，macOS 生成资产放在
+`apps/macos/Resources/AppIcon/`：
 
-- `mh-save-sync-icon.svg`：可编辑矢量母版；
+- `design/icon/mh-save-sync-icon.svg`：可编辑矢量母版；
 - 生成 16、32、64、128、256、512、1024 px PNG；
 - 使用 `iconutil` 生成 `MHSaveSync.icns`。
 
