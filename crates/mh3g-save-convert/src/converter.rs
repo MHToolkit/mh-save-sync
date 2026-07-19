@@ -1,3 +1,35 @@
+use crate::{
+    ConversionError,
+    profile::{CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, SaveProfile, inspect_bytes},
+    transforms::{apply_arena_records, apply_endian_swaps, apply_monster_discovery},
+};
+
+/// Convert one Japanese MH3G 3DS slot into the Japanese Cemu slot format.
+///
+/// The conversion is deliberately pure: the input is never modified and no
+/// filesystem or emulator state is accessed.
+pub fn convert_3ds_to_cemu(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    let inspection = inspect_bytes(source)?;
+    if inspection.profile != SaveProfile::JpThreeDs {
+        return Err(ConversionError::InvalidSave(format!(
+            "expected a Japanese MH3G 3DS save with header {:02X?}",
+            JP_3DS_HEADER
+        )));
+    }
+
+    let mut payload = source[JP_3DS_HEADER.len()..].to_vec();
+    apply_endian_swaps(&mut payload)?;
+    apply_monster_discovery(&mut payload)?;
+    apply_arena_records(&mut payload)?;
+
+    let mut output = Vec::with_capacity(CEMU_SIZE);
+    output.extend_from_slice(&JP_CEMU_HEADER);
+    output.extend_from_slice(&payload);
+
+    inspect_bytes(&output)?;
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
