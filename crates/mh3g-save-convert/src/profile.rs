@@ -1,3 +1,67 @@
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::ConversionError;
+
+pub const THREE_DS_SIZE: usize = 0x8A00;
+pub const CEMU_SIZE: usize = 0x8A24;
+pub const PAYLOAD_SIZE: usize = 0x89FC;
+pub const JP_3DS_HEADER: [u8; 4] = [0x2B, 0, 0, 0];
+pub const JP_CEMU_HEADER: [u8; 40] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0x14, 0, 0, 0, 0, 0, 0, 0, 0x0C, 0, 0,
+    0x8A, 0, 0, 0, 0, 0, 0, 0, 0, 0x2B,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SaveProfile {
+    JpThreeDs,
+    JpCemu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inspection {
+    pub profile: SaveProfile,
+    pub size: usize,
+    pub sha256: String,
+}
+
+pub fn inspect_bytes(bytes: &[u8]) -> Result<Inspection, ConversionError> {
+    let profile = match bytes.len() {
+        THREE_DS_SIZE if bytes.starts_with(&JP_3DS_HEADER) => SaveProfile::JpThreeDs,
+        CEMU_SIZE if bytes.starts_with(&JP_CEMU_HEADER) => SaveProfile::JpCemu,
+        size => {
+            return Err(ConversionError::InvalidSave(format!(
+                "unrecognized Japanese MH3G save size/header combination ({size} bytes)"
+            )));
+        }
+    };
+
+    Ok(Inspection {
+        profile,
+        size: bytes.len(),
+        sha256: hex::encode(Sha256::digest(bytes)),
+    })
+}
+
+pub fn validate_slot_path(path: &Path) -> Result<(), ConversionError> {
+    if path.is_dir() {
+        return Err(ConversionError::InvalidSave(format!(
+            "save slot path is a directory: {}",
+            path.display()
+        )));
+    }
+
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("user1" | "user2" | "user3") => Ok(()),
+        _ => Err(ConversionError::InvalidSave(format!(
+            "save slot basename must be user1, user2, or user3: {}",
+            path.display()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
