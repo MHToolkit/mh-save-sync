@@ -1,16 +1,17 @@
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::PathBuf,
-    process::{Child, Command, Stdio},
-    sync::Mutex,
-};
+use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
 
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[cfg(target_os = "macos")]
+use std::{
+    process::{Child, Stdio},
+    sync::Mutex,
+};
+
 const THREE_DS_SIZE: usize = 0x8A00;
 const CEMU_SIZE: usize = 0x8A24;
+#[cfg(target_os = "macos")]
 static PROCESS_GUARD: Mutex<()> = Mutex::new(());
 
 fn binary() -> Command {
@@ -85,6 +86,7 @@ fn convert_defaults_to_dry_run_and_creates_no_files() {
 
 #[test]
 fn write_then_rollback_restores_previous_slot() {
+    #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let source = source_fixture(&temp);
@@ -149,6 +151,7 @@ fn invalid_paths_fail_with_one_concise_error_line() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn write_refuses_when_a_supported_emulator_process_is_running() {
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -173,6 +176,7 @@ fn write_refuses_when_a_supported_emulator_process_is_running() {
     assert!(!target.exists());
 }
 
+#[cfg(target_os = "macos")]
 fn fake_cemu_process() -> (TempDir, Child) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("Cemu");
