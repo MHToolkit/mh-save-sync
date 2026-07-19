@@ -74,11 +74,18 @@ creates a same-directory, hash-bound backup. The manifest stores paths and
 SHA-256 values, not player content. A failed installation restores the prior
 target and removes new transaction artifacts.
 
-`rollback --manifest <path>` only accepts the controlled manifest path and
-verified hashes. It restores the backed-up target when there was one, or removes
-the newly-created target when the slot was originally absent; it then removes
-the transaction artifacts. It refuses a running emulator, tampered manifest,
-tampered backup, or unexpected target hash.
+`rollback --manifest <path>` requires the controlled slot-bound manifest path
+and validates its structure and internal consistency. It restores the backed-up
+target when there was one, or removes the newly-created target when the slot was
+originally absent; it then removes the transaction artifacts. It refuses a
+running emulator, a malformed or inconsistent manifest, a slot/path binding
+mismatch, an unexpected installed-target hash, or a backup-content hash
+mismatch.
+
+The JSON manifest is not signed or protected by a MAC. It therefore cannot
+detect an attacker rewriting the manifest and related files into a new,
+self-consistent set. The manifest, target, and backup remain inside the local
+filesystem trust boundary.
 
 ## Consequences
 
