@@ -361,7 +361,7 @@ mod tests {
         ConversionError,
         converter::convert_3ds_to_cemu,
         profile::{JP_3DS_HEADER, THREE_DS_SIZE, inspect_bytes},
-        transaction::{InstallValidator, ProcessProbe, install_with, rollback},
+        transaction::{InstallValidator, ProcessProbe, install_with, rollback, rollback_with},
     };
 
     struct Stopped;
@@ -519,6 +519,51 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_manifest_path_that_is_a_real_save_slot_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("user2");
+        let manifest_path = temp.path().join("user1");
+
+        let error = install_with(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert!(!target.exists());
+        assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn rejects_an_existing_manifest_path_without_touching_the_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        fs::write(&manifest_path, b"existing manifest must not be overwritten").unwrap();
+
+        let error = install_with(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read(&manifest_path).unwrap(),
+            b"existing manifest must not be overwritten"
+        );
+    }
+
+    #[test]
     fn rollback_restores_the_verified_backup_and_removes_transaction_files() {
         let temp = tempfile::tempdir().unwrap();
         let (target, manifest_path) = paths(&temp);
@@ -544,6 +589,22 @@ mod tests {
 
         assert!(!target.exists());
         assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn rollback_refuses_to_mutate_a_slot_while_an_emulator_is_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        install(&target, &manifest_path, &AcceptCemu);
+        let installed = fs::read(&target).unwrap();
+
+        let error = rollback_with(&manifest_path, &Running).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("Cemu"))
+        );
+        assert_eq!(fs::read(target).unwrap(), installed);
+        assert!(manifest_path.exists());
     }
 
     #[test]
