@@ -15,6 +15,50 @@ backup product until the data-integrity gates in `docs/ROADMAP.md` pass.
 - A restore snapshots the current state before replacing anything.
 - The service never receives recovery secrets or plaintext save contents.
 
+## Japanese MH3G 3DS -> Cemu conversion (offline)
+
+`mh3g-save-convert` migrates one **Japanese** MH3G 3DS save slot from
+Nemessix/Azahar to the matching Japanese MH3G HD Cemu slot. It is a local-only,
+one-way tool: it does not upload a save, alter a source save, support another
+region, or convert Cemu back to 3DS. It preserves bytes outside the documented
+conversion ranges, but that byte preservation is not a semantic verification of
+every in-game field.
+
+Before **any** `--write` or `rollback`, fully quit Nemessix, Azahar, and Cemu.
+Do not rely only on closing a game window; wait until their processes have
+stopped. `inspect` and dry-run conversion are read-only.
+
+Set the source and target to the same numbered slot. For the default local
+Nemessix and Cemu paths, a `user2` migration is:
+
+```bash
+SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000/00048100/data/00000001/user2"
+CEMU_DIR="$HOME/Library/Application Support/Nemessix Dev/cemu/mlc01/usr/save/00050000/10104D00/user/80000001"
+TARGET="$CEMU_DIR/user2"
+
+# Read only: confirm this is the supported Japanese 3DS profile.
+rtk cargo run -p mh3g-save-convert -- inspect "$SOURCE"
+
+# Read only: produce and validate the result without changing Cemu's slot.
+rtk cargo run -p mh3g-save-convert -- convert "$SOURCE" --output "$TARGET" --dry-run
+
+# All emulators must be stopped. Atomically install, preserving any old target.
+rtk cargo run -p mh3g-save-convert -- convert "$SOURCE" --output "$TARGET" --write
+
+# If Cemu validation fails, with all emulators still stopped, undo that install.
+rtk cargo run -p mh3g-save-convert -- rollback \
+  --manifest "$CEMU_DIR/.user2.mh3g-install.json"
+```
+
+`--write` creates a same-directory backup when `user2` already exists and writes
+the named manifest. Keep that manifest until you have validated the migrated
+slot in Cemu or completed rollback. The converter currently recognizes the
+Japanese `0x2B` profile only. File-level success is not yet a runtime
+compatibility claim; Cemu load/readback and rollback evidence are required
+before this repository labels the path Runtime Verified. See
+`docs/adr/0013-mh3g-cross-format-conversion.md` for the conversion contract and
+provenance.
+
 
 ## Office Mac ↔ home Android user flow
 
