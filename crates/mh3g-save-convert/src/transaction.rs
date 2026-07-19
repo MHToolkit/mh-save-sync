@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ConversionError,
+    converter::convert_3ds_to_cemu,
     profile::{SaveProfile, inspect_bytes, validate_slot_path},
 };
 
@@ -34,6 +35,10 @@ pub trait ProcessProbe {
 
 pub trait InstallValidator {
     fn validate(&self, bytes: &[u8]) -> Result<(), ConversionError>;
+}
+
+pub trait ManifestPublisher {
+    fn publish(&self, path: &Path, manifest: &InstallManifest) -> Result<(), ConversionError>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -89,6 +94,15 @@ impl InstallValidator for CemuSaveValidator {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JsonManifestPublisher;
+
+impl ManifestPublisher for JsonManifestPublisher {
+    fn publish(&self, path: &Path, manifest: &InstallManifest) -> Result<(), ConversionError> {
+        write_manifest(path, manifest)
+    }
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -99,13 +113,14 @@ pub fn install(
     target: impl AsRef<Path>,
     manifest_path: impl AsRef<Path>,
 ) -> Result<InstallManifest, ConversionError> {
-    install_with(
+    install_with_publisher(
         source,
         installed,
         target,
         manifest_path,
         &MacOsProcessProbe,
         &CemuSaveValidator,
+        &JsonManifestPublisher,
     )
 }
 
@@ -117,9 +132,27 @@ pub fn install_with(
     probe: &dyn ProcessProbe,
     validator: &dyn InstallValidator,
 ) -> Result<InstallManifest, ConversionError> {
-    let target = target.as_ref();
-    let manifest_path = manifest_path.as_ref();
-    validate_transaction_paths(target, manifest_path)?;
+    install_with_publisher(
+        source,
+        installed,
+        target,
+        manifest_path,
+        probe,
+        validator,
+        &JsonManifestPublisher,
+    )
+}
+
+pub fn install_with_publisher(
+    source: &[u8],
+    installed: &[u8],
+    target: impl AsRef<Path>,
+    manifest_path: impl AsRef<Path>,
+    probe: &dyn ProcessProbe,
+    validator: &dyn InstallValidator,
+    publisher: &dyn ManifestPublisher,
+) -> Result<InstallManifest, ConversionError> {
+    let (target, manifest_path) = validate_install_paths(target.as_ref(), manifest_path.as_ref())?;
 
     if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
@@ -127,19 +160,30 @@ pub fn install_with(
         )));
     }
 
+    let expected = convert_3ds_to_cemu(source)?;
+    if expected != installed {
+        return Err(ConversionError::InvalidSave(
+            "installed bytes do not match the converted source save".to_owned(),
+        ));
+    }
+
     let source_sha256 = sha256_hex(source);
     let installed_sha256 = sha256_hex(installed);
     let target_previously_existed = target.exists();
     let previous = if target_previously_existed {
-        Some(fs::read(target)?)
+        Some(fs::read(&target)?)
     } else {
         None
     };
     let previous_sha256 = previous.as_deref().map(sha256_hex);
-    let backup = previous.as_deref().map(|_| unique_path(target, "backup"));
-    let temporary = unique_path(target, "tmp");
+    let backup = previous_sha256
+        .as_deref()
+        .map(|hash| backup_path_for(&target, hash))
+        .transpose()?;
+    let temporary = unique_path(&target, "tmp");
     let mut backup_created = false;
     let mut target_installed = false;
+    let mut manifest_publish_attempted = false;
 
     let result = (|| {
         if let (Some(backup_path), Some(previous)) = (&backup, previous.as_deref()) {
@@ -155,31 +199,35 @@ pub fn install_with(
             ));
         }
         validator.validate(&staged)?;
-        fs::rename(&temporary, target)?;
+        fs::rename(&temporary, &target)?;
         target_installed = true;
-        sync_directory(parent_dir(target))?;
+        sync_directory(parent_dir(&target))?;
 
         let manifest = InstallManifest {
             version: INSTALL_MANIFEST_VERSION,
             source_sha256,
             installed_sha256,
             previous_sha256,
-            target: target.to_path_buf(),
+            target: target.clone(),
             backup: backup.clone(),
             target_previously_existed,
         };
-        write_manifest(manifest_path, &manifest)?;
-        sync_directory(parent_dir(manifest_path))?;
+        manifest_publish_attempted = true;
+        publisher.publish(&manifest_path, &manifest)?;
+        sync_directory(parent_dir(&manifest_path))?;
         Ok(manifest)
     })();
 
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
+        if manifest_publish_attempted {
+            let _ = fs::remove_file(&manifest_path);
+        }
         if target_installed {
             let restore = if let Some(previous) = previous.as_deref() {
-                atomic_replace(target, previous)
+                atomic_replace(&target, previous)
             } else {
-                remove_if_regular_file(target)
+                remove_if_regular_file(&target)
             };
             restore?;
         }
@@ -192,26 +240,52 @@ pub fn install_with(
 }
 
 pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> {
-    let manifest_path = manifest_path.as_ref();
-    let manifest: InstallManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
+    rollback_with(manifest_path, &MacOsProcessProbe)
+}
+
+pub fn rollback_with(
+    manifest_path: impl AsRef<Path>,
+    probe: &dyn ProcessProbe,
+) -> Result<(), ConversionError> {
+    if let Some(name) = probe.matching_process()? {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "emulator process is running: {name}"
+        )));
+    }
+
+    let manifest_path = normalize_path(manifest_path.as_ref())?;
+    let manifest_metadata = fs::symlink_metadata(&manifest_path)?;
+    if !manifest_metadata.file_type().is_file() {
+        return Err(ConversionError::InvalidSave(
+            "rollback manifest must be a regular file".to_owned(),
+        ));
+    }
+    let manifest: InstallManifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
     if manifest.version != INSTALL_MANIFEST_VERSION {
         return Err(ConversionError::InvalidSave(format!(
             "unsupported install manifest version: {}",
             manifest.version
         )));
     }
-    validate_transaction_paths(&manifest.target, manifest_path)?;
-
-    let installed = fs::read(&manifest.target).map_err(|error| {
-        ConversionError::InvalidSave(format!(
-            "cannot read installed target for rollback: {error}"
-        ))
-    })?;
-    if sha256_hex(&installed) != manifest.installed_sha256 {
+    validate_manifest_hash(&manifest.source_sha256, "source")?;
+    validate_manifest_hash(&manifest.installed_sha256, "installed")?;
+    let (target, normalized_manifest_path) =
+        validate_transaction_paths(&manifest.target, &manifest_path)?;
+    if target != manifest.target || normalized_manifest_path != manifest_path {
         return Err(ConversionError::InvalidSave(
-            "installed target hash does not match manifest".to_owned(),
+            "manifest paths must be normalized absolute paths".to_owned(),
         ));
     }
+    let current = match fs::read(&target) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(ConversionError::InvalidSave(format!(
+                "cannot read rollback target: {error}"
+            )));
+        }
+    };
+    let current_sha256 = current.as_deref().map(sha256_hex);
 
     match (
         &manifest.backup,
@@ -219,23 +293,76 @@ pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> 
         manifest.target_previously_existed,
     ) {
         (Some(backup), Some(previous_sha256), true) => {
-            if parent_dir(backup) != parent_dir(&manifest.target) {
+            validate_manifest_hash(previous_sha256, "previous")?;
+            let expected_backup = backup_path_for(&target, previous_sha256)?;
+            if backup != &expected_backup
+                || backup == &target
+                || backup == &manifest_path
+                || is_save_slot_name(backup)
+            {
                 return Err(ConversionError::InvalidSave(
-                    "backup must be in the target directory".to_owned(),
+                    "rollback backup path is not the controlled backup path".to_owned(),
                 ));
             }
-            let previous = fs::read(backup).map_err(|error| {
-                ConversionError::InvalidSave(format!("cannot read rollback backup: {error}"))
-            })?;
-            if sha256_hex(&previous) != *previous_sha256 {
-                return Err(ConversionError::InvalidSave(
-                    "rollback backup hash does not match manifest".to_owned(),
-                ));
+            match current_sha256.as_deref() {
+                Some(hash) if hash == manifest.installed_sha256 => {
+                    let backup_metadata = fs::symlink_metadata(backup).map_err(|error| {
+                        ConversionError::InvalidSave(format!(
+                            "cannot read rollback backup metadata: {error}"
+                        ))
+                    })?;
+                    if !backup_metadata.file_type().is_file() {
+                        return Err(ConversionError::InvalidSave(
+                            "rollback backup must be a regular non-symlink file".to_owned(),
+                        ));
+                    }
+                    let previous = fs::read(backup).map_err(|error| {
+                        ConversionError::InvalidSave(format!(
+                            "cannot read rollback backup: {error}"
+                        ))
+                    })?;
+                    if sha256_hex(&previous) != *previous_sha256 {
+                        return Err(ConversionError::InvalidSave(
+                            "rollback backup hash does not match manifest".to_owned(),
+                        ));
+                    }
+                    atomic_replace(&target, &previous)?;
+                    fs::remove_file(backup)?;
+                }
+                Some(hash) if hash == previous_sha256 => match fs::symlink_metadata(backup) {
+                    Ok(metadata) if metadata.file_type().is_file() => {
+                        let previous = fs::read(backup)?;
+                        if sha256_hex(&previous) != *previous_sha256 {
+                            return Err(ConversionError::InvalidSave(
+                                "rollback backup hash does not match manifest".to_owned(),
+                            ));
+                        }
+                        fs::remove_file(backup)?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(_) => {
+                        return Err(ConversionError::InvalidSave(
+                            "rollback backup must be a regular non-symlink file".to_owned(),
+                        ));
+                    }
+                    Err(error) => return Err(error.into()),
+                },
+                _ => {
+                    return Err(ConversionError::InvalidSave(
+                        "rollback target hash does not match the manifest".to_owned(),
+                    ));
+                }
             }
-            atomic_replace(&manifest.target, &previous)?;
-            fs::remove_file(backup)?;
         }
-        (None, None, false) => remove_if_regular_file(&manifest.target)?,
+        (None, None, false) => match current_sha256.as_deref() {
+            Some(hash) if hash == manifest.installed_sha256 => remove_if_regular_file(&target)?,
+            None => {}
+            _ => {
+                return Err(ConversionError::InvalidSave(
+                    "rollback target hash does not match the manifest".to_owned(),
+                ));
+            }
+        },
         _ => {
             return Err(ConversionError::InvalidSave(
                 "manifest backup fields are inconsistent".to_owned(),
@@ -243,26 +370,44 @@ pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> 
         }
     }
 
-    fs::remove_file(manifest_path)?;
-    sync_directory(parent_dir(manifest_path))?;
+    fs::remove_file(&manifest_path)?;
+    sync_directory(parent_dir(&manifest_path))?;
     Ok(())
 }
 
-fn validate_transaction_paths(target: &Path, manifest_path: &Path) -> Result<(), ConversionError> {
-    validate_slot_path(target)?;
+fn validate_install_paths(
+    target: &Path,
+    manifest_path: &Path,
+) -> Result<(PathBuf, PathBuf), ConversionError> {
+    let (target, manifest_path) = validate_transaction_paths(target, manifest_path)?;
+    let basename = manifest_path.file_name().and_then(|name| name.to_str());
+    if matches!(basename, Some("user1" | "user2" | "user3")) {
+        return Err(ConversionError::InvalidSave(
+            "manifest path cannot use a save slot basename".to_owned(),
+        ));
+    }
+    match fs::symlink_metadata(&manifest_path) {
+        Ok(_) => Err(ConversionError::InvalidSave(
+            "manifest path already exists".to_owned(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((target, manifest_path)),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_transaction_paths(
+    target: &Path,
+    manifest_path: &Path,
+) -> Result<(PathBuf, PathBuf), ConversionError> {
+    let target = normalize_path(target)?;
+    let manifest_path = normalize_path(manifest_path)?;
+    validate_slot_path(&target)?;
     if target == manifest_path {
         return Err(ConversionError::InvalidSave(
             "manifest path cannot be the save slot".to_owned(),
         ));
     }
-    let target_parent = parent_dir(target);
-    let manifest_parent = parent_dir(manifest_path);
-    if !target_parent.is_dir() || !manifest_parent.is_dir() {
-        return Err(ConversionError::InvalidSave(
-            "target and manifest directories must exist".to_owned(),
-        ));
-    }
-    if fs::canonicalize(target_parent)? != fs::canonicalize(manifest_parent)? {
+    if parent_dir(&target) != parent_dir(&manifest_path) {
         return Err(ConversionError::InvalidSave(
             "target and manifest must be in the same directory".to_owned(),
         ));
@@ -276,7 +421,42 @@ fn validate_transaction_paths(target: &Path, manifest_path: &Path) -> Result<(),
             "save slot path cannot be a symlink".to_owned(),
         ));
     }
-    Ok(())
+    Ok((target, manifest_path))
+}
+
+fn normalize_path(path: &Path) -> Result<PathBuf, ConversionError> {
+    let basename = path.file_name().ok_or_else(|| {
+        ConversionError::InvalidSave(format!("path must name a file: {}", path.display()))
+    })?;
+    Ok(fs::canonicalize(parent_dir(path))?.join(basename))
+}
+
+fn is_save_slot_name(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("user1" | "user2" | "user3")
+    )
+}
+
+fn validate_manifest_hash(value: &str, label: &str) -> Result<(), ConversionError> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(ConversionError::InvalidSave(format!(
+            "manifest {label} hash is not a SHA-256 hex digest"
+        )))
+    }
+}
+
+fn backup_path_for(target: &Path, previous_sha256: &str) -> Result<PathBuf, ConversionError> {
+    validate_manifest_hash(previous_sha256, "previous")?;
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
+        })?;
+    Ok(parent_dir(target).join(format!(".{target_name}.mh3g-backup-{previous_sha256}")))
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
@@ -361,7 +541,10 @@ mod tests {
         ConversionError,
         converter::convert_3ds_to_cemu,
         profile::{JP_3DS_HEADER, THREE_DS_SIZE, inspect_bytes},
-        transaction::{InstallValidator, ProcessProbe, install_with, rollback, rollback_with},
+        transaction::{
+            InstallManifest, InstallValidator, ManifestPublisher, ProcessProbe, install_with,
+            install_with_publisher, rollback, rollback_with,
+        },
     };
 
     struct Stopped;
@@ -395,6 +578,17 @@ mod tests {
             Err(ConversionError::InvalidSave(
                 "simulated validation failure".to_owned(),
             ))
+        }
+    }
+
+    struct FailingPublisher;
+
+    impl ManifestPublisher for FailingPublisher {
+        fn publish(&self, path: &Path, _manifest: &InstallManifest) -> Result<(), ConversionError> {
+            fs::write(path, b"partial manifest")?;
+            Err(ConversionError::Io(std::io::Error::other(
+                "simulated manifest publish failure",
+            )))
         }
     }
 
@@ -450,7 +644,7 @@ mod tests {
         );
         let from_disk: crate::transaction::InstallManifest =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        assert_eq!(from_disk.target, target);
+        assert_eq!(from_disk.target, fs::canonicalize(target).unwrap());
     }
 
     #[test]
@@ -468,7 +662,14 @@ mod tests {
             Some(crate::transaction::sha256_hex(&old_save))
         );
         let backup = manifest.backup.unwrap();
-        assert_eq!(backup.parent(), target.parent());
+        assert_eq!(
+            backup.parent(),
+            Some(
+                fs::canonicalize(target.parent().unwrap())
+                    .unwrap()
+                    .as_path()
+            )
+        );
         assert_eq!(fs::read(backup).unwrap(), old_save);
         assert_eq!(fs::read(target).unwrap(), converted());
     }
@@ -563,6 +764,101 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_manifest_symlink_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let symlink_target = temp.path().join("elsewhere.json");
+        symlink(&symlink_target, &manifest_path).unwrap();
+
+        let error = install_with(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert!(!target.exists());
+        assert!(
+            fs::symlink_metadata(manifest_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn rejects_installed_bytes_that_do_not_derive_from_the_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let mut unrelated = converted();
+        unrelated[100] ^= 0x5A;
+
+        let error = install_with(
+            &source(),
+            &unrelated,
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert!(!target.exists());
+        assert!(!manifest_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalizes_a_target_reached_through_a_parent_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&real).unwrap();
+        symlink(&real, &alias).unwrap();
+        let target = alias.join("user2");
+        let manifest_path = real.join("install.json");
+
+        let manifest = install(&target, &manifest_path, &AcceptCemu);
+
+        assert_eq!(manifest.target, real.canonicalize().unwrap().join("user2"));
+        assert_eq!(fs::read(real.join("user2")).unwrap(), converted());
+    }
+
+    #[test]
+    fn manifest_publish_failure_restores_the_target_and_cleans_new_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let old_save = b"original target before failed manifest publish".to_vec();
+        fs::write(&target, &old_save).unwrap();
+
+        let error = install_with_publisher(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+            &FailingPublisher,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::Io(_)));
+        assert_eq!(fs::read(&target).unwrap(), old_save);
+        assert!(!manifest_path.exists());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn rollback_restores_the_verified_backup_and_removes_transaction_files() {
         let temp = tempfile::tempdir().unwrap();
@@ -605,6 +901,61 @@ mod tests {
         );
         assert_eq!(fs::read(target).unwrap(), installed);
         assert!(manifest_path.exists());
+    }
+
+    #[test]
+    fn rollback_rejects_a_backup_path_tampered_to_another_save_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let old_save = b"original cemu save".to_vec();
+        fs::write(&target, &old_save).unwrap();
+        let manifest = install(&target, &manifest_path, &AcceptCemu);
+        let real_backup = manifest.backup.unwrap();
+        let installed = fs::read(&target).unwrap();
+        let other_slot = temp.path().join("user3");
+        fs::write(&other_slot, &old_save).unwrap();
+        let mut manifest: InstallManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.backup = Some(other_slot.clone());
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let error = rollback_with(&manifest_path, &Stopped).unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert_eq!(fs::read(target).unwrap(), installed);
+        assert_eq!(fs::read(other_slot).unwrap(), old_save);
+        assert!(real_backup.exists());
+        assert!(manifest_path.exists());
+    }
+
+    #[test]
+    fn rollback_finishes_cleanup_when_the_backup_was_already_restored() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        fs::write(&target, b"original cemu save").unwrap();
+        let manifest = install(&target, &manifest_path, &AcceptCemu);
+        let backup = manifest.backup.unwrap();
+        let old_save = fs::read(&backup).unwrap();
+        fs::write(&target, &old_save).unwrap();
+        fs::remove_file(&backup).unwrap();
+
+        rollback_with(&manifest_path, &Stopped).unwrap();
+
+        assert_eq!(fs::read(target).unwrap(), old_save);
+        assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn rollback_finishes_cleanup_when_an_originally_absent_target_is_already_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        install(&target, &manifest_path, &AcceptCemu);
+        fs::remove_file(&target).unwrap();
+
+        rollback_with(&manifest_path, &Stopped).unwrap();
+
+        assert!(!target.exists());
+        assert!(!manifest_path.exists());
     }
 
     #[test]
