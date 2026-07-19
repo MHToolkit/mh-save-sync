@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 #[cfg(target_os = "macos")]
 use std::{
+    os::unix::fs::PermissionsExt,
     process::{Child, Stdio},
     sync::Mutex,
 };
@@ -27,7 +28,11 @@ fn source_fixture(temp: &TempDir) -> PathBuf {
 }
 
 fn run_json(args: &[String]) -> Value {
-    let output = binary().args(args).output().unwrap();
+    run_json_command(binary(), args)
+}
+
+fn run_json_command(mut command: Command, args: &[String]) -> Value {
+    let output = command.args(args).output().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -35,6 +40,22 @@ fn run_json(args: &[String]) -> Value {
     );
     assert!(output.stderr.is_empty());
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[cfg(target_os = "macos")]
+fn run_json_with_stopped_emulators(args: &[String]) -> Value {
+    let directory = tempfile::tempdir().unwrap();
+    let pgrep = directory.path().join("pgrep");
+    fs::write(&pgrep, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&pgrep, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = binary();
+    command.env("PATH", directory.path());
+    run_json_command(command, args)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_json_with_stopped_emulators(args: &[String]) -> Value {
+    run_json(args)
 }
 
 fn keys(value: &Value) -> BTreeSet<String> {
@@ -94,7 +115,7 @@ fn write_then_rollback_restores_previous_slot() {
     let previous = vec![0xA5; CEMU_SIZE];
     fs::write(&target, &previous).unwrap();
 
-    let converted = run_json(&[
+    let converted = run_json_with_stopped_emulators(&[
         "convert".into(),
         source.to_string_lossy().into_owned(),
         "--output".into(),
@@ -108,7 +129,7 @@ fn write_then_rollback_restores_previous_slot() {
     assert!(manifest.exists());
     assert!(backup.exists());
 
-    let rollback = run_json(&[
+    let rollback = run_json_with_stopped_emulators(&[
         "rollback".into(),
         "--manifest".into(),
         manifest.display().to_string(),
