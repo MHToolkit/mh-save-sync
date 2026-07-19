@@ -1,5 +1,6 @@
 pub mod converter;
 pub mod profile;
+pub mod transaction;
 pub mod transform_table;
 pub mod transforms;
 
