@@ -25,14 +25,20 @@ mod transform_table_tests {
         assert_eq!(SWAP_SPANS.len(), 8_509);
         assert_eq!(MONSTER_DISCOVERY_OFFSETS.len(), 50);
         assert_eq!(ARENA_RECORD_OFFSETS.len(), 62);
-        assert!(SWAP_SPANS
-            .iter()
-            .all(|span| span.start < span.end && span.end <= PAYLOAD_SIZE));
-        assert!(MONSTER_DISCOVERY_OFFSETS
-            .iter()
-            .all(|&offset| offset + 2 <= PAYLOAD_SIZE));
-        assert!(ARENA_RECORD_OFFSETS
-            .iter()
-            .all(|&offset| offset + 4 <= PAYLOAD_SIZE));
+        assert!(
+            SWAP_SPANS
+                .iter()
+                .all(|span| span.start < span.end && span.end <= PAYLOAD_SIZE)
+        );
+        assert!(
+            MONSTER_DISCOVERY_OFFSETS
+                .iter()
+                .all(|&offset| offset + 2 <= PAYLOAD_SIZE)
+        );
+        assert!(
+            ARENA_RECORD_OFFSETS
+                .iter()
+                .all(|&offset| offset + 4 <= PAYLOAD_SIZE)
+        );
     }
 }
