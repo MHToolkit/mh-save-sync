@@ -574,7 +574,7 @@ mod tests {
         profile::{JP_3DS_HEADER, THREE_DS_SIZE, inspect_bytes},
         transaction::{
             InstallManifest, InstallValidator, ManifestPublisher, ProcessProbe, install_with,
-            install_with_publisher, manifest_path_for_target, rollback, rollback_with,
+            install_with_publisher, manifest_path_for_target, rollback_with,
         },
     };
 
@@ -918,7 +918,7 @@ mod tests {
         let manifest = install(&target, &manifest_path, &AcceptCemu);
         let backup = manifest.backup.clone().unwrap();
 
-        rollback(&manifest_path).unwrap();
+        rollback_with(&manifest_path, &Stopped).unwrap();
 
         assert_eq!(fs::read(target).unwrap(), old_save);
         assert!(!backup.exists());
@@ -931,7 +931,7 @@ mod tests {
         let (target, manifest_path) = paths(&temp);
         install(&target, &manifest_path, &AcceptCemu);
 
-        rollback(&manifest_path).unwrap();
+        rollback_with(&manifest_path, &Stopped).unwrap();
 
         assert!(!target.exists());
         assert!(!manifest_path.exists());
@@ -1045,7 +1045,7 @@ mod tests {
         manifest["version"] = serde_json::json!(999_u32);
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let error = rollback(&manifest_path).unwrap_err();
+        let error = rollback_with(&manifest_path, &Stopped).unwrap_err();
 
         assert!(matches!(error, ConversionError::InvalidSave(_)));
         assert_eq!(fs::read(target).unwrap(), installed);
@@ -1062,7 +1062,7 @@ mod tests {
         let installed = fs::read(&target).unwrap();
         fs::write(&backup, b"tampered backup").unwrap();
 
-        let error = rollback(&manifest_path).unwrap_err();
+        let error = rollback_with(&manifest_path, &Stopped).unwrap_err();
 
         assert!(matches!(error, ConversionError::InvalidSave(_)));
         assert_eq!(fs::read(target).unwrap(), installed);
