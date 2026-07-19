@@ -9,7 +9,7 @@ pub struct SwapSpan {
     pub end: usize,
 }
 
-pub const SWAP_SPANS: [SwapSpan; 8509] = [
+pub static SWAP_SPANS: [SwapSpan; 8509] = [
     SwapSpan { start: 28, end: 32 },
     SwapSpan { start: 32, end: 36 },
     SwapSpan { start: 36, end: 40 },

@@ -24,7 +24,7 @@ def render(swaps: list[tuple[int, int]], monster: list[int], arena: list[int]) -
         "    pub end: usize,",
         "}",
         "",
-        f"pub const SWAP_SPANS: [SwapSpan; {len(swaps)}] = [",
+        f"pub static SWAP_SPANS: [SwapSpan; {len(swaps)}] = [",
     ]
     lines.extend(
         f"    SwapSpan {{ start: {start}, end: {end} }}," for start, end in swaps
