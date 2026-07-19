@@ -110,4 +110,5 @@ mh3g-save-convert rollback --manifest <manifest>
 ## 参考
 
 - fadillzzz/3usavetools `0.3.1`：容器长度、端序区间、怪物图鉴与斗技场转换规则。
+- 官方日版 `CTR-N-JMUJ` 数据迁移程序（Program ID `00040000000C3400`）：已验证为解密 CCI，主程序静态数据含 `sdmc`、`extdata:1`、`SaveData`、`DeleteUserData` 和 `Format` 标识，并内嵌 `00048100` 的 MH3G Title ID 常量。它证明官方流程直接操作 3DS 保存数据归档；由于该 ARM 二进制尚未完整反编译，不把未验证的内部映射当作转换规则。
 - 本机日版 3DS/Cemu 样本：确认 `0x2B` 区域版本值、路径和容器长度。
