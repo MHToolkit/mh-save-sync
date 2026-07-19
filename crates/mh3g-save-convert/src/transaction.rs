@@ -17,6 +17,16 @@ use crate::{
 };
 
 pub const INSTALL_MANIFEST_VERSION: u32 = 1;
+const GUARDED_PROCESS_NAMES: [&str; 8] = [
+    "Nemessix",
+    "nemessix",
+    "Azahar",
+    "azahar",
+    "Cemu",
+    "cemu",
+    "Cemu_release",
+    "cemu_release",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallManifest {
@@ -53,7 +63,7 @@ impl ProcessProbe for MacOsProcessProbe {
 
         #[cfg(target_os = "macos")]
         {
-            for name in ["Nemessix", "nemessix", "Azahar", "azahar", "Cemu", "cemu"] {
+            for name in GUARDED_PROCESS_NAMES {
                 let status = Command::new("pgrep")
                     .args(["-x", name])
                     .stdout(Stdio::null())
@@ -740,6 +750,23 @@ mod tests {
         );
         assert!(!target.exists());
         assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn process_guard_uses_the_complete_exact_executable_name_list() {
+        assert_eq!(
+            super::GUARDED_PROCESS_NAMES,
+            [
+                "Nemessix",
+                "nemessix",
+                "Azahar",
+                "azahar",
+                "Cemu",
+                "cemu",
+                "Cemu_release",
+                "cemu_release",
+            ]
+        );
     }
 
     #[test]
