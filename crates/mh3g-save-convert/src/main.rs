@@ -92,7 +92,21 @@ fn convert(
     write: bool,
 ) -> Result<Report, ConversionError> {
     debug_assert!(!(dry_run && write));
+    validate_slot_path(&source)?;
     validate_slot_path(&output)?;
+    if source.file_name() != output.file_name() {
+        return Err(ConversionError::InvalidSave(format!(
+            "source and output save slot names must match: {} != {}",
+            source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("invalid"),
+            output
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("invalid")
+        )));
+    }
 
     let source_bytes = fs::read(source)?;
     let source_inspection = inspect_bytes(&source_bytes)?;
