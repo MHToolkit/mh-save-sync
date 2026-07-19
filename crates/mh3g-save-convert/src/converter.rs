@@ -79,6 +79,37 @@ mod tests {
     }
 
     #[test]
+    fn applies_each_declared_conversion_stage_to_the_payload() {
+        let endian_span = SWAP_SPANS[0];
+        let monster_offset = MONSTER_DISCOVERY_OFFSETS[0];
+        let arena_offset = ARENA_RECORD_OFFSETS[0];
+        assert_eq!((endian_span.start, endian_span.end), (28, 32));
+        assert_eq!(monster_offset, 33_212);
+        assert_eq!(arena_offset, 33_704);
+
+        let mut source = synthetic_3ds_source();
+        source[JP_3DS_HEADER.len() + endian_span.start..JP_3DS_HEADER.len() + endian_span.end]
+            .copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        source[JP_3DS_HEADER.len() + monster_offset..JP_3DS_HEADER.len() + monster_offset + 2]
+            .copy_from_slice(&[0x07, 0xA5]);
+        source[JP_3DS_HEADER.len() + arena_offset..JP_3DS_HEADER.len() + arena_offset + 4]
+            .copy_from_slice(&[0x55, 0xAA, 0xAA, 0x55]);
+
+        let output = convert_3ds_to_cemu(&source).unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[endian_span.start..endian_span.end],
+            &[0x44, 0x33, 0x22, 0x11]
+        );
+        assert_eq!(&payload[monster_offset..monster_offset + 2], &[0xE0, 0]);
+        assert_eq!(
+            &payload[arena_offset..arena_offset + 4],
+            &[0x54, 0xAA, 0xAB, 0x55]
+        );
+    }
+
+    #[test]
     fn rejects_non_japanese_3ds_sources_and_existing_cemu_saves() {
         let mut western_source = synthetic_3ds_source();
         western_source[0] = 0x2C;
