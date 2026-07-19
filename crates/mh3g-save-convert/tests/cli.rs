@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::Mutex,
 };
 
 use serde_json::Value;
@@ -10,6 +11,7 @@ use tempfile::TempDir;
 
 const THREE_DS_SIZE: usize = 0x8A00;
 const CEMU_SIZE: usize = 0x8A24;
+static PROCESS_GUARD: Mutex<()> = Mutex::new(());
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mh3g-save-convert"))
@@ -35,12 +37,7 @@ fn run_json(args: &[String]) -> Value {
 }
 
 fn keys(value: &Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect()
+    value.as_object().unwrap().keys().cloned().collect()
 }
 
 #[test]
@@ -52,8 +49,10 @@ fn inspect_reports_metadata_without_decoded_player_data() {
     assert_eq!(
         keys(&value),
         BTreeSet::from_iter(
-            ["profile", "size", "hashes", "output", "backup", "manifest", "status"]
-                .map(str::to_owned)
+            [
+                "profile", "size", "hashes", "output", "backup", "manifest", "status"
+            ]
+            .map(str::to_owned)
         )
     );
     assert_eq!(value["profile"], "JpThreeDs");
@@ -86,6 +85,7 @@ fn convert_defaults_to_dry_run_and_creates_no_files() {
 
 #[test]
 fn write_then_rollback_restores_previous_slot() {
+    let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let source = source_fixture(&temp);
     let target = temp.path().join("user2");
@@ -106,7 +106,11 @@ fn write_then_rollback_restores_previous_slot() {
     assert!(manifest.exists());
     assert!(backup.exists());
 
-    let rollback = run_json(&["rollback".into(), "--manifest".into(), manifest.display().to_string()]);
+    let rollback = run_json(&[
+        "rollback".into(),
+        "--manifest".into(),
+        manifest.display().to_string(),
+    ]);
     assert_eq!(rollback["status"], "rolled-back");
     assert_eq!(fs::read(&target).unwrap(), previous);
     assert!(!manifest.exists());
@@ -135,7 +139,10 @@ fn dry_run_and_write_are_mutually_exclusive() {
 
 #[test]
 fn invalid_paths_fail_with_one_concise_error_line() {
-    let output = binary().args(["inspect", "/does/not/exist"]).output().unwrap();
+    let output = binary()
+        .args(["inspect", "/does/not/exist"])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stderr.split(|byte| *byte == b'\n').count(), 2);
     assert!(output.stdout.is_empty());
@@ -143,6 +150,7 @@ fn invalid_paths_fail_with_one_concise_error_line() {
 
 #[test]
 fn write_refuses_when_a_supported_emulator_process_is_running() {
+    let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let source = source_fixture(&temp);
     let target = temp.path().join("user2");
