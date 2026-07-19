@@ -106,3 +106,52 @@ filesystem trust boundary.
 - Later runtime acceptance: install only after all involved emulators stop,
   verify a real Cemu load/readback, then verify rollback before making a runtime
   compatibility claim.
+
+### Japanese save differential proof (2026-07-19)
+
+The file-level differential check used `3usavetools` commit
+`d20fea5d98d5c465841c8e5626dae6709622354a` with Python `3.12.10`. The pinned
+`converter/save_indices.py` SHA-256 was
+`0753baafad37147cb4701b7315a9deb9055ff699f444d55fce537b4e1ae35deb`.
+The Rust converter was built with Cargo `1.95.0` and Rust `1.95.0` at commit
+`98c2610`.
+
+The source snapshot was `0x8A00` bytes with SHA-256
+`5da7b0a8566aa6a77288cc43de0ab3538f5aec30031c3794880a88990b20b70c`.
+The upstream reference produced SHA-256
+`87ff5751b6b78d7a8e8905048075614a017678d98bddc8331c2f86d3a2401f30`.
+Changing only reference byte index 39 from `0x2C` to the locally verified
+Japanese `0x2B` produced an `0x8A24`-byte reference with SHA-256
+`59aed8e517c1f18127d7c90c2944572e6058ce7686592a6af9564a12466bf6ad`.
+
+The reproducible command sequence, with save-bearing paths represented by
+shell variables, was:
+
+```bash
+rtk cp "$NEMESSIX_SOURCE" "$SOURCE"
+rtk proxy python3 /tmp/3usavetools-031/convert_to_wiiu.py "$SOURCE" "$REFERENCE_WESTERN"
+rtk cp "$REFERENCE_WESTERN" "$REFERENCE_JP"
+rtk proxy python3 -c 'import sys; from pathlib import Path; p=Path(sys.argv[1]); b=bytearray(p.read_bytes()); assert len(b)==0x8A24; assert b[39]==0x2C; b[39]=0x2B; p.write_bytes(b)' "$REFERENCE_JP"
+rtk cargo run -q -p mh3g-save-convert -- inspect "$SOURCE"
+rtk cargo run -q -p mh3g-save-convert -- convert "$SOURCE" --output "$STAGE/user2" --write
+rtk cmp "$STAGE/user2" "$REFERENCE_JP"
+rtk proxy shasum -a 256 "$SOURCE" "$STAGE/user2" "$REFERENCE_JP"
+rtk cargo run -q -p mh3g-save-convert -- inspect "$STAGE/user2"
+rtk cargo run -q -p mh3g-save-convert -- rollback --manifest "$STAGE/.user2.mh3g-install.json"
+```
+
+The production CLI reported profile `JpCemu`, size `0x8A24`, and output
+SHA-256 `59aed8e517c1f18127d7c90c2944572e6058ce7686592a6af9564a12466bf6ad`.
+`cmp` confirmed byte-for-byte equality with the patched Japanese reference.
+The version-1 manifest was derived as `.user2.mh3g-install.json`, recorded an
+initially absent target and no backup, and bound the expected source and output
+hashes. Rollback removed both the staged target and manifest, restoring the
+initially absent state. The original source hash remained unchanged.
+
+Money, playtime, item-box, guild-card, award, monster-log, and arena-record
+transformations have labels in the pinned reference and were differentially
+verified. The player-header structure, equipment box, and Moga points have no
+independently established field mapping in this validation; they have only
+whole-file differential parity and the converter's byte-preservation contract.
+All checkpoint categories remain semantically unverified until Cemu runtime
+acceptance. No player content or save bytes were recorded.
