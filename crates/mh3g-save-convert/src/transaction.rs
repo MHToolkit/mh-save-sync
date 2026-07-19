@@ -113,6 +113,41 @@ impl ManifestPublisher for JsonManifestPublisher {
     }
 }
 
+struct SlotInstallLock {
+    path: PathBuf,
+    _file: File,
+}
+
+impl SlotInstallLock {
+    fn acquire(target: &Path) -> Result<Self, ConversionError> {
+        let path = install_lock_path_for_normalized_target(target)?;
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "save slot installation is already locked: {}",
+                    path.display()
+                )));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if let Err(error) =
+            writeln!(file, "pid={}", std::process::id()).and_then(|_| file.sync_all())
+        {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(error.into());
+        }
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for SlotInstallLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -168,7 +203,9 @@ pub fn install_with_publisher(
     validator: &dyn InstallValidator,
     publisher: &dyn ManifestPublisher,
 ) -> Result<InstallManifest, ConversionError> {
-    let (target, manifest_path) = validate_install_paths(target.as_ref(), manifest_path.as_ref())?;
+    let (target, manifest_path) = normalize_bound_paths(target.as_ref(), manifest_path.as_ref())?;
+    let _slot_lock = SlotInstallLock::acquire(&target)?;
+    let (target, manifest_path) = validate_install_paths(&target, &manifest_path)?;
 
     if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
@@ -415,9 +452,32 @@ fn validate_transaction_paths(
     target: &Path,
     manifest_path: &Path,
 ) -> Result<(PathBuf, PathBuf), ConversionError> {
+    let (target, manifest_path) = normalize_bound_paths(target, manifest_path)?;
+    validate_slot_path(&target)?;
+    if target
+        .symlink_metadata()
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(ConversionError::InvalidSave(
+            "save slot path cannot be a symlink".to_owned(),
+        ));
+    }
+    Ok((target, manifest_path))
+}
+
+fn normalize_bound_paths(
+    target: &Path,
+    manifest_path: &Path,
+) -> Result<(PathBuf, PathBuf), ConversionError> {
     let target = normalize_path(target)?;
     let manifest_path = normalize_path(manifest_path)?;
-    validate_slot_path(&target)?;
+    if !is_save_slot_name(&target) {
+        return Err(ConversionError::InvalidSave(format!(
+            "save slot basename must be user1, user2, or user3: {}",
+            target.display()
+        )));
+    }
     if target == manifest_path {
         return Err(ConversionError::InvalidSave(
             "manifest path cannot be the save slot".to_owned(),
@@ -431,15 +491,6 @@ fn validate_transaction_paths(
     if manifest_path != manifest_path_for_normalized_target(&target)? {
         return Err(ConversionError::InvalidSave(
             "manifest path is not bound to the target save slot".to_owned(),
-        ));
-    }
-    if target
-        .symlink_metadata()
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        return Err(ConversionError::InvalidSave(
-            "save slot path cannot be a symlink".to_owned(),
         ));
     }
     Ok((target, manifest_path))
@@ -460,6 +511,16 @@ fn manifest_path_for_normalized_target(target: &Path) -> Result<PathBuf, Convers
             ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
         })?;
     Ok(parent_dir(target).join(format!(".{target_name}.mh3g-install.json")))
+}
+
+fn install_lock_path_for_normalized_target(target: &Path) -> Result<PathBuf, ConversionError> {
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
+        })?;
+    Ok(parent_dir(target).join(format!(".{target_name}.mh3g-install.lock")))
 }
 
 fn is_save_slot_name(path: &Path) -> bool {
@@ -566,6 +627,8 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        sync::{Arc, Barrier},
+        thread,
     };
 
     use crate::{
@@ -620,6 +683,19 @@ mod tests {
             Err(ConversionError::Io(std::io::Error::other(
                 "simulated manifest publish failure",
             )))
+        }
+    }
+
+    struct BlockingValidator {
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+    }
+
+    impl InstallValidator for BlockingValidator {
+        fn validate(&self, bytes: &[u8]) -> Result<(), ConversionError> {
+            self.entered.wait();
+            self.release.wait();
+            inspect_bytes(bytes).map(|_| ())
         }
     }
 
@@ -705,6 +781,101 @@ mod tests {
         );
         assert_eq!(fs::read(backup).unwrap(), old_save);
         assert_eq!(fs::read(target).unwrap(), converted());
+    }
+
+    #[test]
+    fn concurrent_installs_to_one_slot_are_serialized_without_silent_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let source_bytes = source();
+        let installed_bytes = converted();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let blocking_validator = Arc::new(BlockingValidator {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        });
+
+        let first_target = target.clone();
+        let first_manifest = manifest_path.clone();
+        let first_source = source_bytes.clone();
+        let first_installed = installed_bytes.clone();
+        let first = thread::spawn(move || {
+            install_with(
+                &first_source,
+                &first_installed,
+                first_target,
+                first_manifest,
+                &Stopped,
+                blocking_validator.as_ref(),
+            )
+        });
+        entered.wait();
+
+        let second_target = target.clone();
+        let second_manifest = manifest_path.clone();
+        let second_source = source_bytes.clone();
+        let second_installed = installed_bytes.clone();
+        let second = thread::spawn(move || {
+            install_with(
+                &second_source,
+                &second_installed,
+                second_target,
+                second_manifest,
+                &Stopped,
+                &AcceptCemu,
+            )
+        });
+        let second_result = second.join().unwrap();
+        release.wait();
+        let first_result = first.join().unwrap();
+
+        assert!(first_result.is_ok());
+        assert!(matches!(
+            second_result,
+            Err(ConversionError::UnsafeInstall(_))
+        ));
+        assert_eq!(fs::read(&target).unwrap(), installed_bytes);
+        let manifest: InstallManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest.target, fs::canonicalize(&target).unwrap());
+        assert_eq!(
+            manifest.installed_sha256,
+            crate::transaction::sha256_hex(&installed_bytes)
+        );
+        assert!(
+            !manifest_path
+                .parent()
+                .unwrap()
+                .join(".user2.mh3g-install.lock")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn preexisting_slot_lock_fails_closed_without_stealing_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let lock = manifest_path
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.lock");
+        fs::write(&lock, b"held by another installer").unwrap();
+
+        let error = install_with(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::UnsafeInstall(_)));
+        assert!(!target.exists());
+        assert!(!manifest_path.exists());
+        assert_eq!(fs::read(lock).unwrap(), b"held by another installer");
     }
 
     #[test]
