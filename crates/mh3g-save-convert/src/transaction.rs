@@ -107,6 +107,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+pub fn manifest_path_for_target(target: impl AsRef<Path>) -> Result<PathBuf, ConversionError> {
+    let target = normalize_path(target.as_ref())?;
+    validate_slot_path(&target)?;
+    manifest_path_for_normalized_target(&target)
+}
+
 pub fn install(
     source: &[u8],
     installed: &[u8],
@@ -412,6 +418,11 @@ fn validate_transaction_paths(
             "target and manifest must be in the same directory".to_owned(),
         ));
     }
+    if manifest_path != manifest_path_for_normalized_target(&target)? {
+        return Err(ConversionError::InvalidSave(
+            "manifest path is not bound to the target save slot".to_owned(),
+        ));
+    }
     if target
         .symlink_metadata()
         .map(|metadata| metadata.file_type().is_symlink())
@@ -429,6 +440,16 @@ fn normalize_path(path: &Path) -> Result<PathBuf, ConversionError> {
         ConversionError::InvalidSave(format!("path must name a file: {}", path.display()))
     })?;
     Ok(fs::canonicalize(parent_dir(path))?.join(basename))
+}
+
+fn manifest_path_for_normalized_target(target: &Path) -> Result<PathBuf, ConversionError> {
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
+        })?;
+    Ok(parent_dir(target).join(format!(".{target_name}.mh3g-install.json")))
 }
 
 fn is_save_slot_name(path: &Path) -> bool {
@@ -543,7 +564,7 @@ mod tests {
         profile::{JP_3DS_HEADER, THREE_DS_SIZE, inspect_bytes},
         transaction::{
             InstallManifest, InstallValidator, ManifestPublisher, ProcessProbe, install_with,
-            install_with_publisher, rollback, rollback_with,
+            install_with_publisher, manifest_path_for_target, rollback, rollback_with,
         },
     };
 
@@ -603,7 +624,9 @@ mod tests {
     }
 
     fn paths(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
-        (temp.path().join("user2"), temp.path().join("install.json"))
+        let target = temp.path().join("user2");
+        let manifest = manifest_path_for_target(&target).unwrap();
+        (target, manifest)
     }
 
     fn install(
@@ -827,7 +850,7 @@ mod tests {
         fs::create_dir(&real).unwrap();
         symlink(&real, &alias).unwrap();
         let target = alias.join("user2");
-        let manifest_path = real.join("install.json");
+        let manifest_path = manifest_path_for_target(&target).unwrap();
 
         let manifest = install(&target, &manifest_path, &AcceptCemu);
 
@@ -925,6 +948,32 @@ mod tests {
         assert_eq!(fs::read(target).unwrap(), installed);
         assert_eq!(fs::read(other_slot).unwrap(), old_save);
         assert!(real_backup.exists());
+        assert!(manifest_path.exists());
+    }
+
+    #[test]
+    fn rollback_rejects_a_manifest_target_rebound_to_another_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        install(&target, &manifest_path, &AcceptCemu);
+        let installed = fs::read(&target).unwrap();
+        let other_slot = temp.path().join("user3");
+        fs::write(&other_slot, &installed).unwrap();
+
+        let mut manifest: InstallManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.target = other_slot.clone();
+        manifest.installed_sha256 = crate::transaction::sha256_hex(&installed);
+        manifest.previous_sha256 = None;
+        manifest.backup = None;
+        manifest.target_previously_existed = false;
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let error = rollback_with(&manifest_path, &Stopped).unwrap_err();
+
+        assert!(matches!(error, ConversionError::InvalidSave(_)));
+        assert_eq!(fs::read(&other_slot).unwrap(), installed);
+        assert_eq!(fs::read(target).unwrap(), installed);
         assert!(manifest_path.exists());
     }
 
