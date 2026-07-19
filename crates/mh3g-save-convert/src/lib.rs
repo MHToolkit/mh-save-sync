@@ -1,3 +1,5 @@
+pub mod profile;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
     #[error("unsupported or invalid save: {0}")]
