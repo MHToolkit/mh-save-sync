@@ -1,0 +1,64 @@
+{
+  "wiiu": {
+    "artifact": "MH3G_Cafe.decompressed.elf",
+    "sha256": "156b2092324983eab4736380f9c66e4417c39668ed532282a4bd11c5b0877602",
+    "quest_id_table_virtual_address": "0x102074D4",
+    "quest_id_count": 1010,
+    "category_event_base_table_virtual_address": "0x102074A0"
+  },
+  "three_ds": {
+    "artifact": "MH3G3DS.exefsdir/code.bin",
+    "sha256": "3354687a7831b61dab19dd07619303de5c969523d4f35134aac38bcfb1759b77",
+    "quest_id_table_file_offset": "0x00B394D8",
+    "category_event_base_table_file_offset": "0x00B39B68"
+  },
+  "save_layout": {
+    "simple_events": {
+      "payload_offset": "0x62AE",
+      "word_count": 58,
+      "word_bits": 16,
+      "three_ds_endian": "little",
+      "wiiu_endian": "big"
+    },
+    "categorized_events": {
+      "payload_offset": "0x668C",
+      "byte_length": 2000,
+      "category_bases": [
+        0,
+        0,
+        140,
+        270,
+        400,
+        530,
+        680,
+        690,
+        800,
+        910,
+        1020,
+        1130,
+        1190,
+        1250,
+        1310,
+        1410,
+        1510,
+        1610,
+        1710,
+        1810
+      ],
+      "mapping": "byte-identical between 3DS and Wii U"
+    },
+    "quest_completion": {
+      "payload_offset": "0x6E5C",
+      "word_count": 16,
+      "word_bits": 32,
+      "three_ds_endian": "little",
+      "wiiu_endian": "big",
+      "quest_id_indices_equal": "0..505"
+    }
+  },
+  "quest_resources": {
+    "format": "QTDS",
+    "mapped_completion_entries": 424,
+    "entries_with_english_title_and_objective": 390
+  }
+}

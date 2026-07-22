@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ConversionError,
-    converter::convert_3ds_to_cemu,
-    profile::{SaveProfile, inspect_bytes, validate_slot_path},
+    converter::convert_source_to_cemu,
+    profile::{SaveProfile, inspect_bytes, validate_save_component_path},
 };
 
 pub const INSTALL_MANIFEST_VERSION: u32 = 1;
@@ -95,9 +95,12 @@ pub struct CemuSaveValidator;
 impl InstallValidator for CemuSaveValidator {
     fn validate(&self, bytes: &[u8]) -> Result<(), ConversionError> {
         let inspection = inspect_bytes(bytes)?;
-        if inspection.profile != SaveProfile::JpCemu {
+        if !matches!(
+            inspection.profile,
+            SaveProfile::JpCemu | SaveProfile::JpCemuSystem
+        ) {
             return Err(ConversionError::InvalidSave(
-                "installed bytes are not a Japanese MH3G Cemu save".to_owned(),
+                "installed bytes are not a Japanese MH3G Cemu save component".to_owned(),
             ));
         }
         Ok(())
@@ -154,7 +157,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 pub fn manifest_path_for_target(target: impl AsRef<Path>) -> Result<PathBuf, ConversionError> {
     let target = normalize_path(target.as_ref())?;
-    validate_slot_path(&target)?;
+    validate_save_component_path(&target)?;
     manifest_path_for_normalized_target(&target)
 }
 
@@ -213,7 +216,11 @@ pub fn install_with_publisher(
         )));
     }
 
-    let expected = convert_3ds_to_cemu(source)?;
+    let filename = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
+    let expected = convert_source_to_cemu(source, filename)?;
     if expected != installed {
         return Err(ConversionError::InvalidSave(
             "installed bytes do not match the converted source save".to_owned(),
@@ -351,7 +358,7 @@ pub fn rollback_with(
             if backup != &expected_backup
                 || backup == &target
                 || backup == &manifest_path
-                || is_save_slot_name(backup)
+                || is_managed_save_component_name(backup)
             {
                 return Err(ConversionError::InvalidSave(
                     "rollback backup path is not the controlled backup path".to_owned(),
@@ -433,10 +440,9 @@ fn validate_install_paths(
     manifest_path: &Path,
 ) -> Result<(PathBuf, PathBuf), ConversionError> {
     let (target, manifest_path) = validate_transaction_paths(target, manifest_path)?;
-    let basename = manifest_path.file_name().and_then(|name| name.to_str());
-    if matches!(basename, Some("user1" | "user2" | "user3")) {
+    if is_managed_save_component_name(&manifest_path) {
         return Err(ConversionError::InvalidSave(
-            "manifest path cannot use a save slot basename".to_owned(),
+            "manifest path cannot use a save component basename".to_owned(),
         ));
     }
     match fs::symlink_metadata(&manifest_path) {
@@ -453,7 +459,7 @@ fn validate_transaction_paths(
     manifest_path: &Path,
 ) -> Result<(PathBuf, PathBuf), ConversionError> {
     let (target, manifest_path) = normalize_bound_paths(target, manifest_path)?;
-    validate_slot_path(&target)?;
+    validate_save_component_path(&target)?;
     if target
         .symlink_metadata()
         .map(|metadata| metadata.file_type().is_symlink())
@@ -472,9 +478,9 @@ fn normalize_bound_paths(
 ) -> Result<(PathBuf, PathBuf), ConversionError> {
     let target = normalize_path(target)?;
     let manifest_path = normalize_path(manifest_path)?;
-    if !is_save_slot_name(&target) {
+    if !is_managed_save_component_name(&target) {
         return Err(ConversionError::InvalidSave(format!(
-            "save slot basename must be user1, user2, or user3: {}",
+            "save component basename must be user1, user2, user3, or system: {}",
             target.display()
         )));
     }
@@ -523,10 +529,10 @@ fn install_lock_path_for_normalized_target(target: &Path) -> Result<PathBuf, Con
     Ok(parent_dir(target).join(format!(".{target_name}.mh3g-install.lock")))
 }
 
-fn is_save_slot_name(path: &Path) -> bool {
+fn is_managed_save_component_name(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some("user1" | "user2" | "user3")
+        Some("user1" | "user2" | "user3" | "system")
     )
 }
 
@@ -633,8 +639,8 @@ mod tests {
 
     use crate::{
         ConversionError,
-        converter::convert_3ds_to_cemu,
-        profile::{JP_3DS_HEADER, THREE_DS_SIZE, inspect_bytes},
+        converter::{convert_3ds_system_to_cemu, convert_3ds_to_cemu},
+        profile::{JP_3DS_HEADER, THREE_DS_SIZE, THREE_DS_SYSTEM_SIZE, inspect_bytes},
         transaction::{
             InstallManifest, InstallValidator, ManifestPublisher, ProcessProbe, install_with,
             install_with_publisher, manifest_path_for_target, rollback_with,
@@ -709,6 +715,12 @@ mod tests {
         convert_3ds_to_cemu(&source()).unwrap()
     }
 
+    fn system_source() -> Vec<u8> {
+        let mut source = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        source
+    }
+
     fn paths(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
         let target = temp.path().join("user2");
         let manifest = manifest_path_for_target(&target).unwrap();
@@ -754,6 +766,34 @@ mod tests {
         let from_disk: crate::transaction::InstallManifest =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         assert_eq!(from_disk.target, fs::canonicalize(target).unwrap());
+    }
+
+    #[test]
+    fn installs_shared_system_data_with_the_same_backup_and_manifest_guards() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("system");
+        let manifest_path = manifest_path_for_target(&target).unwrap();
+        let source = system_source();
+        let converted = convert_3ds_system_to_cemu(&source).unwrap();
+        let previous = b"previous shared system data";
+        fs::write(&target, previous).unwrap();
+
+        let manifest = install_with(
+            &source,
+            &converted,
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), converted);
+        assert_eq!(fs::read(manifest.backup.unwrap()).unwrap(), previous);
+        assert_eq!(
+            manifest.installed_sha256,
+            crate::transaction::sha256_hex(&converted)
+        );
     }
 
     #[test]

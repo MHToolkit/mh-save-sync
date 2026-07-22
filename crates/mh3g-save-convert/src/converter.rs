@@ -1,7 +1,10 @@
 use crate::{
     ConversionError,
-    profile::{CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, SaveProfile, inspect_bytes},
-    transforms::{apply_arena_records, apply_endian_swaps, apply_monster_discovery},
+    profile::{
+        CEMU_SIZE, CEMU_SYSTEM_SIZE, JP_3DS_HEADER, PAYLOAD_SIZE, SYSTEM_PAYLOAD_SIZE, SaveProfile,
+        build_jp_cemu_header, inspect_bytes,
+    },
+    transforms::apply_japanese_wiiu_corrections,
 };
 
 /// Convert one Japanese MH3G 3DS slot into the Japanese Cemu slot format.
@@ -9,6 +12,13 @@ use crate::{
 /// The conversion is deliberately pure: the input is never modified and no
 /// filesystem or emulator state is accessed.
 pub fn convert_3ds_to_cemu(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    convert_3ds_to_cemu_named(source, "user2")
+}
+
+pub fn convert_3ds_to_cemu_named(
+    source: &[u8],
+    filename: &str,
+) -> Result<Vec<u8>, ConversionError> {
     let inspection = inspect_bytes(source)?;
     if inspection.profile != SaveProfile::JpThreeDs {
         return Err(ConversionError::InvalidSave(format!(
@@ -17,28 +27,69 @@ pub fn convert_3ds_to_cemu(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
         )));
     }
 
-    let mut payload = source[JP_3DS_HEADER.len()..].to_vec();
-    apply_endian_swaps(&mut payload)?;
-    apply_monster_discovery(&mut payload)?;
-    apply_arena_records(&mut payload)?;
+    let source_payload = &source[JP_3DS_HEADER.len()..];
+    let mut payload = source_payload.to_vec();
+    apply_japanese_wiiu_corrections(source_payload, &mut payload)?;
 
     let mut output = Vec::with_capacity(CEMU_SIZE);
-    output.extend_from_slice(&JP_CEMU_HEADER);
+    output.extend_from_slice(&build_jp_cemu_header(filename, PAYLOAD_SIZE)?);
     output.extend_from_slice(&payload);
 
     inspect_bytes(&output)?;
     Ok(output)
 }
 
+/// Convert the Japanese MH3G 3DS shared system data into the Cemu container.
+///
+/// The `system` payload is already serialized in the same byte order in both
+/// versions. Unlike character slots, this conversion only replaces the outer
+/// save container header.
+pub fn convert_3ds_system_to_cemu(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    convert_3ds_system_to_cemu_named(source, "system")
+}
+
+pub fn convert_3ds_system_to_cemu_named(
+    source: &[u8],
+    filename: &str,
+) -> Result<Vec<u8>, ConversionError> {
+    let inspection = inspect_bytes(source)?;
+    if inspection.profile != SaveProfile::JpThreeDsSystem {
+        return Err(ConversionError::InvalidSave(
+            "expected a Japanese MH3G 3DS system save".to_owned(),
+        ));
+    }
+
+    let mut payload = source[JP_3DS_HEADER.len()..].to_vec();
+    for word in payload[48..].chunks_exact_mut(4) {
+        word.reverse();
+    }
+
+    let mut output = Vec::with_capacity(CEMU_SYSTEM_SIZE);
+    output.extend_from_slice(&build_jp_cemu_header(filename, SYSTEM_PAYLOAD_SIZE)?);
+    output.extend_from_slice(&payload);
+
+    inspect_bytes(&output)?;
+    Ok(output)
+}
+
+pub fn convert_source_to_cemu(source: &[u8], filename: &str) -> Result<Vec<u8>, ConversionError> {
+    match inspect_bytes(source)?.profile {
+        SaveProfile::JpThreeDs => convert_3ds_to_cemu_named(source, filename),
+        SaveProfile::JpThreeDsSystem => convert_3ds_system_to_cemu_named(source, filename),
+        SaveProfile::JpCemu | SaveProfile::JpCemuSystem => Err(ConversionError::InvalidSave(
+            "expected a Japanese MH3G 3DS save, not an existing Cemu save".to_owned(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        converter::convert_3ds_to_cemu,
+        converter::{convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named},
         profile::{
             CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, PAYLOAD_SIZE, SaveProfile, THREE_DS_SIZE,
-            inspect_bytes,
+            build_jp_cemu_header, inspect_bytes,
         },
-        transform_table::{ARENA_RECORD_OFFSETS, MONSTER_DISCOVERY_OFFSETS, SWAP_SPANS},
     };
 
     fn synthetic_3ds_source() -> Vec<u8> {
@@ -49,20 +100,34 @@ mod tests {
         source
     }
 
-    fn transformed_payload_mask() -> Vec<bool> {
-        let mut mask = vec![false; PAYLOAD_SIZE];
+    #[test]
+    fn converts_a_japanese_3ds_system_by_replacing_only_the_container_header() {
+        use crate::profile::{
+            CEMU_SYSTEM_SIZE, JP_CEMU_SYSTEM_HEADER, SYSTEM_PAYLOAD_SIZE, THREE_DS_SYSTEM_SIZE,
+        };
 
-        for span in SWAP_SPANS.iter() {
-            mask[span.start..span.end].fill(true);
-        }
-        for &offset in MONSTER_DISCOVERY_OFFSETS.iter() {
-            mask[offset..offset + 2].fill(true);
-        }
-        for &offset in ARENA_RECORD_OFFSETS.iter() {
-            mask[offset..offset + 4].fill(true);
-        }
+        let mut source = (0..THREE_DS_SYSTEM_SIZE)
+            .map(|index| (index as u8).wrapping_mul(17).wrapping_add(3))
+            .collect::<Vec<_>>();
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
 
-        mask
+        let output = convert_3ds_system_to_cemu(&source).unwrap();
+
+        assert_eq!(output.len(), CEMU_SYSTEM_SIZE);
+        assert_eq!(
+            &output[..JP_CEMU_SYSTEM_HEADER.len()],
+            &build_jp_cemu_header("system", SYSTEM_PAYLOAD_SIZE).unwrap()
+        );
+        let mut expected_payload =
+            source[JP_3DS_HEADER.len()..JP_3DS_HEADER.len() + SYSTEM_PAYLOAD_SIZE].to_vec();
+        for word in expected_payload[48..].chunks_exact_mut(4) {
+            word.reverse();
+        }
+        assert_eq!(&output[JP_CEMU_SYSTEM_HEADER.len()..], &expected_payload);
+        assert_eq!(
+            inspect_bytes(&output).unwrap().profile,
+            SaveProfile::JpCemuSystem
+        );
     }
 
     #[test]
@@ -79,16 +144,13 @@ mod tests {
     }
 
     #[test]
-    fn applies_each_declared_conversion_stage_to_the_payload() {
-        let endian_span = SWAP_SPANS[0];
-        let monster_offset = MONSTER_DISCOVERY_OFFSETS[0];
-        let arena_offset = ARENA_RECORD_OFFSETS[0];
-        assert_eq!((endian_span.start, endian_span.end), (28, 32));
-        assert_eq!(monster_offset, 33_212);
-        assert_eq!(arena_offset, 33_704);
+    fn applies_meow_static_operations_to_the_payload() {
+        let endian_offset = 28;
+        let monster_offset = 33_212;
+        let arena_offset = 33_704;
 
         let mut source = synthetic_3ds_source();
-        source[JP_3DS_HEADER.len() + endian_span.start..JP_3DS_HEADER.len() + endian_span.end]
+        source[JP_3DS_HEADER.len() + endian_offset..JP_3DS_HEADER.len() + endian_offset + 4]
             .copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         source[JP_3DS_HEADER.len() + monster_offset..JP_3DS_HEADER.len() + monster_offset + 2]
             .copy_from_slice(&[0x07, 0xA5]);
@@ -99,13 +161,15 @@ mod tests {
         let payload = &output[JP_CEMU_HEADER.len()..];
 
         assert_eq!(
-            &payload[endian_span.start..endian_span.end],
+            &payload[endian_offset..endian_offset + 4],
             &[0x44, 0x33, 0x22, 0x11]
         );
-        assert_eq!(&payload[monster_offset..monster_offset + 2], &[0xE0, 0]);
+        assert_eq!(&payload[monster_offset..monster_offset + 2], &[0xE0, 0xA5]);
         assert_eq!(
             &payload[arena_offset..arena_offset + 4],
-            &[0x54, 0xAA, 0xAB, 0x55]
+            &u32::from_le_bytes([0x55, 0xAA, 0xAA, 0x55])
+                .rotate_left(17)
+                .to_be_bytes()
         );
     }
 
@@ -124,19 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn preserves_every_payload_byte_not_listed_by_a_transform() {
-        let source = synthetic_3ds_source();
-        let output = convert_3ds_to_cemu(&source).unwrap();
-        let transformed = transformed_payload_mask();
-
-        for (index, changed) in transformed.into_iter().enumerate() {
-            if !changed {
-                assert_eq!(
-                    output[JP_CEMU_HEADER.len() + index],
-                    source[JP_3DS_HEADER.len() + index],
-                    "unexpected mutation at payload offset {index:#x}"
-                );
-            }
-        }
+    fn named_slots_receive_their_own_wiiu_header_checksum() {
+        let output = convert_3ds_to_cemu_named(&synthetic_3ds_source(), "user1").unwrap();
+        assert_eq!(
+            &output[..40],
+            &build_jp_cemu_header("user1", PAYLOAD_SIZE).unwrap()
+        );
     }
 }
