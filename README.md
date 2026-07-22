@@ -39,6 +39,12 @@ TARGET="$CEMU_DIR/user2"
 # Read only: confirm this is the supported Japanese 3DS profile.
 rtk cargo run -p mh3g-save-convert -- inspect "$SOURCE"
 
+# Read only: decode every task and compare logical completion bits by quest ID.
+rtk cargo run -p mh3g-save-convert -- inspect-progress "$SOURCE" --target "$TARGET"
+
+# Read only: compare simple story flags and categorized event coordinates.
+rtk cargo run -p mh3g-save-convert -- inspect-events "$SOURCE" --target "$TARGET"
+
 # Read only: produce and validate the result without changing Cemu's slot.
 rtk cargo run -p mh3g-save-convert -- convert "$SOURCE" --output "$TARGET" --dry-run
 
@@ -58,6 +64,12 @@ compatibility claim; Cemu load/readback and rollback evidence are required
 before this repository labels the path Runtime Verified. See
 `docs/adr/0013-mh3g-cross-format-conversion.md` for the conversion contract and
 provenance.
+
+The progress decoder maps the 3DS and Wii U task tables by quest ID, including
+the 16 completion words at payload offset `0x6E5C`. It also converts the 58
+simple-event words at `0x62AE` and preserves the byte-addressed categorized
+event table at `0x668C`. Static table provenance is pinned in
+`crates/mh3g-save-convert/data/catalog-provenance.json`.
 
 
 ## Office Mac ↔ home Android user flow

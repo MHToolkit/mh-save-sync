@@ -8,6 +8,7 @@ target/
 local/
 artifacts/
 .worktrees/
+MEOW_extracted/
 *.db
 *.db-shm
 *.db-wal

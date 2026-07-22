@@ -1,5 +1,9 @@
 pub mod converter;
+pub mod events;
+#[allow(clippy::large_const_arrays)]
+pub mod meow_transform_table;
 pub mod profile;
+pub mod progress;
 pub mod transaction;
 pub mod transform_table;
 pub mod transforms;
