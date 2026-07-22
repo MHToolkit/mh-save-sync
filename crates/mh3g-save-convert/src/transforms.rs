@@ -35,6 +35,12 @@ const FARM_LEVELS_START: usize = 0x6128;
 const FARM_HARVEST_START: usize = 0x612C;
 const FARM_HARVEST_COUNT: usize = 3;
 const FARM_FELYNE_SLOTS_START: usize = 0x6144;
+// These words occur immediately after the quest-completion bitmap, in the
+// hunting-fleet state block. They each contain two adjacent u16 fields, rather
+// than a single u32. Treating the whole word as a u32 reverses the two field
+// positions on Wii U.
+const HUNT_FLEET_STATUS_U16_PAIR_OFFSETS: [usize; 6] =
+    [0x6F44, 0x6F48, 0x6F4C, 0x708C, 0x7090, 0x7094];
 
 fn validate_payload_size(payload: &[u8]) -> Result<(), ConversionError> {
     if payload.len() != PAYLOAD_SIZE {
@@ -297,6 +303,15 @@ fn apply_confirmed_numeric_and_record_corrections(
     }
     target[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]
         .copy_from_slice(&source[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]);
+
+    // MEOW swaps these words as u32 values. The source and target save bodies
+    // instead retain two u16 fields in the same order, so swap the byte order
+    // within each field without moving the fields themselves.
+    for offset in HUNT_FLEET_STATUS_U16_PAIR_OFFSETS {
+        for relative in [0, 2] {
+            copy_reversed(source, target, offset + relative, 2)?;
+        }
+    }
 
     Ok(())
 }
@@ -647,6 +662,33 @@ mod tests {
         assert_eq!(
             &target[0x612c..0x6134],
             &[0x00, 0xaf, 0x01, 0x65, 0x0a, 0x07, 0xe5, 0x27]
+        );
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_preserve_hunting_fleet_u16_field_order() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[0x6f44..0x6f50].copy_from_slice(&[
+            0x5e, 0xa6, 0x00, 0x00, 0xf4, 0x01, 0x7e, 0x00, 0x60, 0x00, 0x6b, 0x00,
+        ]);
+        source[0x708c..0x7098].copy_from_slice(&[
+            0x95, 0x8e, 0x00, 0x00, 0xdc, 0x01, 0x0a, 0x00, 0x5d, 0x00, 0x00, 0x00,
+        ]);
+        let mut target = source.clone();
+
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(
+            &target[0x6f44..0x6f50],
+            &[
+                0xa6, 0x5e, 0x00, 0x00, 0x01, 0xf4, 0x00, 0x7e, 0x00, 0x60, 0x00, 0x6b
+            ]
+        );
+        assert_eq!(
+            &target[0x708c..0x7098],
+            &[
+                0x8e, 0x95, 0x00, 0x00, 0x01, 0xdc, 0x00, 0x0a, 0x00, 0x5d, 0x00, 0x00
+            ]
         );
     }
 
