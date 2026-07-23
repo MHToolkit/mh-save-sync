@@ -35,6 +35,7 @@ const FARM_LEVELS_START: usize = 0x6128;
 const FARM_HARVEST_START: usize = 0x612C;
 const FARM_HARVEST_COUNT: usize = 3;
 const FARM_FELYNE_SLOTS_START: usize = 0x6144;
+const HUNTING_FLEET_SHIP_COUNT_OFFSET: usize = 0x5BC6;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
 
 fn validate_payload_size(payload: &[u8]) -> Result<(), ConversionError> {
@@ -298,6 +299,12 @@ fn apply_confirmed_numeric_and_record_corrections(
     }
     target[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]
         .copy_from_slice(&source[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]);
+
+    // MH3G HD reads this as a byte count when enumerating the hunting fleet.
+    // The generic MEOW swap2 table turns source [0x03, 0x00] into [0x00, 0x03],
+    // making the Wii U title enumerate zero ships. Preserve only the confirmed
+    // count byte; the adjacent byte has not been assigned a field meaning.
+    target[HUNTING_FLEET_SHIP_COUNT_OFFSET] = source[HUNTING_FLEET_SHIP_COUNT_OFFSET];
 
     // A 3DS before/after capture records this dispatched-ship field as the
     // ordered bytes [0x02, 0x01], rather than one scalar u16. Preserve that
@@ -658,6 +665,20 @@ mod tests {
             &target[0x612c..0x6134],
             &[0x00, 0xaf, 0x01, 0x65, 0x0a, 0x07, 0xe5, 0x27]
         );
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_preserve_hunting_fleet_ship_count_byte() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        // Three ships are unlocked in the 3DS save. MEOW's generic swap2
+        // would otherwise move this 0x03 into the adjacent byte.
+        source[0x5bc6..0x5bc8].copy_from_slice(&[0x03, 0x00]);
+
+        let mut target = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(target[0x5bc6], 0x03);
+        assert_eq!(target[0x5bc7], 0x03);
     }
 
     #[test]
