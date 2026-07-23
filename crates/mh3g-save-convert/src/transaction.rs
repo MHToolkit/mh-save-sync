@@ -290,33 +290,62 @@ pub fn install_with_publisher(
         Ok(manifest)
     })();
 
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-        if manifest_publish_attempted {
-            restore_existing_manifest(&manifest_path, existing_manifest.as_ref())?;
-        }
-        if target_installed {
-            let restore = if let Some(previous) = previous.as_deref() {
-                atomic_replace(&target, previous)
-            } else {
-                remove_if_regular_file(&target)
+    match result {
+        Ok(manifest) => Ok(manifest),
+        Err(install_error) => {
+            let mut cleanup_errors = Vec::new();
+            let mut record_cleanup = |step: &str, result: Result<(), ConversionError>| {
+                if let Err(error) = result {
+                    cleanup_errors.push(format!("{step}: {error}"));
+                }
             };
-            restore?;
-        }
-        if backup_created {
-            let _ = fs::remove_file(backup.as_ref().expect("backup was created"));
-        }
-        if history_created {
-            let history_path = &existing_manifest
-                .as_ref()
-                .expect("history requires an existing manifest")
-                .history_path;
-            remove_if_regular_file(history_path)?;
-            sync_directory(parent_dir(history_path))?;
+
+            record_cleanup("remove staged save", remove_if_regular_file(&temporary));
+            if manifest_publish_attempted {
+                record_cleanup(
+                    "restore prior manifest",
+                    restore_existing_manifest(&manifest_path, existing_manifest.as_ref()),
+                );
+            }
+            if target_installed {
+                let restore = if let Some(previous) = previous.as_deref() {
+                    atomic_replace(&target, previous)
+                } else {
+                    remove_if_regular_file(&target)
+                };
+                record_cleanup("restore prior save", restore);
+            }
+            if backup_created {
+                record_cleanup(
+                    "remove new backup",
+                    remove_if_regular_file(backup.as_ref().expect("backup was created")),
+                );
+            }
+            if history_created {
+                let history_path = &existing_manifest
+                    .as_ref()
+                    .expect("history requires an existing manifest")
+                    .history_path;
+                record_cleanup(
+                    "remove new manifest history",
+                    remove_if_regular_file(history_path),
+                );
+                record_cleanup(
+                    "sync manifest history directory",
+                    sync_directory(parent_dir(history_path)),
+                );
+            }
+
+            if cleanup_errors.is_empty() {
+                Err(install_error)
+            } else {
+                Err(ConversionError::UnsafeInstall(format!(
+                    "installation failed: {install_error}; cleanup also failed: {}",
+                    cleanup_errors.join("; ")
+                )))
+            }
         }
     }
-
-    result
 }
 
 pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> {
@@ -489,7 +518,7 @@ fn existing_manifest_for_reinstall(
     })?;
     validate_existing_manifest(target, manifest_path, &manifest)?;
 
-    let history_path = install_history_path_for(target, &manifest.installed_sha256)?;
+    let history_path = install_history_path_for(target, &bytes)?;
     match fs::symlink_metadata(&history_path) {
         Ok(history_metadata) if history_metadata.file_type().is_file() => {
             if fs::read(&history_path)? != bytes {
@@ -713,9 +742,8 @@ fn backup_path_for(target: &Path, previous_sha256: &str) -> Result<PathBuf, Conv
 
 fn install_history_path_for(
     target: &Path,
-    installed_sha256: &str,
+    manifest_bytes: &[u8],
 ) -> Result<PathBuf, ConversionError> {
-    validate_manifest_hash(installed_sha256, "installed")?;
     let target_name = target
         .file_name()
         .and_then(|name| name.to_str())
@@ -723,7 +751,8 @@ fn install_history_path_for(
             ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
         })?;
     Ok(parent_dir(target).join(format!(
-        ".{target_name}.mh3g-install-history-{installed_sha256}.json"
+        ".{target_name}.mh3g-install-history-{}.json",
+        sha256_hex(manifest_bytes)
     )))
 }
 
@@ -1200,11 +1229,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (target, manifest_path) = paths(&temp);
         fs::write(&target, b"original target before first install").unwrap();
-        let first = install(&target, &manifest_path, &AcceptCemu);
+        let _first = install(&target, &manifest_path, &AcceptCemu);
         let first_manifest = fs::read(&manifest_path).unwrap();
         let history = target.parent().unwrap().join(format!(
             ".user2.mh3g-install-history-{}.json",
-            first.installed_sha256
+            crate::transaction::sha256_hex(&first_manifest)
         ));
 
         let cemu_saved_target = b"target after Cemu persisted a save".to_vec();
@@ -1237,11 +1266,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (target, manifest_path) = paths(&temp);
         fs::write(&target, b"original target before first install").unwrap();
-        let first = install(&target, &manifest_path, &AcceptCemu);
+        let _first = install(&target, &manifest_path, &AcceptCemu);
         let first_manifest = fs::read(&manifest_path).unwrap();
         let history = target.parent().unwrap().join(format!(
             ".user2.mh3g-install-history-{}.json",
-            first.installed_sha256
+            crate::transaction::sha256_hex(&first_manifest)
         ));
 
         let cemu_saved_target = b"target after Cemu persisted a save".to_vec();
@@ -1267,6 +1296,33 @@ mod tests {
             crate::transaction::sha256_hex(&cemu_saved_target)
         ));
         assert!(!attempted_backup.exists());
+    }
+
+    #[test]
+    fn archives_repeated_same_output_installs_without_history_collisions() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        fs::write(&target, b"original target before first install").unwrap();
+        let first = install(&target, &manifest_path, &AcceptCemu);
+        let first_manifest = fs::read(&manifest_path).unwrap();
+
+        fs::write(&target, b"first Cemu save after conversion").unwrap();
+        let second = install(&target, &manifest_path, &AcceptCemu);
+        let second_manifest = fs::read(&manifest_path).unwrap();
+
+        fs::write(&target, b"second Cemu save after conversion").unwrap();
+        let third = install(&target, &manifest_path, &AcceptCemu);
+
+        assert_eq!(first.installed_sha256, second.installed_sha256);
+        assert_eq!(second.installed_sha256, third.installed_sha256);
+        assert_ne!(first_manifest, second_manifest);
+        for manifest in [&first_manifest, &second_manifest] {
+            let history = target.parent().unwrap().join(format!(
+                ".user2.mh3g-install-history-{}.json",
+                crate::transaction::sha256_hex(manifest)
+            ));
+            assert_eq!(fs::read(history).unwrap(), *manifest);
+        }
     }
 
     #[cfg(unix)]
