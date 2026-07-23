@@ -35,6 +35,7 @@ const FARM_LEVELS_START: usize = 0x6128;
 const FARM_HARVEST_START: usize = 0x612C;
 const FARM_HARVEST_COUNT: usize = 3;
 const FARM_FELYNE_SLOTS_START: usize = 0x6144;
+const HUNTING_FLEET_RED_SHIP_START: usize = 0x5D18;
 
 fn validate_payload_size(payload: &[u8]) -> Result<(), ConversionError> {
     if payload.len() != PAYLOAD_SIZE {
@@ -297,6 +298,13 @@ fn apply_confirmed_numeric_and_record_corrections(
     }
     target[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]
         .copy_from_slice(&source[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]);
+
+    // A 3DS before/after capture of a dispatched red ship shows that its
+    // leading two bytes are an ordered status field, not a numeric u16. The
+    // generic MEOW swap converts [0x02, 0x01] to [0x01, 0x02], which leaves
+    // the red ship hidden in the Wii U fleet UI.
+    target[HUNTING_FLEET_RED_SHIP_START..HUNTING_FLEET_RED_SHIP_START + 2]
+        .copy_from_slice(&source[HUNTING_FLEET_RED_SHIP_START..HUNTING_FLEET_RED_SHIP_START + 2]);
 
     Ok(())
 }
@@ -648,6 +656,19 @@ mod tests {
             &target[0x612c..0x6134],
             &[0x00, 0xaf, 0x01, 0x65, 0x0a, 0x07, 0xe5, 0x27]
         );
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_preserve_red_hunting_ship_status_field_order() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        // 3DS capture after dispatching the red hunting ship: the leading
+        // status field is [0x02, 0x01], not a scalar u16 to byte-swap.
+        source[0x5d18..0x5d1a].copy_from_slice(&[0x02, 0x01]);
+
+        let mut target = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(&target[0x5d18..0x5d1a], &[0x02, 0x01]);
     }
 
     #[test]
