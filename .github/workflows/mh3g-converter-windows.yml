@@ -27,6 +27,10 @@ jobs:
     name: package Windows x64 executable
     runs-on: windows-2022
     timeout-minutes: 20
+    # Produce a self-contained Rust CRT binary so the tester does not need a
+    # separately installed Visual C++ Redistributable.
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -39,6 +43,8 @@ jobs:
         run: cargo test --locked -p mh3g-save-convert
       - name: Build release executable
         run: cargo build --locked --release -p mh3g-save-convert --bin mh3g-save-convert
+      - name: Run release executable smoke check
+        run: .\target\release\mh3g-save-convert.exe --help
       - name: Package and self-verify archive
         shell: pwsh
         run: |
