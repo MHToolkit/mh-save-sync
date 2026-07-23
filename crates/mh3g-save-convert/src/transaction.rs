@@ -2,10 +2,12 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,6 +19,7 @@ use crate::{
 };
 
 pub const INSTALL_MANIFEST_VERSION: u32 = 1;
+#[cfg(any(target_os = "macos", test))]
 const GUARDED_PROCESS_NAMES: [&str; 8] = [
     "Nemessix",
     "nemessix",
