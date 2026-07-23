@@ -292,11 +292,14 @@ fn apply_confirmed_numeric_and_record_corrections(
         .copy_from_slice(&source[FARM_LEVELS_START..FARM_LEVELS_START + 4]);
     for record in 0..FARM_HARVEST_COUNT {
         let offset = FARM_HARVEST_START + record * 8;
-        // Crop tool, fertilizer, and the two trailing counters are separate
-        // u16 fields. They retain their field order across platforms.
-        for relative in [0, 2, 4, 6] {
+        // The Wii U title's actual user2 serializer walks this record at
+        // file offset 0x6130 + 8*i (payload 0x612c + 8*i) and swaps only
+        // +0, +2, and +6. The +4/+5 pair is two packed byte counters, so
+        // reversing it makes the game decrement/display the wrong counter.
+        for relative in [0, 2, 6] {
             copy_reversed(source, target, offset + relative, 2)?;
         }
+        target[offset + 4..offset + 6].copy_from_slice(&source[offset + 4..offset + 6]);
     }
     target[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]
         .copy_from_slice(&source[FARM_FELYNE_SLOTS_START..FARM_FELYNE_SLOTS_START + 4]);
@@ -665,7 +668,7 @@ mod tests {
 
         assert_eq!(
             &target[0x612c..0x6134],
-            &[0x00, 0xaf, 0x01, 0x65, 0x0a, 0x07, 0xe5, 0x27]
+            &[0x00, 0xaf, 0x01, 0x65, 0x07, 0x0a, 0xe5, 0x27]
         );
     }
 
