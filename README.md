@@ -73,11 +73,12 @@ event table at `0x668C`. Static table provenance is pinned in
 
 ### Windows 11 x64 test package
 
-The `mh3g-converter-windows` GitHub Actions workflow builds the native
-`x86_64-pc-windows-msvc` executable, runs the converter test suite on Windows,
-then uploads `mh3g-save-convert-windows-x64.zip` and its SHA-256 sidecar as a
-workflow artifact. Download the artifact from the pull request or the merged
-`main` workflow run, extract the inner ZIP, and use PowerShell:
+The `mh3g-converter-windows` GitHub Actions workflow builds a native,
+`x86_64-pc-windows-msvc` executable with Rust's CRT linked statically, runs the
+converter test suite and release-binary help smoke check on Windows, then uploads
+`mh3g-save-convert-windows-x64.zip` and its SHA-256 sidecar as a workflow
+artifact. Download the artifact from the pull request or the merged `main`
+workflow run, extract the inner ZIP, and use PowerShell:
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\mh3g-save-convert-windows-x64.zip
