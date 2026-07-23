@@ -39,6 +39,12 @@ pub struct InstallManifest {
     pub target_previously_existed: bool,
 }
 
+#[derive(Debug)]
+struct ExistingInstallManifest {
+    bytes: Vec<u8>,
+    history_path: PathBuf,
+}
+
 pub trait ProcessProbe {
     fn matching_process(&self) -> Result<Option<String>, ConversionError>;
 }
@@ -209,6 +215,7 @@ pub fn install_with_publisher(
     let (target, manifest_path) = normalize_bound_paths(target.as_ref(), manifest_path.as_ref())?;
     let _slot_lock = SlotInstallLock::acquire(&target)?;
     let (target, manifest_path) = validate_install_paths(&target, &manifest_path)?;
+    let existing_manifest = existing_manifest_for_reinstall(&target, &manifest_path)?;
 
     if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
@@ -244,8 +251,13 @@ pub fn install_with_publisher(
     let mut backup_created = false;
     let mut target_installed = false;
     let mut manifest_publish_attempted = false;
+    let mut history_created = false;
 
     let result = (|| {
+        if let Some(existing) = existing_manifest.as_ref() {
+            history_created = archive_existing_manifest(existing)?;
+        }
+
         if let (Some(backup_path), Some(previous)) = (&backup, previous.as_deref()) {
             write_new_file(backup_path, previous)?;
             backup_created = true;
@@ -281,7 +293,7 @@ pub fn install_with_publisher(
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
         if manifest_publish_attempted {
-            let _ = fs::remove_file(&manifest_path);
+            restore_existing_manifest(&manifest_path, existing_manifest.as_ref())?;
         }
         if target_installed {
             let restore = if let Some(previous) = previous.as_deref() {
@@ -293,6 +305,14 @@ pub fn install_with_publisher(
         }
         if backup_created {
             let _ = fs::remove_file(backup.as_ref().expect("backup was created"));
+        }
+        if history_created {
+            let history_path = &existing_manifest
+                .as_ref()
+                .expect("history requires an existing manifest")
+                .history_path;
+            remove_if_regular_file(history_path)?;
+            sync_directory(parent_dir(history_path))?;
         }
     }
 
@@ -445,12 +465,146 @@ fn validate_install_paths(
             "manifest path cannot use a save component basename".to_owned(),
         ));
     }
-    match fs::symlink_metadata(&manifest_path) {
+    Ok((target, manifest_path))
+}
+
+fn existing_manifest_for_reinstall(
+    target: &Path,
+    manifest_path: &Path,
+) -> Result<Option<ExistingInstallManifest>, ConversionError> {
+    let metadata = match fs::symlink_metadata(manifest_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(ConversionError::InvalidSave(
+            "existing install manifest must be a regular non-symlink file".to_owned(),
+        ));
+    }
+
+    let bytes = fs::read(manifest_path)?;
+    let manifest: InstallManifest = serde_json::from_slice(&bytes).map_err(|error| {
+        ConversionError::InvalidSave(format!("existing install manifest is invalid: {error}"))
+    })?;
+    validate_existing_manifest(target, manifest_path, &manifest)?;
+
+    let history_path = install_history_path_for(target, &manifest.installed_sha256)?;
+    match fs::symlink_metadata(&history_path) {
+        Ok(history_metadata) if history_metadata.file_type().is_file() => {
+            if fs::read(&history_path)? != bytes {
+                return Err(ConversionError::InvalidSave(
+                    "existing install history would be overwritten".to_owned(),
+                ));
+            }
+        }
+        Ok(_) => {
+            return Err(ConversionError::InvalidSave(
+                "existing install history must be a regular non-symlink file".to_owned(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    Ok(Some(ExistingInstallManifest {
+        bytes,
+        history_path,
+    }))
+}
+
+fn validate_existing_manifest(
+    target: &Path,
+    manifest_path: &Path,
+    manifest: &InstallManifest,
+) -> Result<(), ConversionError> {
+    if manifest.version != INSTALL_MANIFEST_VERSION {
+        return Err(ConversionError::InvalidSave(format!(
+            "unsupported existing install manifest version: {}",
+            manifest.version
+        )));
+    }
+    validate_manifest_hash(&manifest.source_sha256, "source")?;
+    validate_manifest_hash(&manifest.installed_sha256, "installed")?;
+    if manifest.target != target {
+        return Err(ConversionError::InvalidSave(
+            "existing install manifest target is not bound to this save slot".to_owned(),
+        ));
+    }
+
+    match (
+        &manifest.backup,
+        &manifest.previous_sha256,
+        manifest.target_previously_existed,
+    ) {
+        (Some(backup), Some(previous_sha256), true) => {
+            validate_manifest_hash(previous_sha256, "previous")?;
+            let expected_backup = backup_path_for(target, previous_sha256)?;
+            if backup != &expected_backup
+                || backup == target
+                || backup == manifest_path
+                || is_managed_save_component_name(backup)
+            {
+                return Err(ConversionError::InvalidSave(
+                    "existing install manifest backup is not the controlled backup path".to_owned(),
+                ));
+            }
+            let backup_metadata = fs::symlink_metadata(backup).map_err(|error| {
+                ConversionError::InvalidSave(format!(
+                    "cannot read existing install backup metadata: {error}"
+                ))
+            })?;
+            if !backup_metadata.file_type().is_file() {
+                return Err(ConversionError::InvalidSave(
+                    "existing install backup must be a regular non-symlink file".to_owned(),
+                ));
+            }
+            if sha256_hex(&fs::read(backup)?) != *previous_sha256 {
+                return Err(ConversionError::InvalidSave(
+                    "existing install backup hash does not match its manifest".to_owned(),
+                ));
+            }
+        }
+        (None, None, false) => {}
+        _ => {
+            return Err(ConversionError::InvalidSave(
+                "existing install manifest backup fields are inconsistent".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn archive_existing_manifest(existing: &ExistingInstallManifest) -> Result<bool, ConversionError> {
+    match fs::symlink_metadata(&existing.history_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if fs::read(&existing.history_path)? == existing.bytes {
+                Ok(false)
+            } else {
+                Err(ConversionError::InvalidSave(
+                    "existing install history would be overwritten".to_owned(),
+                ))
+            }
+        }
         Ok(_) => Err(ConversionError::InvalidSave(
-            "manifest path already exists".to_owned(),
+            "existing install history must be a regular non-symlink file".to_owned(),
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((target, manifest_path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_new_file(&existing.history_path, &existing.bytes)?;
+            sync_directory(parent_dir(&existing.history_path))?;
+            Ok(true)
+        }
         Err(error) => Err(error.into()),
+    }
+}
+
+fn restore_existing_manifest(
+    manifest_path: &Path,
+    existing_manifest: Option<&ExistingInstallManifest>,
+) -> Result<(), ConversionError> {
+    match existing_manifest {
+        Some(existing) => atomic_replace(manifest_path, &existing.bytes),
+        None => remove_if_regular_file(manifest_path),
     }
 }
 
@@ -555,6 +709,22 @@ fn backup_path_for(target: &Path, previous_sha256: &str) -> Result<PathBuf, Conv
             ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
         })?;
     Ok(parent_dir(target).join(format!(".{target_name}.mh3g-backup-{previous_sha256}")))
+}
+
+fn install_history_path_for(
+    target: &Path,
+    installed_sha256: &str,
+) -> Result<PathBuf, ConversionError> {
+    validate_manifest_hash(installed_sha256, "installed")?;
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConversionError::InvalidSave("target must have a UTF-8 slot basename".to_owned())
+        })?;
+    Ok(parent_dir(target).join(format!(
+        ".{target_name}.mh3g-install-history-{installed_sha256}.json"
+    )))
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
@@ -1002,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_existing_manifest_path_without_touching_the_target() {
+    fn rejects_an_invalid_existing_manifest_path_without_touching_the_target() {
         let temp = tempfile::tempdir().unwrap();
         let (target, manifest_path) = paths(&temp);
         fs::write(&manifest_path, b"existing manifest must not be overwritten").unwrap();
@@ -1023,6 +1193,80 @@ mod tests {
             fs::read(&manifest_path).unwrap(),
             b"existing manifest must not be overwritten"
         );
+    }
+
+    #[test]
+    fn archives_a_valid_existing_manifest_before_reinstalling_a_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        fs::write(&target, b"original target before first install").unwrap();
+        let first = install(&target, &manifest_path, &AcceptCemu);
+        let first_manifest = fs::read(&manifest_path).unwrap();
+        let history = target.parent().unwrap().join(format!(
+            ".user2.mh3g-install-history-{}.json",
+            first.installed_sha256
+        ));
+
+        let cemu_saved_target = b"target after Cemu persisted a save".to_vec();
+        fs::write(&target, &cemu_saved_target).unwrap();
+
+        let second = install(&target, &manifest_path, &AcceptCemu);
+
+        assert_eq!(fs::read(&target).unwrap(), converted());
+        assert_eq!(fs::read(&history).unwrap(), first_manifest);
+        assert_eq!(
+            second.previous_sha256,
+            Some(crate::transaction::sha256_hex(&cemu_saved_target))
+        );
+        let second_backup = second.backup.clone().unwrap();
+        assert_eq!(fs::read(&second_backup).unwrap(), cemu_saved_target);
+        assert_eq!(
+            serde_json::from_slice::<InstallManifest>(&fs::read(&manifest_path).unwrap()).unwrap(),
+            second
+        );
+
+        rollback_with(&manifest_path, &Stopped).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), cemu_saved_target);
+        assert!(!second_backup.exists());
+        assert!(!manifest_path.exists());
+        assert!(history.exists());
+    }
+
+    #[test]
+    fn failed_reinstall_restores_the_existing_manifest_and_removes_new_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        fs::write(&target, b"original target before first install").unwrap();
+        let first = install(&target, &manifest_path, &AcceptCemu);
+        let first_manifest = fs::read(&manifest_path).unwrap();
+        let history = target.parent().unwrap().join(format!(
+            ".user2.mh3g-install-history-{}.json",
+            first.installed_sha256
+        ));
+
+        let cemu_saved_target = b"target after Cemu persisted a save".to_vec();
+        fs::write(&target, &cemu_saved_target).unwrap();
+
+        let error = install_with_publisher(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            &Stopped,
+            &AcceptCemu,
+            &FailingPublisher,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::Io(_)));
+        assert_eq!(fs::read(&target).unwrap(), cemu_saved_target);
+        assert_eq!(fs::read(&manifest_path).unwrap(), first_manifest);
+        assert!(!history.exists());
+        let attempted_backup = target.parent().unwrap().join(format!(
+            ".user2.mh3g-backup-{}",
+            crate::transaction::sha256_hex(&cemu_saved_target)
+        ));
+        assert!(!attempted_backup.exists());
     }
 
     #[cfg(unix)]
