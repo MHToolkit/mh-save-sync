@@ -24,10 +24,6 @@ const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
 const FULL_WIDTH_COUNTER_OFFSETS: [usize; 3] = [0x5BA4, 0x5CC8, 0x5CD4];
-const HUNTER_RECORD_START: usize = 0x81B4;
-const HUNTER_RECORD_STRIDE: usize = 10;
-const DEVILJHO_MONSTER_ID: usize = 0x07;
-const DEVILJHO_HUNTER_RECORD_INDEX: usize = 14;
 const MONSTER_IDS: [usize; 50] = [
     0x0C, 0x0E, 0x2D, 0x03, 0x33, 0x2A, 0x2B, 0x2C, 0x08, 0x36, 0x09, 0x37, 0x2E, 0x49, 0x07, 0x10,
     0x38, 0x2F, 0x13, 0x39, 0x01, 0x3E, 0x3F, 0x02, 0x40, 0x41, 0x04, 0x34, 0x05, 0x35, 0x3B, 0x3C,
@@ -272,43 +268,10 @@ fn apply_confirmed_numeric_and_record_corrections(
                 .try_into()
                 .unwrap(),
         );
-        let discovery_offset = HUNTER_RECORD_START + index * HUNTER_RECORD_STRIDE + 8;
+        let discovery_offset = 0x81B4 + index * 10 + 8;
         if slay != 0 || capture != 0 || source[discovery_offset] & 0x01 != 0 {
             target[discovery_offset] |= 0x80;
         }
-    }
-
-    // Deviljho has a single per-species cache disagreement: its cache minimum
-    // can differ from the actual hunter-record minimum, while the remaining
-    // hunter-record entries agree with their cache. MH3G HD uses this cache
-    // for the display, so use the record's min/max pair whenever a real
-    // Deviljho size record exists.
-    let deviljho_record_offset =
-        HUNTER_RECORD_START + DEVILJHO_HUNTER_RECORD_INDEX * HUNTER_RECORD_STRIDE;
-    let deviljho_min = u16::from_le_bytes(
-        source[deviljho_record_offset + 6..deviljho_record_offset + 8]
-            .try_into()
-            .unwrap(),
-    );
-    let deviljho_max = u16::from_le_bytes(
-        source[deviljho_record_offset + 4..deviljho_record_offset + 6]
-            .try_into()
-            .unwrap(),
-    );
-    let deviljho_discovered = source[deviljho_record_offset + 8] & 0x01 != 0;
-    if deviljho_discovered && deviljho_min != 0 && deviljho_min < deviljho_max {
-        let deviljho_cache_offset = 0x5984 + DEVILJHO_MONSTER_ID * 4;
-        let deviljho_min_be = [
-            source[deviljho_record_offset + 7],
-            source[deviljho_record_offset + 6],
-        ];
-        let deviljho_max_be = [
-            source[deviljho_record_offset + 5],
-            source[deviljho_record_offset + 4],
-        ];
-        target[deviljho_cache_offset..deviljho_cache_offset + 2].copy_from_slice(&deviljho_min_be);
-        target[deviljho_cache_offset + 2..deviljho_cache_offset + 4]
-            .copy_from_slice(&deviljho_max_be);
     }
 
     for (start, count) in MONSTER_RECORD_RANGES {
@@ -675,32 +638,6 @@ mod tests {
         assert_eq!(
             &target[size_offset..size_offset + 4],
             &[0x00, 0x5b, 0x00, 0x7a]
-        );
-    }
-
-    #[test]
-    fn japanese_wiiu_corrections_canonicalize_deviljho_size_cache_from_hunter_record() {
-        // Deviljho is the sole user1 record where the source physical cache
-        // disagrees with the hunter-record min/max pair.  The latter is the
-        // value shown by the 3DS hunter record and must be authoritative for
-        // the Wii U cache as well.
-        const DEVILJHO_ID: usize = 0x07;
-        const DEVILJHO_HUNTER_RECORD_INDEX: usize = 14;
-        let mut source = vec![0_u8; PAYLOAD_SIZE];
-        let physical_size_offset = 0x5984 + DEVILJHO_ID * 4;
-        let hunter_record_offset = 0x81B4 + DEVILJHO_HUNTER_RECORD_INDEX * 10;
-        source[physical_size_offset..physical_size_offset + 4]
-            .copy_from_slice(&[0x6b, 0x00, 0x79, 0x00]);
-        source[hunter_record_offset + 4..hunter_record_offset + 8]
-            .copy_from_slice(&[0x79, 0x00, 0x59, 0x00]);
-        source[hunter_record_offset + 8] = 0x01;
-
-        let mut target = source.clone();
-        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
-
-        assert_eq!(
-            &target[physical_size_offset..physical_size_offset + 4],
-            &[0x00, 0x59, 0x00, 0x79]
         );
     }
 
