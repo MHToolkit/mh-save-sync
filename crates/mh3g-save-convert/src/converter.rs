@@ -7,6 +7,54 @@ use crate::{
     transforms::apply_japanese_wiiu_corrections,
 };
 
+/// MH3G extra-data components shared between all character slots.
+///
+/// These live in the 3DS extdata `00000481/user` directory and are separate
+/// from `user1`/`user2`/`user3`.  Guild-card data is stored in card1-card3 and
+/// cardbox, while the quest files carry downloaded/created quest data.
+pub const EXTERNAL_COMPONENT_NAMES: [&str; 8] = [
+    "card1", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+];
+
+const CARD_PAYLOAD_SIZE: usize = 0x57_FFC;
+const CARDBOX_PAYLOAD_SIZE: usize = 0x2F_FFC;
+const QUEST_PAYLOAD_SIZE: usize = 0x28_FFC;
+
+fn external_component_payload_size(filename: &str) -> Option<usize> {
+    match filename {
+        "card1" | "card2" | "card3" => Some(CARD_PAYLOAD_SIZE),
+        "cardbox" => Some(CARDBOX_PAYLOAD_SIZE),
+        "quest1" | "quest2" | "quest3" | "quest4" => Some(QUEST_PAYLOAD_SIZE),
+        _ => None,
+    }
+}
+
+/// Convert one MH3G 3DS extra-data component into its Cemu save container.
+///
+/// The 3DS and Wii U payloads are byte-identical for the supported components:
+/// only their outer container changes from the 4-byte 3DS header to Cemu's
+/// 40-byte header.  The filename is part of the Cemu header checksum, so it is
+/// validated against the fixed component list instead of inferred from a path.
+pub fn convert_external_component_to_cemu_named(
+    source: &[u8],
+    filename: &str,
+) -> Result<Vec<u8>, ConversionError> {
+    let payload_size = external_component_payload_size(filename).ok_or_else(|| {
+        ConversionError::InvalidSave(format!("unsupported MH3G extra-data component: {filename}"))
+    })?;
+    let expected_size = JP_3DS_HEADER.len() + payload_size;
+    if source.len() != expected_size || !source.starts_with(&JP_3DS_HEADER) {
+        return Err(ConversionError::InvalidSave(format!(
+            "invalid Japanese MH3G 3DS extra-data {filename}: expected {expected_size} bytes with 3DS header"
+        )));
+    }
+
+    let mut output = Vec::with_capacity(payload_size + 40);
+    output.extend_from_slice(&build_jp_cemu_header(filename, payload_size)?);
+    output.extend_from_slice(&source[JP_3DS_HEADER.len()..]);
+    Ok(output)
+}
+
 /// Convert one Japanese MH3G 3DS slot into the Japanese Cemu slot format.
 ///
 /// The conversion is deliberately pure: the input is never modified and no
@@ -85,7 +133,10 @@ pub fn convert_source_to_cemu(source: &[u8], filename: &str) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use crate::{
-        converter::{convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named},
+        converter::{
+            convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named,
+            convert_external_component_to_cemu_named,
+        },
         profile::{
             CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, PAYLOAD_SIZE, SaveProfile, THREE_DS_SIZE,
             build_jp_cemu_header, inspect_bytes,
@@ -193,6 +244,26 @@ mod tests {
         assert_eq!(
             &output[..40],
             &build_jp_cemu_header("user1", PAYLOAD_SIZE).unwrap()
+        );
+    }
+
+    #[test]
+    fn wraps_3ds_guild_card_extra_data_without_changing_its_payload() {
+        let mut source = vec![0_u8; 0x58_000];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        source[4..8].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        source[0x1234..0x1238].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card2").unwrap();
+
+        assert_eq!(output.len(), 0x58_024);
+        assert_eq!(
+            &output[..JP_CEMU_HEADER.len()],
+            &build_jp_cemu_header("card2", source.len() - JP_3DS_HEADER.len()).unwrap()
+        );
+        assert_eq!(
+            &output[JP_CEMU_HEADER.len()..],
+            &source[JP_3DS_HEADER.len()..]
         );
     }
 }
