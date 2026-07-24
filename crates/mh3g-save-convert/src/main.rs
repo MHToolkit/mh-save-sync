@@ -10,6 +10,7 @@ use mh3g_save_convert::{
     ConversionError,
     converter::{
         EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
+        reset_guild_card_component_to_cemu_named,
     },
     events::event_snapshot,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
@@ -67,7 +68,7 @@ enum Command {
         #[arg(long, conflicts_with = "dry_run")]
         write: bool,
     },
-    /// Package MH3G 3DS extdata (guild cards and quests) for Cemu without overwriting a save.
+    /// Package MH3G 3DS extdata for Cemu without overwriting a save.
     ConvertExtras {
         /// 3DS MH3G extdata user directory (usually .../extdata/00000000/00000481/user).
         #[arg(long)]
@@ -79,6 +80,9 @@ enum Command {
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
         write: bool,
+        /// Replace non-empty 3DS guild-card data with valid empty Cemu components.
+        #[arg(long)]
+        reset_guild_cards: bool,
     },
     /// Restore a save slot from a prior installation manifest.
     Rollback {
@@ -213,9 +217,16 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             output_dir,
             dry_run,
             write,
+            reset_guild_cards,
         } => println!(
             "{}",
-            serde_json::to_string(&convert_extras(source_dir, output_dir, dry_run, write)?)?
+            serde_json::to_string(&convert_extras(
+                source_dir,
+                output_dir,
+                dry_run,
+                write,
+                reset_guild_cards,
+            )?)?
         ),
         command => {
             let report = match command {
@@ -515,6 +526,7 @@ fn convert_extras(
     output_dir: PathBuf,
     dry_run: bool,
     write: bool,
+    reset_guild_cards: bool,
 ) -> Result<ExtrasReport, ConversionError> {
     debug_assert!(!(dry_run && write));
     if !source_dir.is_dir() {
@@ -540,7 +552,12 @@ fn convert_extras(
             )));
         }
         let source_bytes = fs::read(&source)?;
-        let output_bytes = convert_external_component_to_cemu_named(&source_bytes, component)?;
+        let output_bytes =
+            if reset_guild_cards && matches!(component, "card1" | "card2" | "card3" | "cardbox") {
+                reset_guild_card_component_to_cemu_named(&source_bytes, component)?
+            } else {
+                convert_external_component_to_cemu_named(&source_bytes, component)?
+            };
         converted.push((component, source_bytes, output_bytes));
     }
 
@@ -613,6 +630,61 @@ mod tests {
     };
 
     #[test]
+    fn convert_extras_accepts_an_explicit_guild_card_reset_flag() {
+        let parsed = Cli::try_parse_from([
+            "mh3g-save-convert",
+            "convert-extras",
+            "--source-dir",
+            "source",
+            "--output-dir",
+            "target",
+            "--reset-guild-cards",
+        ]);
+
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn convert_extras_resets_nonempty_guild_cards_only_when_explicitly_requested() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("3ds-extdata");
+        let output_dir = temp.path().join("cemu-extras");
+        fs::create_dir(&source_dir).unwrap();
+        for component in EXTERNAL_COMPONENT_NAMES {
+            let size = match component {
+                "card1" | "card2" | "card3" => 0x58_000,
+                "cardbox" => 0x30_000,
+                "quest1" | "quest2" | "quest3" | "quest4" => 0x29_000,
+                _ => unreachable!(),
+            };
+            let mut bytes = vec![0_u8; size];
+            bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+            if component == "card1" {
+                bytes[4..8].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+            }
+            fs::write(source_dir.join(component), bytes).unwrap();
+        }
+
+        let cli = Cli::try_parse_from([
+            "mh3g-save-convert",
+            "convert-extras",
+            "--source-dir",
+            source_dir.to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+            "--write",
+            "--reset-guild-cards",
+        ])
+        .unwrap();
+
+        run(cli).unwrap();
+
+        let card1 = fs::read(output_dir.join("card1")).unwrap();
+        assert_eq!(card1.len(), 0x58_024);
+        assert!(card1[40..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn convert_system_dry_run_never_creates_the_target_file() {
         let temp = tempfile::tempdir().unwrap();
         let source_dir = temp.path().join("source");
@@ -648,11 +720,13 @@ mod tests {
             };
             let mut bytes = vec![0_u8; size];
             bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
-            bytes[4] = component.as_bytes()[4 % component.len()];
+            if component.starts_with("quest") {
+                bytes[4] = component.as_bytes()[4 % component.len()];
+            }
             fs::write(source_dir.join(component), bytes).unwrap();
         }
 
-        let report = convert_extras(source_dir, output_dir.clone(), true, false).unwrap();
+        let report = convert_extras(source_dir, output_dir.clone(), true, false, false).unwrap();
 
         assert_eq!(report.status, "dry-run");
         assert_eq!(report.components.len(), EXTERNAL_COMPONENT_NAMES.len());

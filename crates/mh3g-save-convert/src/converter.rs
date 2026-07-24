@@ -29,12 +29,17 @@ fn external_component_payload_size(filename: &str) -> Option<usize> {
     }
 }
 
+fn is_guild_card_component(filename: &str) -> bool {
+    matches!(filename, "card1" | "card2" | "card3" | "cardbox")
+}
+
 /// Convert one MH3G 3DS extra-data component into its Cemu save container.
 ///
-/// The 3DS and Wii U payloads are byte-identical for the supported components:
-/// only their outer container changes from the 4-byte 3DS header to Cemu's
-/// 40-byte header.  The filename is part of the Cemu header checksum, so it is
-/// validated against the fixed component list instead of inferred from a path.
+/// Quest payloads are byte-identical across the supported platforms, so they
+/// only need their outer container replaced.  Non-empty guild-card payloads
+/// are platform-endian structures and are refused until a field-level
+/// conversion is available; blindly wrapping them produces invalid card counts
+/// and can crash the guild-card UI.
 pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
@@ -49,9 +54,45 @@ pub fn convert_external_component_to_cemu_named(
         )));
     }
 
+    let payload = &source[JP_3DS_HEADER.len()..];
+    if is_guild_card_component(filename) && payload.iter().any(|byte| *byte != 0) {
+        return Err(ConversionError::InvalidSave(format!(
+            "non-empty guild-card component {filename} requires --reset-guild-cards or a verified field-level converter"
+        )));
+    }
+
     let mut output = Vec::with_capacity(payload_size + 40);
     output.extend_from_slice(&build_jp_cemu_header(filename, payload_size)?);
-    output.extend_from_slice(&source[JP_3DS_HEADER.len()..]);
+    output.extend_from_slice(payload);
+    Ok(output)
+}
+
+/// Create an empty Cemu guild-card component from a valid 3DS component.
+///
+/// This is an explicit compatibility fallback, not a semantic conversion: it
+/// creates the same empty component shape as a native Cemu save. It never runs
+/// implicitly because local and received 3DS guild cards cannot be safely
+/// preserved without the platform-specific field mapping.
+pub fn reset_guild_card_component_to_cemu_named(
+    source: &[u8],
+    filename: &str,
+) -> Result<Vec<u8>, ConversionError> {
+    if !is_guild_card_component(filename) {
+        return Err(ConversionError::InvalidSave(format!(
+            "unsupported MH3G guild-card component: {filename}"
+        )));
+    }
+    let payload_size = external_component_payload_size(filename)
+        .expect("guild-card component has a declared payload size");
+    let expected_size = JP_3DS_HEADER.len() + payload_size;
+    if source.len() != expected_size || !source.starts_with(&JP_3DS_HEADER) {
+        return Err(ConversionError::InvalidSave(format!(
+            "invalid Japanese MH3G 3DS extra-data {filename}: expected {expected_size} bytes with 3DS header"
+        )));
+    }
+
+    let mut output = build_jp_cemu_header(filename, payload_size)?.to_vec();
+    output.resize(payload_size + 40, 0);
     Ok(output)
 }
 
@@ -248,22 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn wraps_3ds_guild_card_extra_data_without_changing_its_payload() {
+    fn rejects_nonempty_3ds_guild_card_payloads_without_a_verified_converter() {
         let mut source = vec![0_u8; 0x58_000];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         source[4..8].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
         source[0x1234..0x1238].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
 
-        let output = convert_external_component_to_cemu_named(&source, "card2").unwrap();
+        let error = convert_external_component_to_cemu_named(&source, "card2").unwrap_err();
 
-        assert_eq!(output.len(), 0x58_024);
-        assert_eq!(
-            &output[..JP_CEMU_HEADER.len()],
-            &build_jp_cemu_header("card2", source.len() - JP_3DS_HEADER.len()).unwrap()
-        );
-        assert_eq!(
-            &output[JP_CEMU_HEADER.len()..],
-            &source[JP_3DS_HEADER.len()..]
-        );
+        assert!(error.to_string().contains("guild-card"));
     }
 }

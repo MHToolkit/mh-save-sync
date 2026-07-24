@@ -71,6 +71,49 @@ simple-event words at `0x62AE` and preserves the byte-addressed categorized
 event table at `0x668C`. Static table provenance is pinned in
 `crates/mh3g-save-convert/data/catalog-provenance.json`.
 
+### Shared extdata: guild cards and quests
+
+`card1`, `card2`, `card3`, `cardbox`, and `quest1` through `quest4` are shared
+3DS extdata files, separate from `user1`/`user2`/`user3`. They must not be
+treated as part of a successful slot conversion merely because `user#` loads.
+
+The current converter can package the quest components with their validated
+container replacement. It deliberately **refuses non-empty guild-card
+components by default**: their payloads are platform-endian structures, and
+the prior raw-wrapper implementation interpreted the 3DS little-endian card
+count incorrectly on Wii U/Cemu. This caused invalid guild-card UI data and
+could crash when interacting with a received card or its quest dispatch.
+
+There is an explicit compatibility fallback for a migration where preserving
+existing cards is not required. It emits valid empty Cemu `card*` components
+and leaves the original 3DS extdata untouched:
+
+```bash
+EXTRAS_SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/extdata/00000000/00000481/user"
+EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras-reset"
+
+# Read only: validates every source component and reports output hashes.
+rtk cargo run -p mh3g-save-convert -- convert-extras \
+  --source-dir "$EXTRAS_SOURCE" \
+  --output-dir "$EXTRAS_OUTPUT" \
+  --dry-run \
+  --reset-guild-cards
+
+# Writes only the new output directory. Existing component files are refused.
+rtk cargo run -p mh3g-save-convert -- convert-extras \
+  --source-dir "$EXTRAS_SOURCE" \
+  --output-dir "$EXTRAS_OUTPUT" \
+  --write \
+  --reset-guild-cards
+```
+
+`--reset-guild-cards` is not a semantic guild-card conversion. It does not
+preserve the local 3DS card or received 3DS cards; it only avoids installing
+known-invalid cross-platform card payloads. A field-level conversion and
+readback test for non-empty received cards remains required before that data
+can be migrated rather than reset. Keep the source extdata and install only
+after making a backup of the Cemu destination.
+
 ### Windows 11 x64 test package
 
 The `mh3g-converter-windows` GitHub Actions workflow builds a native,
