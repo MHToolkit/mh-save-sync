@@ -8,11 +8,13 @@ use std::{
 use clap::{Parser, Subcommand};
 use mh3g_save_convert::{
     ConversionError,
-    converter::convert_source_to_cemu,
+    converter::{
+        EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
+    },
     events::event_snapshot,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
-    transaction::{install, manifest_path_for_target, rollback},
+    transaction::{install, manifest_path_for_target, rollback, sha256_hex},
 };
 use serde::Serialize;
 
@@ -60,6 +62,19 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Package MH3G 3DS extdata (guild cards and quests) for Cemu without overwriting a save.
+    ConvertExtras {
+        /// 3DS MH3G extdata user directory (usually .../extdata/00000000/00000481/user).
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// New output directory for Cemu card*/quest* files; existing component files are refused.
+        #[arg(long)]
+        output_dir: PathBuf,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -151,6 +166,23 @@ struct EventReport {
     status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct ExtraComponentReport {
+    component: String,
+    source_sha256: String,
+    output_sha256: String,
+    output: PathBuf,
+    size: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct ExtrasReport {
+    source_dir: PathBuf,
+    output_dir: PathBuf,
+    components: Vec<ExtraComponentReport>,
+    status: &'static str,
+}
+
 fn main() {
     if let Err(error) = run(Cli::parse()) {
         eprintln!("{error}");
@@ -176,6 +208,15 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             "{}",
             serde_json::to_string(&inspect_events(source, target, all)?)?
         ),
+        Command::ConvertExtras {
+            source_dir,
+            output_dir,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&convert_extras(source_dir, output_dir, dry_run, write)?)?
+        ),
         command => {
             let report = match command {
                 Command::Inspect { source } => inspect(source)?,
@@ -192,7 +233,9 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     write,
                 } => convert_system(source, output, dry_run, write)?,
                 Command::Rollback { manifest } => rollback_save(manifest)?,
-                Command::InspectProgress { .. } | Command::InspectEvents { .. } => unreachable!(),
+                Command::InspectProgress { .. }
+                | Command::InspectEvents { .. }
+                | Command::ConvertExtras { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
         }
@@ -467,6 +510,86 @@ fn convert_component(
     Ok(report)
 }
 
+fn convert_extras(
+    source_dir: PathBuf,
+    output_dir: PathBuf,
+    dry_run: bool,
+    write: bool,
+) -> Result<ExtrasReport, ConversionError> {
+    debug_assert!(!(dry_run && write));
+    if !source_dir.is_dir() {
+        return Err(ConversionError::InvalidSave(format!(
+            "3DS MH3G extdata source is not a directory: {}",
+            source_dir.display()
+        )));
+    }
+    if output_dir.exists() && !output_dir.is_dir() {
+        return Err(ConversionError::InvalidSave(format!(
+            "Cemu extra-data output is not a directory: {}",
+            output_dir.display()
+        )));
+    }
+
+    let mut converted = Vec::with_capacity(EXTERNAL_COMPONENT_NAMES.len());
+    for component in EXTERNAL_COMPONENT_NAMES {
+        let source = source_dir.join(component);
+        if !source.is_file() {
+            return Err(ConversionError::InvalidSave(format!(
+                "required 3DS MH3G extra-data component is missing: {}",
+                source.display()
+            )));
+        }
+        let source_bytes = fs::read(&source)?;
+        let output_bytes = convert_external_component_to_cemu_named(&source_bytes, component)?;
+        converted.push((component, source_bytes, output_bytes));
+    }
+
+    let output_paths = converted
+        .iter()
+        .map(|(component, _, _)| output_dir.join(component))
+        .collect::<Vec<_>>();
+    if write && output_paths.iter().any(|path| path.exists()) {
+        let occupied = output_paths
+            .iter()
+            .find(|path| path.exists())
+            .expect("an occupied output path exists");
+        return Err(ConversionError::UnsafeInstall(format!(
+            "extra-data output already exists; use a new empty directory: {}",
+            occupied.display()
+        )));
+    }
+
+    let components = converted
+        .iter()
+        .zip(output_paths.iter())
+        .map(
+            |((component, source_bytes, output_bytes), output)| ExtraComponentReport {
+                component: (*component).to_owned(),
+                source_sha256: sha256_hex(source_bytes),
+                output_sha256: sha256_hex(output_bytes),
+                output: output.clone(),
+                size: output_bytes.len(),
+            },
+        )
+        .collect();
+
+    if write {
+        fs::create_dir_all(&output_dir)?;
+        for ((_, _, output_bytes), output) in converted.iter().zip(output_paths.iter()) {
+            fs::write(output, output_bytes)?;
+        }
+    } else {
+        debug_assert!(dry_run || !write);
+    }
+
+    Ok(ExtrasReport {
+        source_dir,
+        output_dir,
+        components,
+        status: if write { "written" } else { "dry-run" },
+    })
+}
+
 fn rollback_save(manifest: PathBuf) -> Result<Report, ConversionError> {
     rollback(&manifest)?;
     Ok(Report {
@@ -508,6 +631,39 @@ mod tests {
         assert_eq!(report.status, "dry-run");
         assert_eq!(report.output, Some(output.clone()));
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn convert_extras_wraps_all_shared_components_without_writing_on_dry_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("3ds-extdata");
+        let output_dir = temp.path().join("cemu-extras");
+        fs::create_dir(&source_dir).unwrap();
+        for component in EXTERNAL_COMPONENT_NAMES {
+            let size = match component {
+                "card1" | "card2" | "card3" => 0x58_000,
+                "cardbox" => 0x30_000,
+                "quest1" | "quest2" | "quest3" | "quest4" => 0x29_000,
+                _ => unreachable!(),
+            };
+            let mut bytes = vec![0_u8; size];
+            bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+            bytes[4] = component.as_bytes()[4 % component.len()];
+            fs::write(source_dir.join(component), bytes).unwrap();
+        }
+
+        let report = convert_extras(source_dir, output_dir.clone(), true, false).unwrap();
+
+        assert_eq!(report.status, "dry-run");
+        assert_eq!(report.components.len(), EXTERNAL_COMPONENT_NAMES.len());
+        assert!(!output_dir.exists());
+        assert!(report.components.iter().all(|component| component.size
+            == match component.component.as_str() {
+                "card1" | "card2" | "card3" => 0x58_024,
+                "cardbox" => 0x30_024,
+                "quest1" | "quest2" | "quest3" | "quest4" => 0x29_024,
+                _ => unreachable!(),
+            }));
     }
 
     #[test]

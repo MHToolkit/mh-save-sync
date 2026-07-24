@@ -24,6 +24,10 @@ const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
 const FULL_WIDTH_COUNTER_OFFSETS: [usize; 3] = [0x5BA4, 0x5CC8, 0x5CD4];
+const MONSTER_SLAY_START: usize = 0x5784;
+const MONSTER_CAPTURE_START: usize = 0x5884;
+const MONSTER_SIZE_START: usize = 0x5984;
+const MONSTER_SIZE_BYTE_COUNT: usize = 0x80 * 4;
 const MONSTER_IDS: [usize; 50] = [
     0x0C, 0x0E, 0x2D, 0x03, 0x33, 0x2A, 0x2B, 0x2C, 0x08, 0x36, 0x09, 0x37, 0x2E, 0x49, 0x07, 0x10,
     0x38, 0x2F, 0x13, 0x39, 0x01, 0x3E, 0x3F, 0x02, 0x40, 0x41, 0x04, 0x34, 0x05, 0x35, 0x3B, 0x3C,
@@ -254,14 +258,19 @@ fn apply_confirmed_numeric_and_record_corrections(
         copy_reversed(source, target, offset, 4)?;
     }
 
+    // 0x5984 is a packed physical-size cache, not the endian-converted
+    // 50-entry hunter-record display log at 0x81B4.  The reference converter
+    // preserves it byte-for-byte; reversing its u16 pairs produces impossible
+    // monster measurements in MH3G HD.
+    target[MONSTER_SIZE_START..MONSTER_SIZE_START + MONSTER_SIZE_BYTE_COUNT]
+        .copy_from_slice(&source[MONSTER_SIZE_START..MONSTER_SIZE_START + MONSTER_SIZE_BYTE_COUNT]);
+
     for (index, monster_id) in MONSTER_IDS.into_iter().enumerate() {
-        let slay_offset = 0x5784 + monster_id * 2;
-        let capture_offset = 0x5884 + monster_id * 2;
-        let size_offset = 0x5984 + monster_id * 4;
-        for offset in [slay_offset, capture_offset, size_offset, size_offset + 2] {
+        let slay_offset = MONSTER_SLAY_START + monster_id * 2;
+        let capture_offset = MONSTER_CAPTURE_START + monster_id * 2;
+        for offset in [slay_offset, capture_offset] {
             copy_reversed(source, target, offset, 2)?;
         }
-
         let slay = u16::from_le_bytes(source[slay_offset..slay_offset + 2].try_into().unwrap());
         let capture = u16::from_le_bytes(
             source[capture_offset..capture_offset + 2]
@@ -612,15 +621,28 @@ mod tests {
             ),
             2
         );
-        assert_eq!(
-            u16::from_be_bytes(target[size_offset..size_offset + 2].try_into().unwrap()),
-            100
-        );
-        assert_eq!(
-            u16::from_be_bytes(target[size_offset + 2..size_offset + 4].try_into().unwrap()),
-            112
-        );
+        assert_eq!(&target[size_offset..size_offset + 4], &[100, 0, 112, 0]);
         assert_ne!(target[discovery_offset] & 0x80, 0);
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_preserve_packed_physical_monster_sizes() {
+        // The display log at 0x81B4 is endian-converted independently.  This
+        // earlier table is a packed physical-size cache, whose bytes are kept
+        // in place by the reference converter.  Reversing these pairs changes
+        // the numerical scale used by the Wii U hunter-record UI.
+        const MONSTER_ID: usize = 0x3d;
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let size_offset = 0x5984 + MONSTER_ID * 4;
+        source[size_offset..size_offset + 4].copy_from_slice(&[0x64, 0x00, 0x64, 0x00]);
+        let mut target = source.clone();
+
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(
+            &target[size_offset..size_offset + 4],
+            &[0x64, 0x00, 0x64, 0x00]
+        );
     }
 
     #[test]
