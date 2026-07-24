@@ -61,22 +61,22 @@ not extend the transformation table. The table remains pinned to the reviewed
 3DS extdata components. They are not embedded in a `user#` slot and are outside
 the slot-transform differential proof above.
 
-The quest components use the supported container replacement. Non-empty guild
-card components do not: their payloads contain platform-endian structures. In
-particular, a real 3DS `card1` begins with the little-endian count
-`01 00 00 00`; replacing only its four-byte outer wrapper causes Wii U/Cemu to
-read that field as `0x01000000`. The previous raw-wrapper implementation could
-therefore produce invalid card data and crash guild-card interaction or quest
-dispatch.
+The official Japanese transfer program has one component-name table containing
+the three user slots, `card1`/`card2`/`card3`, `cardbox`, and `quest1` through
+`quest4`. Its card transfer states copy `0x58000` bytes for each `card*` file
+and `0x30000` bytes for `cardbox`; the quest states copy `0x29000` bytes. No
+payload transformation is present in those states. This is independently
+corroborated by a local Japanese 3DS `card2` and its Cemu counterpart whose
+payloads have the same SHA-256
+`6af2f63481dce37f692c0ae1df71d1e3244bb53b2009f3d59b9891e6bc1cbb33`.
 
-`convert-extras` consequently rejects a non-empty `card*` payload unless the
-operator explicitly passes `--reset-guild-cards`. That option creates a valid
-Cemu wrapper and an all-zero payload for each card component. It is a
-compatibility reset, not a semantic migration: it does not preserve a local or
-received 3DS guild card. No non-empty-card field map, checksum algorithm, or
-in-game readback proof is accepted by this ADR. Such a conversion requires a
-separate static mapping and runtime acceptance before it can replace this
-fail-closed behavior.
+`convert-extras` consequently preserves every valid non-empty `card*` payload
+and changes only its 3DS four-byte outer container into Cemu's 40-byte
+wrapper. `--reset-guild-cards` remains available only as an explicit
+destructive recovery option: it writes native empty Cemu components and drops
+both local and received cards. Runtime acceptance must still verify card UI,
+receiving a new card, and quest dispatch, but lack of a field-level map is not
+a reason to discard byte-for-byte compatible payloads.
 
 This ADR does not grant Runtime Verified status to Cemu, Nemessix, or Azahar.
 Passing unit, differential, or file-level checks is not an emulator load proof.

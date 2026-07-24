@@ -35,11 +35,9 @@ fn is_guild_card_component(filename: &str) -> bool {
 
 /// Convert one MH3G 3DS extra-data component into its Cemu save container.
 ///
-/// Quest payloads are byte-identical across the supported platforms, so they
-/// only need their outer container replaced.  Non-empty guild-card payloads
-/// are platform-endian structures and are refused until a field-level
-/// conversion is available; blindly wrapping them produces invalid card counts
-/// and can crash the guild-card UI.
+/// The official Japanese transfer program copies the payloads of card1-card3,
+/// cardbox, and quest1-quest4 byte-for-byte. Only the outer 3DS container is
+/// replaced with Cemu's 40-byte wrapper.
 pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
@@ -54,16 +52,9 @@ pub fn convert_external_component_to_cemu_named(
         )));
     }
 
-    let payload = &source[JP_3DS_HEADER.len()..];
-    if is_guild_card_component(filename) && payload.iter().any(|byte| *byte != 0) {
-        return Err(ConversionError::InvalidSave(format!(
-            "non-empty guild-card component {filename} requires --reset-guild-cards or a verified field-level converter"
-        )));
-    }
-
     let mut output = Vec::with_capacity(payload_size + 40);
     output.extend_from_slice(&build_jp_cemu_header(filename, payload_size)?);
-    output.extend_from_slice(payload);
+    output.extend_from_slice(&source[JP_3DS_HEADER.len()..]);
     Ok(output)
 }
 
@@ -289,14 +280,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nonempty_3ds_guild_card_payloads_without_a_verified_converter() {
+    fn wraps_nonempty_3ds_guild_card_payloads_without_changing_their_payload() {
         let mut source = vec![0_u8; 0x58_000];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         source[4..8].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
         source[0x1234..0x1238].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
 
-        let error = convert_external_component_to_cemu_named(&source, "card2").unwrap_err();
+        let output = convert_external_component_to_cemu_named(&source, "card2").unwrap();
 
-        assert!(error.to_string().contains("guild-card"));
+        assert_eq!(output.len(), 0x58_024);
+        assert_eq!(
+            &output[..JP_CEMU_HEADER.len()],
+            &build_jp_cemu_header("card2", source.len() - JP_3DS_HEADER.len()).unwrap()
+        );
+        assert_eq!(
+            &output[JP_CEMU_HEADER.len()..],
+            &source[JP_3DS_HEADER.len()..]
+        );
     }
 }
