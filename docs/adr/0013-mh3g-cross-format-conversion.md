@@ -55,6 +55,29 @@ The official transfer application's archive evidence supports the scope but does
 not extend the transformation table. The table remains pinned to the reviewed
 `3usavetools 0.3.1` provenance and explicit Japanese-wrapper substitution.
 
+### Shared extdata and guild cards
+
+`card1`, `card2`, `card3`, `cardbox`, and `quest1` through `quest4` are shared
+3DS extdata components. They are not embedded in a `user#` slot and are outside
+the slot-transform differential proof above.
+
+The quest components use the supported container replacement. Non-empty guild
+card components do not: their payloads contain platform-endian structures. In
+particular, a real 3DS `card1` begins with the little-endian count
+`01 00 00 00`; replacing only its four-byte outer wrapper causes Wii U/Cemu to
+read that field as `0x01000000`. The previous raw-wrapper implementation could
+therefore produce invalid card data and crash guild-card interaction or quest
+dispatch.
+
+`convert-extras` consequently rejects a non-empty `card*` payload unless the
+operator explicitly passes `--reset-guild-cards`. That option creates a valid
+Cemu wrapper and an all-zero payload for each card component. It is a
+compatibility reset, not a semantic migration: it does not preserve a local or
+received 3DS guild card. No non-empty-card field map, checksum algorithm, or
+in-game readback proof is accepted by this ADR. Such a conversion requires a
+separate static mapping and runtime acceptance before it can replace this
+fail-closed behavior.
+
 This ADR does not grant Runtime Verified status to Cemu, Nemessix, or Azahar.
 Passing unit, differential, or file-level checks is not an emulator load proof.
 That status requires a later stopped-emulator install, real Japanese MH3G HD
@@ -148,10 +171,12 @@ initially absent target and no backup, and bound the expected source and output
 hashes. Rollback removed both the staged target and manifest, restoring the
 initially absent state. The original source hash remained unchanged.
 
-Money, playtime, item-box, guild-card, award, monster-log, and arena-record
-transformations have labels in the pinned reference and were differentially
-verified. The player-header structure, equipment box, and Moga points have no
-independently established field mapping in this validation; they have only
-whole-file differential parity and the converter's byte-preservation contract.
-All checkpoint categories remain semantically unverified until Cemu runtime
-acceptance. No player content or save bytes were recorded.
+Money, playtime, item-box, award, monster-log, arena-record, and the main
+slot's guild-card-related fields have labels in the pinned reference and were
+differentially verified. This does not establish a conversion for the separate
+`card1`/`card2`/`card3`/`cardbox` extdata payloads. The player-header structure,
+equipment box, and Moga points have no independently established field mapping
+in this validation; they have only whole-file differential parity and the
+converter's byte-preservation contract. All checkpoint categories remain
+semantically unverified until Cemu runtime acceptance. No player content or
+save bytes were recorded.
