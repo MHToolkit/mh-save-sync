@@ -30,6 +30,10 @@ const MONSTER_IDS: [usize; 50] = [
     0x3D, 0x06, 0x3A, 0x29, 0x48, 0x19, 0x55, 0x18, 0x42, 0x43, 0x12, 0x0F, 0x44, 0x45, 0x14, 0x46,
     0x4A, 0x4B,
 ];
+// The 3DS hunting-record builder maps display Deviljho (0x07) through a
+// second, non-display size cache at 0x5984 + 0x47 * 4. It uses the lower
+// minimum and higher maximum from both records before formatting the UI.
+const DEVILJHO_LINKED_SIZE_CACHE_ID: usize = 0x47;
 const MONSTER_RECORD_RANGES: [(usize, usize); 2] = [(0x5D90, 13), (0x5E60, 25)];
 const FARM_LEVELS_START: usize = 0x6128;
 const FARM_HARVEST_START: usize = 0x612C;
@@ -273,6 +277,10 @@ fn apply_confirmed_numeric_and_record_corrections(
             target[discovery_offset] |= 0x80;
         }
     }
+
+    let deviljho_linked_size_offset = 0x5984 + DEVILJHO_LINKED_SIZE_CACHE_ID * 4;
+    copy_reversed(source, target, deviljho_linked_size_offset, 2)?;
+    copy_reversed(source, target, deviljho_linked_size_offset + 2, 2)?;
 
     for (start, count) in MONSTER_RECORD_RANGES {
         for record in 0..count {
@@ -638,6 +646,26 @@ mod tests {
         assert_eq!(
             &target[size_offset..size_offset + 4],
             &[0x00, 0x5b, 0x00, 0x7a]
+        );
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_swap_deviljho_linked_size_cache() {
+        // The game combines display monster 0x07 with non-display cache
+        // record 0x47 when showing Deviljho's hunting-record size range.
+        // The latter is not part of the 50-row display map, but is still
+        // stored as a pair of endian-sensitive u16 values.
+        const DEVILJHO_LINKED_MONSTER_ID: usize = 0x47;
+        let size_offset = 0x5984 + DEVILJHO_LINKED_MONSTER_ID * 4;
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[size_offset..size_offset + 4].copy_from_slice(&[0x59, 0x00, 0x78, 0x00]);
+        let mut target = source.clone();
+
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(
+            &target[size_offset..size_offset + 4],
+            &[0x00, 0x59, 0x00, 0x78]
         );
     }
 
