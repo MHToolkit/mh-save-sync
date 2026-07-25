@@ -77,10 +77,13 @@ event table at `0x668C`. Static table provenance is pinned in
 3DS extdata files, separate from `user1`/`user2`/`user3`. They must not be
 treated as part of a successful slot conversion merely because `user#` loads.
 
-The official Japanese transfer program has byte-copy states for these eight
-components. `convert-extras` preserves that component payload structure and
-only replaces the outer container. This is a file-level operation, not proof
-that every received guild card works in the Wii U UI:
+`quest1` through `quest4` are payload-compatible and only receive the Cemu
+container. `card1` through `card3` and `cardbox` are not payload-compatible:
+their numeric fields, arena records, and crown/discovery bitfields require the
+statically recovered MEOW v5 3DS-to-Wii U mapping before the Cemu wrapper is
+written. `convert-extras` applies that mapping from the original 3DS body, then
+reports hashes for every generated component. This is file-level evidence, not
+proof that every received guild card works in the Wii U UI:
 
 ```bash
 EXTRAS_SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/extdata/00000000/00000481/user"

@@ -4,7 +4,10 @@ use crate::{
         CEMU_SIZE, CEMU_SYSTEM_SIZE, JP_3DS_HEADER, PAYLOAD_SIZE, SYSTEM_PAYLOAD_SIZE, SaveProfile,
         build_jp_cemu_header, inspect_bytes,
     },
-    transforms::apply_japanese_wiiu_corrections,
+    transforms::{
+        GuildCardBodyKind, apply_japanese_wiiu_corrections,
+        apply_japanese_wiiu_guild_card_corrections,
+    },
 };
 
 /// MH3G extra-data components shared between all character slots.
@@ -35,9 +38,8 @@ fn is_guild_card_component(filename: &str) -> bool {
 
 /// Convert one MH3G 3DS extra-data component into its Cemu save container.
 ///
-/// The official Japanese transfer program copies the payloads of card1-card3,
-/// cardbox, and quest1-quest4 byte-for-byte. Only the outer 3DS container is
-/// replaced with Cemu's 40-byte wrapper.
+/// Card bodies have their own platform-specific scalar and bitfield mapping;
+/// quest bodies are already compatible and only receive the Cemu wrapper.
 pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
@@ -52,18 +54,34 @@ pub fn convert_external_component_to_cemu_named(
         )));
     }
 
+    let source_payload = &source[JP_3DS_HEADER.len()..];
+    let mut payload = source_payload.to_vec();
+    match filename {
+        "card1" | "card2" | "card3" => apply_japanese_wiiu_guild_card_corrections(
+            GuildCardBodyKind::Card,
+            source_payload,
+            &mut payload,
+        )?,
+        "cardbox" => apply_japanese_wiiu_guild_card_corrections(
+            GuildCardBodyKind::Cardbox,
+            source_payload,
+            &mut payload,
+        )?,
+        "quest1" | "quest2" | "quest3" | "quest4" => {}
+        _ => unreachable!("external_component_payload_size validated the component"),
+    }
+
     let mut output = Vec::with_capacity(payload_size + 40);
     output.extend_from_slice(&build_jp_cemu_header(filename, payload_size)?);
-    output.extend_from_slice(&source[JP_3DS_HEADER.len()..]);
+    output.extend_from_slice(&payload);
     Ok(output)
 }
 
 /// Create an empty Cemu guild-card component from a valid 3DS component.
 ///
-/// This is an explicit compatibility fallback, not a semantic conversion: it
-/// creates the same empty component shape as a native Cemu save. It never runs
-/// implicitly because local and received 3DS guild cards cannot be safely
-/// preserved without the platform-specific field mapping.
+/// This is an explicit destructive compatibility fallback, not a semantic
+/// conversion: it creates the same empty component shape as a native Cemu
+/// save. It never runs implicitly because it discards local and received cards.
 pub fn reset_guild_card_component_to_cemu_named(
     source: &[u8],
     filename: &str,
@@ -164,6 +182,7 @@ pub fn convert_source_to_cemu(source: &[u8], filename: &str) -> Result<Vec<u8>, 
 
 #[cfg(test)]
 mod tests {
+    use super::{CARD_PAYLOAD_SIZE, CARDBOX_PAYLOAD_SIZE, QUEST_PAYLOAD_SIZE};
     use crate::{
         converter::{
             convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named,
@@ -174,6 +193,7 @@ mod tests {
             build_jp_cemu_header, inspect_bytes,
         },
     };
+    use sha2::{Digest, Sha256};
 
     fn synthetic_3ds_source() -> Vec<u8> {
         let mut source = (0..THREE_DS_SIZE)
@@ -279,19 +299,83 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wraps_nonempty_3ds_guild_card_payloads_without_changing_their_payload() {
-        let mut source = vec![0_u8; 0x58_000];
+    fn synthetic_external_component(payload_size: usize) -> Vec<u8> {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + payload_size];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
-        source[4..8].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        source[0x1234..0x1238].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+        for (index, byte) in source[JP_3DS_HEADER.len()..].iter_mut().enumerate() {
+            *byte = (index as u8).wrapping_mul(37).wrapping_add(11);
+        }
+        source
+    }
+
+    #[test]
+    fn transforms_card_payload_with_the_recovered_meow_mapping() {
+        let source = synthetic_external_component(CARD_PAYLOAD_SIZE);
+        let source_before = source.clone();
 
         let output = convert_external_component_to_cemu_named(&source, "card2").unwrap();
 
+        assert_eq!(source, source_before);
         assert_eq!(output.len(), 0x58_024);
         assert_eq!(
             &output[..JP_CEMU_HEADER.len()],
-            &build_jp_cemu_header("card2", source.len() - JP_3DS_HEADER.len()).unwrap()
+            &build_jp_cemu_header("card2", CARD_PAYLOAD_SIZE).unwrap()
+        );
+        assert_eq!(
+            hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
+            "9931137041109716779d0849c76a0bece742496da0b3d567e2d86ae2fa147c6a"
+        );
+    }
+
+    #[test]
+    fn transforms_cardbox_payload_with_the_recovered_meow_mapping() {
+        let source = synthetic_external_component(CARDBOX_PAYLOAD_SIZE);
+
+        let output = convert_external_component_to_cemu_named(&source, "cardbox").unwrap();
+
+        assert_eq!(output.len(), 0x30_024);
+        assert_eq!(
+            hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
+            "60d246ee5ff639cd0f67109e82e167a4b0126bc0160da1ab3dc82e440905c877"
+        );
+    }
+
+    #[test]
+    fn remaps_guild_card_journal_dates_and_monster_log_fields() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // A card's latest Hunter's Journal date is day/month/u16-year.
+        body[0x17A..0x17C].copy_from_slice(&[0xEA, 0x07]);
+        // Journal counters are u16 fields inside a 0xA0-byte record.
+        body[0x6378..0x6380].copy_from_slice(&[0x07, 0x07, 0xEA, 0x07, 0x04, 0x00, 0x91, 0x2C]);
+        // Monster-log entries contain four u16 values plus a crown/discovery bitfield.
+        body[0x7C0..0x7CA]
+            .copy_from_slice(&[0x16, 0x00, 0x02, 0x00, 0x78, 0x00, 0x5C, 0x00, 0x03, 0x00]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(&payload[0x17A..0x17C], &[0x07, 0xEA]);
+        assert_eq!(
+            &payload[0x6378..0x6380],
+            &[0x07, 0x07, 0x07, 0xEA, 0x00, 0x04, 0x2C, 0x91]
+        );
+        assert_eq!(
+            &payload[0x7C0..0x7CA],
+            &[0x00, 0x16, 0x00, 0x02, 0x00, 0x78, 0x00, 0x5C, 0xA0, 0x00]
+        );
+    }
+
+    #[test]
+    fn preserves_quest_payloads_byte_for_byte() {
+        let source = synthetic_external_component(QUEST_PAYLOAD_SIZE);
+        let output = convert_external_component_to_cemu_named(&source, "quest1").unwrap();
+
+        assert_eq!(
+            &output[..JP_CEMU_HEADER.len()],
+            &build_jp_cemu_header("quest1", QUEST_PAYLOAD_SIZE).unwrap()
         );
         assert_eq!(
             &output[JP_CEMU_HEADER.len()..],
