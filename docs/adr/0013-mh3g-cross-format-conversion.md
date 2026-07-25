@@ -2,6 +2,7 @@
 
 - Status: Accepted for phase1-alpha
 - Date: 2026-07-19
+- Amended: 2026-07-25
 - Owners: MHToolkit maintainers
 - Review date: 2026-10-19
 
@@ -52,8 +53,10 @@ ranges are preserved byte-for-byte. Preserved bytes are not a claim of semantic
 understanding or full semantic verification.
 
 The official transfer application's archive evidence supports the scope but does
-not extend the transformation table. The table remains pinned to the reviewed
-`3usavetools 0.3.1` provenance and explicit Japanese-wrapper substitution.
+not extend unverified field mappings. Slot-body transforms remain pinned to the
+reviewed `3usavetools 0.3.1` provenance and explicit Japanese-wrapper
+substitution. Shared guild-card-body transforms are separately pinned to the
+local MEOW v5 transfer core, with synthetic and real-body oracle comparisons.
 
 ### Shared extdata and guild cards
 
@@ -63,17 +66,20 @@ the slot-transform differential proof above.
 
 The official Japanese transfer program has one component-name table containing
 the three user slots, `card1`/`card2`/`card3`, `cardbox`, and `quest1` through
-`quest4`. Its card transfer states copy `0x58000` bytes for each `card*` file
-and `0x30000` bytes for `cardbox`; the quest states copy `0x29000` bytes. No
-payload transformation is present in those states. This is independently
-corroborated by a local Japanese 3DS `card2` and its Cemu counterpart whose
-payloads have the same SHA-256
-`6af2f63481dce37f692c0ae1df71d1e3244bb53b2009f3d59b9891e6bc1cbb33`.
+`quest4`. An earlier inference that its visible copy states justified raw card
+payload copying was rejected by a non-empty 3DS/Cemu comparison: a raw `card1`
+body was byte-identical after container replacement but produced impossible
+dates, counters, monster sizes, and a Cemu guest null dereference when an
+offline-hall partner was selected.
 
-`convert-extras` consequently preserves every valid non-empty `card*` payload
-and changes only its 3DS four-byte outer container into Cemu's 40-byte
-wrapper. `--reset-guild-cards` remains available only as an explicit
-destructive recovery option: it writes native empty Cemu components and drops
+`convert-extras` therefore applies the static MEOW v5 3DS-to-Wii U card-body
+mapping to `card1`/`card2`/`card3` and `cardbox`: 4-byte scalar reversals,
+arena-record rotations, 2-byte scalar reversals, and crown/discovery bit
+remapping. Every operation reads the original 3DS body. `quest1` through
+`quest4` remain payload-preserving container conversions. Synthetic card and
+cardbox fixtures, plus a non-empty `card1` oracle, are required regression
+evidence for this mapping. `--reset-guild-cards` remains an explicit
+destructive recovery option that writes native empty Cemu components and drops
 both local and received cards.
 
 The same official program initializes and uses the 3DS `cecd:u` mailbox for
@@ -189,10 +195,9 @@ initially absent state. The original source hash remained unchanged.
 
 Money, playtime, item-box, award, monster-log, arena-record, and the main
 slot's guild-card-related fields have labels in the pinned reference and were
-differentially verified. This does not establish a conversion for the separate
-`card1`/`card2`/`card3`/`cardbox` extdata payloads. The player-header structure,
-equipment box, and Moga points have no independently established field mapping
-in this validation; they have only whole-file differential parity and the
-converter's byte-preservation contract. All checkpoint categories remain
-semantically unverified until Cemu runtime acceptance. No player content or
-save bytes were recorded.
+differentially verified. The separate `card1`/`card2`/`card3`/`cardbox` extdata
+now has a distinct static conversion contract, but it remains file-level
+evidence until Cemu runtime acceptance. The player-header structure, equipment
+box, and Moga points have no independently established field mapping in this
+validation; they have only whole-file differential parity and the converter's
+byte-preservation contract. No player content or save bytes were recorded.

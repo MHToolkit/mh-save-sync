@@ -2,10 +2,11 @@ use crate::{
     ConversionError,
     events::preserve_event_state,
     meow_transform_table::{
-        MEOW_USER_ARENA4, MEOW_USER_CROWN, MEOW_USER_ID32, MEOW_USER_MASKED_SWAP2,
-        MEOW_USER_MASKED_SWAP4, MEOW_USER_OFFICIAL_FIX_ARENA4, MEOW_USER_OFFICIAL_FIX_COPY1,
-        MEOW_USER_OFFICIAL_FIX_SWAP2, MEOW_USER_OFFICIAL_FIX_SWAP4, MEOW_USER_SWAP2,
-        MEOW_USER_SWAP4,
+        MEOW_CARD_ARENA4, MEOW_CARD_CROWN, MEOW_CARD_SWAP2, MEOW_CARD_SWAP4, MEOW_CARDBOX_ARENA4,
+        MEOW_CARDBOX_CROWN, MEOW_CARDBOX_SWAP2, MEOW_CARDBOX_SWAP4, MEOW_USER_ARENA4,
+        MEOW_USER_CROWN, MEOW_USER_ID32, MEOW_USER_MASKED_SWAP2, MEOW_USER_MASKED_SWAP4,
+        MEOW_USER_OFFICIAL_FIX_ARENA4, MEOW_USER_OFFICIAL_FIX_COPY1, MEOW_USER_OFFICIAL_FIX_SWAP2,
+        MEOW_USER_OFFICIAL_FIX_SWAP4, MEOW_USER_SWAP2, MEOW_USER_SWAP4,
     },
     profile::PAYLOAD_SIZE,
     progress::remap_quest_completion,
@@ -42,6 +43,18 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
+const CARD_BODY_SIZE: usize = 0x57_FFC;
+const CARDBOX_BODY_SIZE: usize = 0x2F_FFC;
+
+/// Which guild-card body is being converted.
+///
+/// `card1`/`card2`/`card3` share one full-size body layout, while `cardbox`
+/// uses a compact layout with an independent static operation table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuildCardBodyKind {
+    Card,
+    Cardbox,
+}
 
 fn validate_payload_size(payload: &[u8]) -> Result<(), ConversionError> {
     if payload.len() != PAYLOAD_SIZE {
@@ -247,6 +260,63 @@ fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<()
     let state = source[offset];
     target[offset] =
         ((state & 0x01) << 7) | ((state & 0x02) << 4) | ((state & 0x04) << 4) | (state & 0x08);
+    Ok(())
+}
+
+/// Apply the platform-specific field mapping to an MH3G guild-card body.
+///
+/// The static operations are recovered from the local MEOW v5 transfer core.
+/// Every operation reads the original 3DS body and writes to `target`, matching
+/// the reference transform's source-based semantics.
+pub fn apply_japanese_wiiu_guild_card_corrections(
+    kind: GuildCardBodyKind,
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    let (expected_size, swap4, arena4, swap2, crown): (
+        usize,
+        &[usize],
+        &[usize],
+        &[usize],
+        &[usize],
+    ) = match kind {
+        GuildCardBodyKind::Card => (
+            CARD_BODY_SIZE,
+            &MEOW_CARD_SWAP4,
+            &MEOW_CARD_ARENA4,
+            &MEOW_CARD_SWAP2,
+            &MEOW_CARD_CROWN,
+        ),
+        GuildCardBodyKind::Cardbox => (
+            CARDBOX_BODY_SIZE,
+            &MEOW_CARDBOX_SWAP4,
+            &MEOW_CARDBOX_ARENA4,
+            &MEOW_CARDBOX_SWAP2,
+            &MEOW_CARDBOX_CROWN,
+        ),
+    };
+
+    if source.len() != expected_size || target.len() != expected_size {
+        return Err(ConversionError::InvalidSave(format!(
+            "MH3G {kind:?} body must be {expected_size} bytes, got source {} and target {}",
+            source.len(),
+            target.len()
+        )));
+    }
+
+    for &offset in swap4 {
+        copy_reversed(source, target, offset, 4)?;
+    }
+    for &offset in arena4 {
+        transform_arena4(source, target, offset)?;
+    }
+    for &offset in swap2 {
+        copy_reversed(source, target, offset, 2)?;
+    }
+    for &offset in crown {
+        transform_crown(source, target, offset)?;
+    }
+
     Ok(())
 }
 
