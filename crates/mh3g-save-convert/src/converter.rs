@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "9931137041109716779d0849c76a0bece742496da0b3d567e2d86ae2fa147c6a"
+            "915ef8bf5ee22ee22d2260f58dca09bacef85b6f32aaf71bf4088a5feb7f7fd6"
         );
     }
 
@@ -365,6 +365,50 @@ mod tests {
         assert_eq!(
             &payload[0x7C0..0x7CA],
             &[0x00, 0x16, 0x00, 0x02, 0x00, 0x78, 0x00, 0x5C, 0xA0, 0x00]
+        );
+    }
+
+    #[test]
+    fn remaps_each_received_card_monster_record_as_four_independent_u16_values() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // A full card body stores received cards in 0xE00-byte slots.  The
+        // 50-entry monster log begins at +0x7C0; each row has four u16 fields
+        // followed by its crown/discovery bytes.  A non-first slot catches the
+        // historical table-driven cross-field u32 swap.
+        let second_card_row = 0xE00 + 0x7C0 + 32 * 10;
+        body[second_card_row..second_card_row + 10]
+            .copy_from_slice(&[0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0x00, 0x03, 0x00]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[second_card_row..second_card_row + 8],
+            &[0x00, 0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65]
+        );
+    }
+
+    #[test]
+    fn remaps_every_received_card_friendship_score() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // Slot 98 contains 0x38-byte received-card summary records. The
+        // earlier sparse MEOW table missed this fifth friendship score, leaving
+        // the 3DS little-endian 0x00000F10 as a huge Wii U number.
+        let fifth_score = 98 * 0xE00 + 4 * 0x38 + 0x34;
+        body[fifth_score..fifth_score + 4].copy_from_slice(&[0x10, 0x0F, 0x00, 0x00]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[fifth_score..fifth_score + 4],
+            &[0x00, 0x00, 0x0F, 0x10]
         );
     }
 
