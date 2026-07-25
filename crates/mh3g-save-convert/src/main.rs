@@ -61,7 +61,7 @@ enum Command {
         #[arg(long)]
         source_slot: Option<PathBuf>,
     },
-    /// Experimentally import raw MH3G StreetPass/CEC records into a Cemu `cec` cache.
+    /// Experimentally import raw received MH3G StreetPass/CEC records from InBox___ into a Cemu `cec` cache.
     ConvertCec {
         /// 3DS CEC mailbox directory (usually .../CEC/00048100).
         #[arg(long)]
@@ -70,7 +70,7 @@ enum Command {
         /// observed Japanese Cemu container header.
         #[arg(long)]
         target: PathBuf,
-        /// Optional first Cemu slot to use; subsequent records use following
+        /// Optional first Cemu slot to use; subsequent received records use following
         /// empty slots. Existing non-empty slots are never overwritten.
         #[arg(long)]
         slot: Option<usize>,

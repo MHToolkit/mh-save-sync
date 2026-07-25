@@ -124,9 +124,11 @@ outbox message. For the MH3G message shape (`body_size == 0x2A08`) it also
 reports the read-only `0x2A00` record-shaped candidate after the observed
 8-byte body prefix. Cemu stores 50 fixed-size record slots after a 0x1FC-byte
 cache prefix. `convert-cec` is an **experimental raw-slot candidate**, not a
-verified received-guild-card migration. It copies each non-empty MH3G record
-into the first available empty slot (or slots at/after `--slot`) and never
-overwrites an existing non-empty slot:
+verified received-guild-card migration. It considers only records in
+`InBox___`: `OutBox__` describes the source hunter's own outgoing transmission
+and is intentionally never written to Cemu. It copies each non-empty received
+MH3G record into the first available empty slot (or slots at/after `--slot`)
+and never overwrites an existing non-empty slot:
 
 ```bash
 # Read only: plan the import and print before/after hashes.
