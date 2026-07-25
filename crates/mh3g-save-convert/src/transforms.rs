@@ -45,6 +45,16 @@ const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
 const CARD_BODY_SIZE: usize = 0x57_FFC;
 const CARDBOX_BODY_SIZE: usize = 0x2F_FFC;
+pub const GUILD_CARD_SLOT_SIZE: usize = 0xE00;
+const GUILD_CARD_SLOT_COUNT: usize = 100;
+const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
+const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
+const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
+const GUILD_CARD_METADATA_SLOT: usize = 98;
+const GUILD_CARD_METADATA_START: usize = GUILD_CARD_METADATA_SLOT * GUILD_CARD_SLOT_SIZE;
+const GUILD_CARD_METADATA_RECORD_COUNT: usize = 33;
+const GUILD_CARD_METADATA_RECORD_STRIDE: usize = 0x38;
+const GUILD_CARD_METADATA_FRIENDSHIP_OFFSET: usize = 0x34;
 
 /// Which guild-card body is being converted.
 ///
@@ -263,6 +273,105 @@ fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<()
     Ok(())
 }
 
+fn apply_guild_card_monster_log_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        let slot_start = slot * GUILD_CARD_SLOT_SIZE;
+        for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
+            let record_start =
+                slot_start + GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE;
+            // A monster-log row is four adjacent u16 values (slays, captures,
+            // maximum size, minimum size), followed by crown/discovery bytes.
+            // The static MEOW table treats a subset of these bytes as broader
+            // scalar spans. Reassert the confirmed field boundaries after it.
+            for relative in [0, 2, 4, 6] {
+                copy_reversed(source, target, record_start + relative, 2)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_guild_card_metadata_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    // Received-card summary records occupy slot 98. The 3DS stores each
+    // friendship score as a little-endian u32 at +0x34 of a 0x38-byte record;
+    // Wii U reads the same field as big-endian. The recovered sparse table
+    // covered only the first four records, leaving later cards with values
+    // such as 25,007,226.88 after the platform conversion.
+    for record in 0..GUILD_CARD_METADATA_RECORD_COUNT {
+        let offset = GUILD_CARD_METADATA_START
+            + record * GUILD_CARD_METADATA_RECORD_STRIDE
+            + GUILD_CARD_METADATA_FRIENDSHIP_OFFSET;
+        copy_reversed(source, target, offset, 4)?;
+    }
+
+    Ok(())
+}
+
+/// Apply the first fixed guild-card slot's mapping to a standalone slot.
+///
+/// CEC/StreetPass records pack three 0xE00-byte received cards, while the
+/// `card1`/`card2`/`card3` files contain the same slot shape inside a larger
+/// body. The recovered MEOW table is expressed in full-body offsets, so only
+/// operations in the first slot are selected and then applied to the packed
+/// slot. This keeps the CEC path from copying 3DS little-endian scalars into a
+/// Wii U cache unchanged.
+pub fn apply_japanese_wiiu_guild_card_slot_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    if source.len() != GUILD_CARD_SLOT_SIZE || target.len() != GUILD_CARD_SLOT_SIZE {
+        return Err(ConversionError::InvalidSave(format!(
+            "MH3G guild-card slot must be {GUILD_CARD_SLOT_SIZE} bytes, got source {} and target {}",
+            source.len(),
+            target.len()
+        )));
+    }
+
+    for &offset in MEOW_CARD_SWAP4
+        .iter()
+        .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
+    {
+        copy_reversed(source, target, offset, 4)?;
+    }
+    for &offset in MEOW_CARD_ARENA4
+        .iter()
+        .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
+    {
+        transform_arena4(source, target, offset)?;
+    }
+    for &offset in MEOW_CARD_SWAP2
+        .iter()
+        .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
+    {
+        copy_reversed(source, target, offset, 2)?;
+    }
+    for &offset in MEOW_CARD_CROWN
+        .iter()
+        .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
+    {
+        transform_crown(source, target, offset)?;
+    }
+
+    // The static table has irregular coverage of the 50-row monster log. The
+    // confirmed row schema is four independent u16 values plus crown bytes;
+    // reassert those field boundaries for every packed card slot.
+    for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
+        let record_start = GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE;
+        for relative in [0, 2, 4, 6] {
+            copy_reversed(source, target, record_start + relative, 2)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Apply the platform-specific field mapping to an MH3G guild-card body.
 ///
 /// The static operations are recovered from the local MEOW v5 transfer core.
@@ -315,6 +424,11 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
     }
     for &offset in crown {
         transform_crown(source, target, offset)?;
+    }
+
+    if kind == GuildCardBodyKind::Card {
+        apply_guild_card_monster_log_corrections(source, target)?;
+        apply_guild_card_metadata_corrections(source, target)?;
     }
 
     Ok(())

@@ -11,6 +11,7 @@ use crate::{
     ConversionError,
     profile::build_jp_cemu_header,
     transaction::{MacOsProcessProbe, ProcessProbe, sha256_hex},
+    transforms::{GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections},
 };
 
 const BOX_INFO_SIZE: usize = 0x20;
@@ -20,6 +21,7 @@ pub const CEMU_CEC_PAYLOAD_SIZE: usize = 0x835FC;
 pub const CEMU_RECORD_AREA_OFFSET: usize = 0x1FC;
 pub const CEMU_RECORD_SLOT_SIZE: usize = 0x2A00;
 pub const CEMU_RECORD_SLOT_COUNT: usize = 50;
+const CEC_GUILD_CARD_SLOT_COUNT: usize = CEMU_RECORD_SLOT_SIZE / GUILD_CARD_SLOT_SIZE;
 const CEC_SOURCE_RECORD_PREFIX_SIZE: usize = 8;
 const MH3G_TITLE_ID: u32 = 0x0004_8100;
 const MH3G_BODY_SIZE: usize = CEC_SOURCE_RECORD_PREFIX_SIZE + CEMU_RECORD_SLOT_SIZE;
@@ -488,6 +490,23 @@ pub fn convert_cec_records(
 
     let mut output = target_bytes.to_vec();
     let before_sha256 = sha256_hex(target_bytes);
+    let records = records
+        .into_iter()
+        .map(|mut record| {
+            let source = record.record.clone();
+            let mut converted = source.clone();
+            for slot in 0..CEC_GUILD_CARD_SLOT_COUNT {
+                let start = slot * GUILD_CARD_SLOT_SIZE;
+                let end = start + GUILD_CARD_SLOT_SIZE;
+                apply_japanese_wiiu_guild_card_slot_corrections(
+                    &source[start..end],
+                    &mut converted[start..end],
+                )?;
+            }
+            record.record = converted;
+            Ok(record)
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
     let mut pending = Vec::new();
     for record in records {
         let already_present = (0..CEMU_RECORD_SLOT_COUNT).any(|slot| {
@@ -826,6 +845,53 @@ mod tests {
         assert_eq!(
             CEMU_CEC_PAYLOAD_SIZE,
             CEMU_RECORD_AREA_OFFSET + CEMU_RECORD_SLOT_COUNT * CEMU_RECORD_SLOT_SIZE
+        );
+        assert_eq!(CEC_GUILD_CARD_SLOT_COUNT, 3);
+        assert_eq!(
+            CEMU_RECORD_SLOT_SIZE,
+            CEC_GUILD_CARD_SLOT_COUNT * GUILD_CARD_SLOT_SIZE
+        );
+    }
+
+    #[test]
+    fn converts_packed_guild_card_scalars_before_cec_insertion() {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("InBox___");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
+
+        let slot_start = 0xE00;
+        let date_field = slot_start + 0x17A;
+        let record_field = slot_start + 0x7C0 + 32 * 10;
+        let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
+        record[record_field..record_field + 10]
+            .copy_from_slice(&[0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0x00, 0x03, 0x00]);
+
+        let body_size = CEC_SOURCE_RECORD_PREFIX_SIZE + CEMU_RECORD_SLOT_SIZE;
+        let header_size = MESSAGE_HEADER_SIZE;
+        let mut message = vec![0_u8; header_size + body_size];
+        let message_size = message.len() as u32;
+        message[0..2].copy_from_slice(&0x6060_u16.to_le_bytes());
+        message[4..8].copy_from_slice(&message_size.to_le_bytes());
+        message[8..12].copy_from_slice(&(header_size as u32).to_le_bytes());
+        message[12..16].copy_from_slice(&(body_size as u32).to_le_bytes());
+        message[16..20].copy_from_slice(&MH3G_TITLE_ID.to_le_bytes());
+        message[header_size + CEC_SOURCE_RECORD_PREFIX_SIZE..].copy_from_slice(&record);
+        fs::write(inbox.join("_A"), message).unwrap();
+
+        let target = empty_cemu_cec().unwrap();
+        let conversion = convert_cec_records(temp.path(), &target, None).unwrap();
+        let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
+        let converted_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + record_field;
+
+        assert_eq!(
+            &conversion.bytes[converted_date..converted_date + 2],
+            &[0x07, 0xEA]
+        );
+        assert_eq!(
+            &conversion.bytes[converted_offset..converted_offset + 10],
+            &[0x00, 0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0xA0, 0x00]
         );
     }
 
