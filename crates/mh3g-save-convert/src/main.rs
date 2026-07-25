@@ -8,6 +8,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use mh3g_save_convert::{
     ConversionError,
+    cec::{convert_cec_records, empty_cemu_cec, inspect_cec, install_cec, rollback_cec},
     converter::{
         EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
         reset_guild_card_component_to_cemu_named,
@@ -47,6 +48,45 @@ enum Command {
         /// Include unset event coordinates as well as active ones.
         #[arg(long)]
         all: bool,
+    },
+    /// Inspect 3DS CEC/StreetPass messages and an optional Cemu cec cache.
+    InspectCec {
+        /// 3DS CEC mailbox directory (usually .../CEC/00048100).
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// Cemu MH3G `cec` file to inspect, without modifying it.
+        #[arg(long)]
+        target: Option<PathBuf>,
+        /// Optional 3DS `user#` slot used to locate its guild-card anchor in CEC messages.
+        #[arg(long)]
+        source_slot: Option<PathBuf>,
+    },
+    /// Experimentally import raw MH3G StreetPass/CEC records into a Cemu `cec` cache.
+    ConvertCec {
+        /// 3DS CEC mailbox directory (usually .../CEC/00048100).
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// Cemu MH3G `cec` cache. A missing file is initialized with the
+        /// observed Japanese Cemu container header.
+        #[arg(long)]
+        target: PathBuf,
+        /// Optional first Cemu slot to use; subsequent records use following
+        /// empty slots. Existing non-empty slots are never overwritten.
+        #[arg(long)]
+        slot: Option<usize>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run", requires = "experimental")]
+        write: bool,
+        /// Acknowledge that raw CEC slot placement has file-level evidence only
+        /// and has not been verified in the Wii U guild-card UI.
+        #[arg(long)]
+        experimental: bool,
+    },
+    /// Roll back a prior CEC import from its `.cec.mh3g-install.json` manifest.
+    RollbackCec {
+        #[arg(long)]
+        manifest: PathBuf,
     },
     /// Convert a Japanese MH3G 3DS slot, dry-running unless --write is given.
     Convert {
@@ -187,6 +227,26 @@ struct ExtrasReport {
     status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct CecConversionReport {
+    source_dir: PathBuf,
+    target: PathBuf,
+    imported_messages: usize,
+    source_record_sha256: Vec<String>,
+    slots: Vec<usize>,
+    target_sha256_before: String,
+    target_sha256_after: String,
+    backup: Option<PathBuf>,
+    manifest: Option<PathBuf>,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct CecRollbackReport {
+    manifest: PathBuf,
+    status: &'static str,
+}
+
 fn main() {
     if let Err(error) = run(Cli::parse()) {
         eprintln!("{error}");
@@ -212,6 +272,42 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             "{}",
             serde_json::to_string(&inspect_events(source, target, all)?)?
         ),
+        Command::InspectCec {
+            source_dir,
+            target,
+            source_slot,
+        } => println!(
+            "{}",
+            serde_json::to_string(&inspect_cec(source_dir, target, source_slot)?)?
+        ),
+        Command::ConvertCec {
+            source_dir,
+            target,
+            slot,
+            dry_run,
+            write,
+            experimental,
+        } => println!(
+            "{}",
+            serde_json::to_string(&convert_cec(
+                source_dir,
+                target,
+                slot,
+                dry_run,
+                write,
+                experimental,
+            )?)?
+        ),
+        Command::RollbackCec { manifest } => {
+            rollback_cec(&manifest)?;
+            println!(
+                "{}",
+                serde_json::to_string(&CecRollbackReport {
+                    manifest,
+                    status: "rolled-back",
+                })?
+            );
+        }
         Command::ConvertExtras {
             source_dir,
             output_dir,
@@ -246,12 +342,61 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 Command::Rollback { manifest } => rollback_save(manifest)?,
                 Command::InspectProgress { .. }
                 | Command::InspectEvents { .. }
+                | Command::InspectCec { .. }
+                | Command::ConvertCec { .. }
+                | Command::RollbackCec { .. }
                 | Command::ConvertExtras { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
         }
     }
     Ok(())
+}
+
+fn convert_cec(
+    source_dir: PathBuf,
+    target: PathBuf,
+    slot: Option<usize>,
+    dry_run: bool,
+    write: bool,
+    experimental: bool,
+) -> Result<CecConversionReport, ConversionError> {
+    debug_assert!(!(dry_run && write));
+    if write && !experimental {
+        return Err(ConversionError::UnsafeInstall(
+            "raw CEC import requires --experimental acknowledgement".to_owned(),
+        ));
+    }
+    let target_bytes = match fs::read(&target) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
+        Err(error) => return Err(error.into()),
+    };
+    let conversion = convert_cec_records(&source_dir, &target_bytes, slot)?;
+    let source_record_sha256 = conversion
+        .records
+        .iter()
+        .map(|record| record.sha256.clone())
+        .collect::<Vec<_>>();
+    let mut report = CecConversionReport {
+        source_dir: source_dir.clone(),
+        target: target.clone(),
+        imported_messages: conversion.records.len(),
+        source_record_sha256,
+        slots: conversion.slots.clone(),
+        target_sha256_before: conversion.before_sha256.clone(),
+        target_sha256_after: conversion.after_sha256.clone(),
+        backup: None,
+        manifest: None,
+        status: "dry-run",
+    };
+    if write {
+        let installed = install_cec(&source_dir, &target, &conversion)?;
+        report.backup = installed.backup;
+        report.manifest = Some(installed.manifest);
+        report.status = "written";
+    }
+    Ok(report)
 }
 
 fn inspect_progress(

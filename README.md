@@ -71,16 +71,16 @@ simple-event words at `0x62AE` and preserves the byte-addressed categorized
 event table at `0x668C`. Static table provenance is pinned in
 `crates/mh3g-save-convert/data/catalog-provenance.json`.
 
-### Shared extdata: guild cards and quests
+### Shared extdata, guild cards, and StreetPass CEC
 
 `card1`, `card2`, `card3`, `cardbox`, and `quest1` through `quest4` are shared
 3DS extdata files, separate from `user1`/`user2`/`user3`. They must not be
 treated as part of a successful slot conversion merely because `user#` loads.
 
-The official Japanese transfer program copies all eight component payloads
-byte-for-byte and only replaces the outer container. `convert-extras` follows
-that behavior, so non-empty `card1`/`card2`/`card3`/`cardbox` data, including
-received guild cards, is preserved by default:
+The official Japanese transfer program has byte-copy states for these eight
+components. `convert-extras` preserves that component payload structure and
+only replaces the outer container. This is a file-level operation, not proof
+that every received guild card works in the Wii U UI:
 
 ```bash
 EXTRAS_SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/extdata/00000000/00000481/user"
@@ -103,6 +103,54 @@ rtk cargo run -p mh3g-save-convert -- convert-extras \
 normal migration. It replaces every `card*` payload with an empty native-Cemu
 component and therefore discards both local and received guild cards. Keep the
 source extdata and install only after making a backup of the Cemu destination.
+
+StreetPass/Hunter Search data is a separate 3DS CEC mailbox. It is not stored
+in `card*`, and it is not migrated by `convert-extras`. Before attempting any
+future semantic CEC conversion, inspect both sides without writing:
+
+```bash
+CEC_SOURCE="$HOME/Library/Application Support/Nemessix/nand/data/00000000000000000000000000000000/sysdata/00010026/00000000/CEC/00048100"
+CEMU_CEC="$CEMU_DIR/cec"
+
+rtk cargo run -p mh3g-save-convert -- inspect-cec \
+  --source-dir "$CEC_SOURCE" \
+  --source-slot "$SOURCE" \
+  --target "$CEMU_CEC"
+```
+
+The report gives the 3DS CEC inbox/outbox counts, validates each message
+header, and reports whether the source slot's guild-card anchor occurs in an
+outbox message. For the MH3G message shape (`body_size == 0x2A08`) it also
+reports the read-only `0x2A00` record-shaped candidate after the observed
+8-byte body prefix. Cemu stores 50 fixed-size record slots after a 0x1FC-byte
+cache prefix. `convert-cec` is an **experimental raw-slot candidate**, not a
+verified received-guild-card migration. It copies each non-empty MH3G record
+into the first available empty slot (or slots at/after `--slot`) and never
+overwrites an existing non-empty slot:
+
+```bash
+# Read only: plan the import and print before/after hashes.
+rtk cargo run -p mh3g-save-convert -- convert-cec \
+  --source-dir "$CEC_SOURCE" \
+  --target "$CEMU_CEC" \
+  --dry-run
+
+# All emulators must be stopped. Write atomically and keep a hash-addressed
+# .cec.mh3g-backup-* plus .cec.mh3g-install.json beside the target.
+rtk cargo run -p mh3g-save-convert -- convert-cec \
+  --source-dir "$CEC_SOURCE" \
+  --target "$CEMU_CEC" \
+  --write --experimental
+
+# If the runtime check is not useful, restore the exact pre-write cec file.
+rtk cargo run -p mh3g-save-convert -- rollback-cec \
+  --manifest "$CEMU_DIR/.cec.mh3g-install.json"
+```
+
+The source 3DS wrapper and its 8-byte message prefix are intentionally not
+copied. The raw record placement is backed by the observed Japanese Cemu
+container geometry and an isolated Cemu process-memory canary, but the
+in-game guild-card list and Hunter Search UI still require runtime validation.
 
 ### Windows 11 x64 test package
 

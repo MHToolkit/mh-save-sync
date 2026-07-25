@@ -1,3 +1,4 @@
+pub mod cec;
 pub mod converter;
 pub mod events;
 #[allow(clippy::large_const_arrays)]
