@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "915ef8bf5ee22ee22d2260f58dca09bacef85b6f32aaf71bf4088a5feb7f7fd6"
+            "434a608cd750888672dde33c4a8bda093bf3c0416d7cd692ea07580ac2206cc1"
         );
     }
 
@@ -388,6 +388,117 @@ mod tests {
         assert_eq!(
             &payload[second_card_row..second_card_row + 8],
             &[0x00, 0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65]
+        );
+    }
+
+    #[test]
+    fn remaps_every_received_card_weapon_usage_counter_as_an_independent_u16() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // Each 0xE00-byte card slot embeds the same 36-entry (three pages of
+        // twelve) u16 weapon-use counter array as user#.  The static table
+        // contains a sparse mixture of 2- and 4-byte spans: the latter swaps
+        // adjacent counters.  A non-first slot catches that regression.
+        let third_card_usage = 2 * 0xE00 + 0x12C;
+        body[third_card_usage..third_card_usage + 8]
+            .copy_from_slice(&[0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37, 0x00]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[third_card_usage..third_card_usage + 8],
+            &[0x00, 0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37]
+        );
+    }
+
+    #[test]
+    fn keeps_offline_hunter_roster_identities_linked_to_received_cards() {
+        let mut user_source = vec![0_u8; JP_3DS_HEADER.len() + PAYLOAD_SIZE];
+        user_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let mut card_source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        card_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+
+        // The offline-hall roster stores a received-card identity at +0x48
+        // of each 0x70-byte record.  The corresponding guild-card slot stores
+        // the same identity at +0x5c.  Both sides must apply the same field
+        // boundaries or the game creates a selectable marker without a model
+        // or name because its card lookup returns null.
+        let cases = [
+            (
+                0,
+                3,
+                [0x02, 0x07, 0x3E, 0x01, 0xFF, 0xFC, 0xFC, 0xFD],
+                [0x02, 0x07, 0x01, 0x3E, 0xFD, 0xFC, 0xFC, 0xFF],
+            ),
+            (
+                2,
+                10,
+                [0x02, 0x03, 0x6E, 0x00, 0xFF, 0x5C, 0x3F, 0x27],
+                [0x02, 0x03, 0x00, 0x6E, 0x27, 0x3F, 0x5C, 0xFF],
+            ),
+        ];
+        for (roster_record, card_slot, source_id, _) in cases {
+            let roster_id = 0x75E0 + roster_record * 0x70 + 0x48;
+            user_source[JP_3DS_HEADER.len() + roster_id
+                ..JP_3DS_HEADER.len() + roster_id + source_id.len()]
+                .copy_from_slice(&source_id);
+            let card_id = card_slot * 0xE00 + 0x5C;
+            card_source
+                [JP_3DS_HEADER.len() + card_id..JP_3DS_HEADER.len() + card_id + source_id.len()]
+                .copy_from_slice(&source_id);
+        }
+
+        let user_output = convert_3ds_to_cemu_named(&user_source, "user1").unwrap();
+        let card_output = convert_external_component_to_cemu_named(&card_source, "card1").unwrap();
+        let user_body = &user_output[JP_CEMU_HEADER.len()..];
+        let card_body = &card_output[JP_CEMU_HEADER.len()..];
+
+        for (roster_record, card_slot, _, expected_id) in cases {
+            let roster_id = 0x75E0 + roster_record * 0x70 + 0x48;
+            let card_id = card_slot * 0xE00 + 0x5C;
+            assert_eq!(&user_body[roster_id..roster_id + 8], &expected_id);
+            assert_eq!(&card_body[card_id..card_id + 8], &expected_id);
+        }
+    }
+
+    #[test]
+    fn does_not_apply_card_slot_schema_to_the_received_card_metadata_region() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // The Wii U lookup scans 0x62 (98) 0xe00-byte card slots.  The next
+        // region, beginning at logical slot 98, contains 0x38-byte summary
+        // records rather than another guild card.  Applying card identity,
+        // weapon-use, or monster-log field boundaries there corrupts metadata.
+        let metadata_start = 98 * 0xE00;
+        let identity_shaped_offset = metadata_start + 0x5C;
+        let weapon_shaped_offset = metadata_start + 0x12C;
+        let monster_shaped_offset = metadata_start + 0x7C0;
+        body[identity_shaped_offset..identity_shaped_offset + 8]
+            .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        body[weapon_shaped_offset..weapon_shaped_offset + 8]
+            .copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        body[monster_shaped_offset..monster_shaped_offset + 8]
+            .copy_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[identity_shaped_offset..identity_shaped_offset + 8],
+            &[1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        assert_eq!(
+            &payload[weapon_shaped_offset..weapon_shaped_offset + 8],
+            &[9, 10, 11, 12, 13, 14, 15, 16]
+        );
+        assert_eq!(
+            &payload[monster_shaped_offset..monster_shaped_offset + 8],
+            &[17, 18, 19, 20, 21, 22, 23, 24]
         );
     }
 
