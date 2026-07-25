@@ -47,6 +47,7 @@ const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
 const OFFLINE_HUNTER_STRIDE: usize = 0x70;
+const OFFLINE_HUNTER_HR_OFFSET: usize = 0x04;
 const OFFLINE_HUNTER_NAME_START: usize = 0x1C;
 const OFFLINE_HUNTER_NAME_SIZE: usize = 0x10;
 const OFFLINE_HUNTER_EQUIPMENT_COUNT: usize = 5;
@@ -60,6 +61,7 @@ pub const GUILD_CARD_SLOT_SIZE: usize = 0xE00;
 // The native Wii U lookup scans exactly 0x62 card slots. Logical slot 98 and
 // the trailing body are summary/index metadata with a different record shape.
 const GUILD_CARD_SLOT_COUNT: usize = 0x62;
+const GUILD_CARD_HR_OFFSET: usize = 0x14;
 const GUILD_CARD_EQUIPMENT_START: usize = 0x4C;
 const GUILD_CARD_EQUIPMENT_COUNT: usize = 5;
 const GUILD_CARD_EQUIPMENT_STRIDE: usize = 0x10;
@@ -333,6 +335,22 @@ fn apply_guild_card_weapon_usage_corrections(
     Ok(())
 }
 
+fn apply_guild_card_hr_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        copy_reversed(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE + GUILD_CARD_HR_OFFSET,
+            2,
+        )?;
+    }
+
+    Ok(())
+}
+
 fn transform_compact_equipment_header(
     source: &[u8],
     target: &mut [u8],
@@ -377,6 +395,7 @@ fn apply_offline_hunter_roster_corrections(
 ) -> Result<(), ConversionError> {
     for hunter in 0..OFFLINE_HUNTER_COUNT {
         let header_start = OFFLINE_HUNTER_HEADER_START + hunter * OFFLINE_HUNTER_STRIDE;
+        copy_reversed(source, target, header_start + OFFLINE_HUNTER_HR_OFFSET, 2)?;
         let name_start = header_start + OFFLINE_HUNTER_NAME_START;
         validate_range(
             source,
@@ -484,6 +503,7 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
             2,
         )?;
     }
+    copy_reversed(source, target, GUILD_CARD_HR_OFFSET, 2)?;
 
     for equipment in 0..GUILD_CARD_EQUIPMENT_COUNT {
         transform_compact_equipment_header(
@@ -564,6 +584,7 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
     }
 
     if kind == GuildCardBodyKind::Card {
+        apply_guild_card_hr_corrections(source, target)?;
         apply_guild_card_equipment_corrections(source, target)?;
         apply_guild_card_weapon_usage_corrections(source, target)?;
         apply_guild_card_monster_log_corrections(source, target)?;
