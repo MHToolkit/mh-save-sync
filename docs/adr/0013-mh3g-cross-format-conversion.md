@@ -82,6 +82,23 @@ evidence for this mapping. `--reset-guild-cards` remains an explicit
 destructive recovery option that writes native empty Cemu components and drops
 both local and received cards.
 
+The received-card body has 98 full `0xE00` slots. Each slot's five compact
+equipment headers at `+0x4C + n*0x10` are `copy2 + swap2 + swap4`; its two
+trailing color values at `+0x110` and `+0x114` are independent `swap4` fields.
+The trailer begins at `0x55C00`; after a 12-byte header it contains 33 summary
+records of stride `0x38`, with the year at `+0x02` and friendship score at
+`+0x28`. Slot transforms must stop after slot 97 and must not be applied to the
+trailer.
+
+The matching offline-hunter cache in `user#` is interleaved rather than six
+contiguous `0x70` records. Hunter `i` has a `0x30` equipment cache at
+`0x75B0 + i*0x70` and a `0x40` header at `0x75E0 + i*0x70`. The cache contains
+the same five compact equipment headers followed by independent colors at
+`+0x28` and `+0x2C`; the header's 16-byte name at `+0x1C` remains opaque. The
+eight-byte card anchor at header `+0x10` matches card slot `+0x11A`. The
+candidate queue beginning at `0x7850`, including its anchor at `+0x0A`, remains
+opaque because its remaining field semantics are not yet proven.
+
 The same official program initializes and uses the 3DS `cecd:u` mailbox for
 MH3G (`0x00048100`). CEC/StreetPass messages are outside the eight extdata
 components. The observed MH3G outgoing message has a `0xD80` header and a
@@ -106,6 +123,12 @@ That status requires a later stopped-emulator install, real Japanese MH3G HD
 Cemu load/readback, source-hash verification, and rollback evidence.
 
 ## Migration and rollback
+
+Save bundles generated before the full received-card equipment/cache mapping
+must be regenerated from the original 3DS `user#` and extdata components; an
+incremental byte patch is not supported. Installation still requires a stopped
+emulator and a snapshot of every destination component. Existing install
+manifests and component backups remain the rollback authority.
 
 `inspect` is read-only. `convert` is dry-run unless `--write` is specified.
 Before a write or rollback, Nemessix, Azahar, and Cemu must all be stopped; the

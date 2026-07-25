@@ -861,13 +861,26 @@ mod tests {
         fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
 
         let slot_start = 0xE00;
-        let identity_field = slot_start + 0x5C;
         let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
         let record_field = slot_start + 0x7C0 + 32 * 10;
         let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
-        record[identity_field..identity_field + 8]
-            .copy_from_slice(&[0x02, 0x07, 0x3E, 0x01, 0xFF, 0xFC, 0xFC, 0xFD]);
+        for equipment in 0_u8..5 {
+            let equipment_field = slot_start + 0x4C + usize::from(equipment) * 0x10;
+            record[equipment_field..equipment_field + 8].copy_from_slice(&[
+                equipment + 1,
+                0x70,
+                0x20 + equipment,
+                0x30,
+                0xA0 + equipment,
+                0xB0,
+                0xC0 + equipment,
+                0xD0,
+            ]);
+        }
+        let tail_colors = slot_start + 0x110;
+        record[tail_colors..tail_colors + 8]
+            .copy_from_slice(&[0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78, 0x89]);
         record[weapon_usage_field..weapon_usage_field + 8]
             .copy_from_slice(&[0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37, 0x00]);
         record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
@@ -888,15 +901,33 @@ mod tests {
 
         let target = empty_cemu_cec().unwrap();
         let conversion = convert_cec_records(temp.path(), &target, None).unwrap();
-        let converted_identity = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + identity_field;
         let converted_weapon_usage =
             CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + weapon_usage_field;
         let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
         let converted_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + record_field;
 
+        for equipment in 0_u8..5 {
+            let equipment_field = slot_start + 0x4C + usize::from(equipment) * 0x10;
+            let converted_equipment = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + equipment_field;
+            assert_eq!(
+                &conversion.bytes[converted_equipment..converted_equipment + 8],
+                &[
+                    equipment + 1,
+                    0x70,
+                    0x30,
+                    0x20 + equipment,
+                    0xD0,
+                    0xC0 + equipment,
+                    0xB0,
+                    0xA0 + equipment,
+                ],
+                "CEC equipment {equipment}"
+            );
+        }
+        let converted_tail_colors = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + tail_colors;
         assert_eq!(
-            &conversion.bytes[converted_identity..converted_identity + 8],
-            &[0x02, 0x07, 0x01, 0x3E, 0xFD, 0xFC, 0xFC, 0xFF]
+            &conversion.bytes[converted_tail_colors..converted_tail_colors + 8],
+            &[0x45, 0x34, 0x23, 0x12, 0x89, 0x78, 0x67, 0x56]
         );
         assert_eq!(
             &conversion.bytes[converted_weapon_usage..converted_weapon_usage + 8],

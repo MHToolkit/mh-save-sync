@@ -43,27 +43,35 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
-const OFFLINE_HUNTER_ROSTER_START: usize = 0x75E0;
-const OFFLINE_HUNTER_ROSTER_COUNT: usize = 6;
-const OFFLINE_HUNTER_ROSTER_STRIDE: usize = 0x70;
-const OFFLINE_HUNTER_CARD_ID_START: usize = 0x48;
+const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
+const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
+const OFFLINE_HUNTER_COUNT: usize = 6;
+const OFFLINE_HUNTER_STRIDE: usize = 0x70;
+const OFFLINE_HUNTER_NAME_START: usize = 0x1C;
+const OFFLINE_HUNTER_NAME_SIZE: usize = 0x10;
+const OFFLINE_HUNTER_EQUIPMENT_COUNT: usize = 5;
+const OFFLINE_HUNTER_EQUIPMENT_STRIDE: usize = 8;
+const OFFLINE_HUNTER_TAIL_COLOR_OFFSETS: [usize; 2] = [0x28, 0x2C];
 const CARD_BODY_SIZE: usize = 0x57_FFC;
 const CARDBOX_BODY_SIZE: usize = 0x2F_FFC;
 pub const GUILD_CARD_SLOT_SIZE: usize = 0xE00;
 // The native Wii U lookup scans exactly 0x62 card slots. Logical slot 98 and
 // the trailing body are summary/index metadata with a different record shape.
 const GUILD_CARD_SLOT_COUNT: usize = 0x62;
-const GUILD_CARD_ID_START: usize = 0x5C;
+const GUILD_CARD_EQUIPMENT_START: usize = 0x4C;
+const GUILD_CARD_EQUIPMENT_COUNT: usize = 5;
+const GUILD_CARD_EQUIPMENT_STRIDE: usize = 0x10;
+const GUILD_CARD_TAIL_COLOR_OFFSETS: [usize; 2] = [0x110, 0x114];
 const GUILD_CARD_WEAPON_USAGE_START: usize = 0x12C;
 const GUILD_CARD_WEAPON_USAGE_COUNT: usize = 36;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
-const GUILD_CARD_METADATA_SLOT: usize = 98;
-const GUILD_CARD_METADATA_START: usize = GUILD_CARD_METADATA_SLOT * GUILD_CARD_SLOT_SIZE;
-const GUILD_CARD_METADATA_RECORD_COUNT: usize = 33;
-const GUILD_CARD_METADATA_RECORD_STRIDE: usize = 0x38;
-const GUILD_CARD_METADATA_FRIENDSHIP_OFFSET: usize = 0x34;
+const GUILD_CARD_TRAILER_START: usize = GUILD_CARD_SLOT_COUNT * GUILD_CARD_SLOT_SIZE;
+const GUILD_CARD_SUMMARY_START: usize = GUILD_CARD_TRAILER_START + 0x0C;
+const GUILD_CARD_SUMMARY_RECORD_COUNT: usize = 33;
+const GUILD_CARD_SUMMARY_RECORD_STRIDE: usize = 0x38;
+const GUILD_CARD_SUMMARY_FRIENDSHIP_OFFSET: usize = 0x28;
 
 /// Which guild-card body is being converted.
 ///
@@ -323,45 +331,77 @@ fn apply_guild_card_weapon_usage_corrections(
     Ok(())
 }
 
-fn copy_platform_card_identity(
+fn transform_compact_equipment_header(
     source: &[u8],
     target: &mut [u8],
     offset: usize,
 ) -> Result<(), ConversionError> {
-    // The first two bytes are packed identity bytes. The remaining fields are
-    // an independent u16 and u32, not one u64 scalar.
+    validate_range(source, offset, 8, "compact equipment source")?;
+    validate_range(target, offset, 8, "compact equipment target")?;
+
+    // Offline-hunter and received-card caches use a compact version of an
+    // equipment record: two packed bytes, an independent u16, and an
+    // independent u32. Reversing the final six bytes as one scalar corrupts
+    // the equipment/material IDs used to construct the partner model.
     target[offset..offset + 2].copy_from_slice(&source[offset..offset + 2]);
     copy_reversed(source, target, offset + 2, 2)?;
     copy_reversed(source, target, offset + 4, 4)?;
     Ok(())
 }
 
-fn apply_guild_card_identity_corrections(
+fn apply_guild_card_equipment_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
     for slot in 0..GUILD_CARD_SLOT_COUNT {
-        copy_platform_card_identity(
-            source,
-            target,
-            slot * GUILD_CARD_SLOT_SIZE + GUILD_CARD_ID_START,
-        )?;
+        let slot_start = slot * GUILD_CARD_SLOT_SIZE;
+        for equipment in 0..GUILD_CARD_EQUIPMENT_COUNT {
+            transform_compact_equipment_header(
+                source,
+                target,
+                slot_start + GUILD_CARD_EQUIPMENT_START + equipment * GUILD_CARD_EQUIPMENT_STRIDE,
+            )?;
+        }
+        for relative in GUILD_CARD_TAIL_COLOR_OFFSETS {
+            copy_reversed(source, target, slot_start + relative, 4)?;
+        }
     }
     Ok(())
 }
 
-fn apply_offline_hunter_identity_corrections(
+fn apply_offline_hunter_roster_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
-    for record in 0..OFFLINE_HUNTER_ROSTER_COUNT {
-        copy_platform_card_identity(
+    for hunter in 0..OFFLINE_HUNTER_COUNT {
+        let header_start = OFFLINE_HUNTER_HEADER_START + hunter * OFFLINE_HUNTER_STRIDE;
+        let name_start = header_start + OFFLINE_HUNTER_NAME_START;
+        validate_range(
             source,
-            target,
-            OFFLINE_HUNTER_ROSTER_START
-                + record * OFFLINE_HUNTER_ROSTER_STRIDE
-                + OFFLINE_HUNTER_CARD_ID_START,
+            name_start,
+            OFFLINE_HUNTER_NAME_SIZE,
+            "offline hunter name source",
         )?;
+        validate_range(
+            target,
+            name_start,
+            OFFLINE_HUNTER_NAME_SIZE,
+            "offline hunter name target",
+        )?;
+        target[name_start..name_start + OFFLINE_HUNTER_NAME_SIZE]
+            .copy_from_slice(&source[name_start..name_start + OFFLINE_HUNTER_NAME_SIZE]);
+
+        let cache_start = OFFLINE_HUNTER_EQUIPMENT_CACHE_START + hunter * OFFLINE_HUNTER_STRIDE;
+        for equipment in 0..OFFLINE_HUNTER_EQUIPMENT_COUNT {
+            transform_compact_equipment_header(
+                source,
+                target,
+                cache_start + equipment * OFFLINE_HUNTER_EQUIPMENT_STRIDE,
+            )?;
+        }
+        for relative in OFFLINE_HUNTER_TAIL_COLOR_OFFSETS {
+            copy_reversed(source, target, cache_start + relative, 4)?;
+        }
     }
     Ok(())
 }
@@ -370,15 +410,16 @@ fn apply_guild_card_metadata_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
-    // Received-card summary records occupy slot 98. The 3DS stores each
-    // friendship score as a little-endian u32 at +0x34 of a 0x38-byte record;
+    // Received-card summary records follow the 98 full card slots and a
+    // 12-byte trailer header. The 3DS stores each friendship score as a
+    // little-endian u32 at +0x28 of a 0x38-byte record;
     // Wii U reads the same field as big-endian. The recovered sparse table
     // covered only the first four records, leaving later cards with values
     // such as 25,007,226.88 after the platform conversion.
-    for record in 0..GUILD_CARD_METADATA_RECORD_COUNT {
-        let offset = GUILD_CARD_METADATA_START
-            + record * GUILD_CARD_METADATA_RECORD_STRIDE
-            + GUILD_CARD_METADATA_FRIENDSHIP_OFFSET;
+    for record in 0..GUILD_CARD_SUMMARY_RECORD_COUNT {
+        let offset = GUILD_CARD_SUMMARY_START
+            + record * GUILD_CARD_SUMMARY_RECORD_STRIDE
+            + GUILD_CARD_SUMMARY_FRIENDSHIP_OFFSET;
         copy_reversed(source, target, offset, 4)?;
     }
 
@@ -442,7 +483,16 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         )?;
     }
 
-    copy_platform_card_identity(source, target, GUILD_CARD_ID_START)?;
+    for equipment in 0..GUILD_CARD_EQUIPMENT_COUNT {
+        transform_compact_equipment_header(
+            source,
+            target,
+            GUILD_CARD_EQUIPMENT_START + equipment * GUILD_CARD_EQUIPMENT_STRIDE,
+        )?;
+    }
+    for offset in GUILD_CARD_TAIL_COLOR_OFFSETS {
+        copy_reversed(source, target, offset, 4)?;
+    }
 
     // The static table has irregular coverage of the 50-row monster log. The
     // confirmed row schema is four independent u16 values plus crown bytes;
@@ -512,7 +562,7 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
     }
 
     if kind == GuildCardBodyKind::Card {
-        apply_guild_card_identity_corrections(source, target)?;
+        apply_guild_card_equipment_corrections(source, target)?;
         apply_guild_card_weapon_usage_corrections(source, target)?;
         apply_guild_card_monster_log_corrections(source, target)?;
         apply_guild_card_metadata_corrections(source, target)?;
@@ -684,7 +734,7 @@ pub fn apply_japanese_wiiu_corrections(
     preserve_event_state(source, target)?;
     remap_quest_completion(source, target)?;
     copy_reversed(source, target, SECOND_RGBA_OFFSET, 4)?;
-    apply_offline_hunter_identity_corrections(source, target)?;
+    apply_offline_hunter_roster_corrections(source, target)?;
     apply_confirmed_numeric_and_record_corrections(source, target)?;
 
     Ok(())

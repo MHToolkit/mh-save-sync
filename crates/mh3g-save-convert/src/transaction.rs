@@ -67,7 +67,7 @@ impl ProcessProbe for MacOsProcessProbe {
     fn matching_process(&self) -> Result<Option<String>, ConversionError> {
         #[cfg(not(target_os = "macos"))]
         {
-            return Ok(None);
+            Ok(None)
         }
 
         #[cfg(target_os = "macos")]

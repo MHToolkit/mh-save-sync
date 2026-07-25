@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "434a608cd750888672dde33c4a8bda093bf3c0416d7cd692ea07580ac2206cc1"
+            "137c7581bb31cb27b39e468bf181e2c6155c84f7608b9441cba471a98c7ef927"
         );
     }
 
@@ -415,53 +415,216 @@ mod tests {
     }
 
     #[test]
-    fn keeps_offline_hunter_roster_identities_linked_to_received_cards() {
+    fn remaps_all_offline_hunter_equipment_caches_and_tail_colors() {
+        let mut user_source = vec![0_u8; JP_3DS_HEADER.len() + PAYLOAD_SIZE];
+        user_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+
+        // Each of the six offline hunters has a 0x30-byte equipment cache
+        // immediately before its 0x40-byte header/name block. The five compact
+        // equipment headers are followed by two independent RGBA values.
+        for roster_record in 0_u8..6 {
+            let cache_start = 0x75B0 + usize::from(roster_record) * 0x70;
+            for equipment in 0_u8..5 {
+                let offset = cache_start + usize::from(equipment) * 8;
+                user_source[JP_3DS_HEADER.len() + offset..JP_3DS_HEADER.len() + offset + 8]
+                    .copy_from_slice(&[
+                        equipment + 1,
+                        0x80 + roster_record,
+                        0x30 + equipment,
+                        0x40 + roster_record,
+                        0xA0 + equipment,
+                        0xB0 + roster_record,
+                        0xC0 + equipment,
+                        0xD0 + roster_record,
+                    ]);
+            }
+            user_source[JP_3DS_HEADER.len() + cache_start + 0x28
+                ..JP_3DS_HEADER.len() + cache_start + 0x30]
+                .copy_from_slice(&[
+                    0x10 + roster_record,
+                    0x20 + roster_record,
+                    0x30 + roster_record,
+                    0x40 + roster_record,
+                    0x50 + roster_record,
+                    0x60 + roster_record,
+                    0x70 + roster_record,
+                    0x80 + roster_record,
+                ]);
+        }
+
+        let user_output = convert_3ds_to_cemu_named(&user_source, "user1").unwrap();
+        let user_body = &user_output[JP_CEMU_HEADER.len()..];
+
+        for roster_record in 0_u8..6 {
+            let cache_start = 0x75B0 + usize::from(roster_record) * 0x70;
+            for equipment in 0_u8..5 {
+                let offset = cache_start + usize::from(equipment) * 8;
+                assert_eq!(
+                    &user_body[offset..offset + 8],
+                    &[
+                        equipment + 1,
+                        0x80 + roster_record,
+                        0x40 + roster_record,
+                        0x30 + equipment,
+                        0xD0 + roster_record,
+                        0xC0 + equipment,
+                        0xB0 + roster_record,
+                        0xA0 + equipment,
+                    ],
+                    "roster {roster_record} equipment {equipment}"
+                );
+            }
+            assert_eq!(
+                &user_body[cache_start + 0x28..cache_start + 0x30],
+                &[
+                    0x40 + roster_record,
+                    0x30 + roster_record,
+                    0x20 + roster_record,
+                    0x10 + roster_record,
+                    0x80 + roster_record,
+                    0x70 + roster_record,
+                    0x60 + roster_record,
+                    0x50 + roster_record,
+                ],
+                "roster {roster_record} tail colors"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_offline_hunter_names_and_card_links() {
         let mut user_source = vec![0_u8; JP_3DS_HEADER.len() + PAYLOAD_SIZE];
         user_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         let mut card_source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
         card_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
 
-        // The offline-hall roster stores a received-card identity at +0x48
-        // of each 0x70-byte record.  The corresponding guild-card slot stores
-        // the same identity at +0x5c.  Both sides must apply the same field
-        // boundaries or the game creates a selectable marker without a model
-        // or name because its card lookup returns null.
-        let cases = [
-            (
-                0,
-                3,
-                [0x02, 0x07, 0x3E, 0x01, 0xFF, 0xFC, 0xFC, 0xFD],
-                [0x02, 0x07, 0x01, 0x3E, 0xFD, 0xFC, 0xFC, 0xFF],
-            ),
-            (
-                2,
-                10,
-                [0x02, 0x03, 0x6E, 0x00, 0xFF, 0x5C, 0x3F, 0x27],
-                [0x02, 0x03, 0x00, 0x6E, 0x27, 0x3F, 0x5C, 0xFF],
-            ),
-        ];
-        for (roster_record, card_slot, source_id, _) in cases {
-            let roster_id = 0x75E0 + roster_record * 0x70 + 0x48;
-            user_source[JP_3DS_HEADER.len() + roster_id
-                ..JP_3DS_HEADER.len() + roster_id + source_id.len()]
-                .copy_from_slice(&source_id);
-            let card_id = card_slot * 0xE00 + 0x5C;
+        let mut names = [[0_u8; 16]; 6];
+        let mut links = [[0_u8; 8]; 6];
+        let card_slots = [12_usize, 3, 13, 10, 9, 4];
+        for (record, card_slot) in card_slots.into_iter().enumerate() {
+            for (index, byte) in names[record].iter_mut().enumerate() {
+                *byte = 0x40 + (record as u8) * 0x10 + index as u8;
+            }
+            let name_offset = 0x75E0 + record * 0x70 + 0x1C;
+            user_source[JP_3DS_HEADER.len() + name_offset
+                ..JP_3DS_HEADER.len() + name_offset + names[record].len()]
+                .copy_from_slice(&names[record]);
+
+            let link = [
+                0x11 + record as u8,
+                0x22 + record as u8,
+                0x33 + record as u8,
+                0x44 + record as u8,
+                0x55 + record as u8,
+                0x66 + record as u8,
+                0x77 + record as u8,
+                0x88 + record as u8,
+            ];
+            links[record] = link;
+            let roster_link = 0x75E0 + record * 0x70 + 0x10;
+            let card_link = card_slot * 0xE00 + 0x11A;
+            user_source
+                [JP_3DS_HEADER.len() + roster_link..JP_3DS_HEADER.len() + roster_link + link.len()]
+                .copy_from_slice(&link);
             card_source
-                [JP_3DS_HEADER.len() + card_id..JP_3DS_HEADER.len() + card_id + source_id.len()]
-                .copy_from_slice(&source_id);
+                [JP_3DS_HEADER.len() + card_link..JP_3DS_HEADER.len() + card_link + link.len()]
+                .copy_from_slice(&link);
         }
+
+        // The selected offline-hall candidate follows the six hunter headers.
+        // Its card anchor begins at queue +0x0A and must use the same exact
+        // eight-byte boundary as card slot +0x11A.
+        let queue_link = [0x91, 0x82, 0x73, 0x64, 0x55, 0x46, 0x37, 0x28];
+        let queue_link_offset = 0x7850 + 0x0A;
+        let queue_card_link = 7 * 0xE00 + 0x11A;
+        user_source[JP_3DS_HEADER.len() + queue_link_offset
+            ..JP_3DS_HEADER.len() + queue_link_offset + queue_link.len()]
+            .copy_from_slice(&queue_link);
+        card_source[JP_3DS_HEADER.len() + queue_card_link
+            ..JP_3DS_HEADER.len() + queue_card_link + queue_link.len()]
+            .copy_from_slice(&queue_link);
 
         let user_output = convert_3ds_to_cemu_named(&user_source, "user1").unwrap();
         let card_output = convert_external_component_to_cemu_named(&card_source, "card1").unwrap();
         let user_body = &user_output[JP_CEMU_HEADER.len()..];
         let card_body = &card_output[JP_CEMU_HEADER.len()..];
 
-        for (roster_record, card_slot, _, expected_id) in cases {
-            let roster_id = 0x75E0 + roster_record * 0x70 + 0x48;
-            let card_id = card_slot * 0xE00 + 0x5C;
-            assert_eq!(&user_body[roster_id..roster_id + 8], &expected_id);
-            assert_eq!(&card_body[card_id..card_id + 8], &expected_id);
+        for (record, card_slot) in card_slots.into_iter().enumerate() {
+            let name_offset = 0x75E0 + record * 0x70 + 0x1C;
+            assert_eq!(
+                &user_body[name_offset..name_offset + names[record].len()],
+                &names[record]
+            );
+            let roster_link = 0x75E0 + record * 0x70 + 0x10;
+            let card_link = card_slot * 0xE00 + 0x11A;
+            assert_eq!(
+                &user_body[roster_link..roster_link + 8],
+                &links[record],
+                "hunter {record} roster link"
+            );
+            assert_eq!(
+                &card_body[card_link..card_link + 8],
+                &links[record],
+                "hunter {record} card link"
+            );
         }
+        assert_eq!(
+            &user_body[queue_link_offset..queue_link_offset + queue_link.len()],
+            &queue_link
+        );
+        assert_eq!(
+            &card_body[queue_card_link..queue_card_link + queue_link.len()],
+            &queue_link
+        );
+    }
+
+    #[test]
+    fn remaps_all_received_card_compact_equipment_headers() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+        let slot_start = 3 * 0xE00;
+
+        for equipment in 0_u8..5 {
+            let offset = slot_start + 0x4C + usize::from(equipment) * 0x10;
+            body[offset..offset + 8].copy_from_slice(&[
+                equipment + 1,
+                0x70,
+                0x20 + equipment,
+                0x30,
+                0xA0 + equipment,
+                0xB0,
+                0xC0 + equipment,
+                0xD0,
+            ]);
+        }
+        body[slot_start + 0x110..slot_start + 0x118]
+            .copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        for equipment in 0_u8..5 {
+            let offset = slot_start + 0x4C + usize::from(equipment) * 0x10;
+            assert_eq!(
+                &payload[offset..offset + 8],
+                &[
+                    equipment + 1,
+                    0x70,
+                    0x30,
+                    0x20 + equipment,
+                    0xD0,
+                    0xC0 + equipment,
+                    0xB0,
+                    0xA0 + equipment,
+                ],
+                "card equipment {equipment}"
+            );
+        }
+        assert_eq!(
+            &payload[slot_start + 0x110..slot_start + 0x118],
+            &[0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55]
+        );
     }
 
     #[test]
@@ -470,56 +633,93 @@ mod tests {
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         let body = &mut source[JP_3DS_HEADER.len()..];
 
-        // The Wii U lookup scans 0x62 (98) 0xe00-byte card slots.  The next
+        let last_slot_start = 97 * 0xE00;
+        body[last_slot_start + 0x4C..last_slot_start + 0x54]
+            .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        body[last_slot_start + 0x110..last_slot_start + 0x118]
+            .copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+
+        // The Wii U lookup scans 0x62 (98) 0xe00-byte card slots. The next
         // region, beginning at logical slot 98, contains 0x38-byte summary
-        // records rather than another guild card.  Applying card identity,
+        // records rather than another guild card. Applying equipment, color,
         // weapon-use, or monster-log field boundaries there corrupts metadata.
         let metadata_start = 98 * 0xE00;
-        let identity_shaped_offset = metadata_start + 0x5C;
+        let equipment_shaped_offset = metadata_start + 0x4C;
+        let color_shaped_offset = metadata_start + 0x110;
         let weapon_shaped_offset = metadata_start + 0x12C;
         let monster_shaped_offset = metadata_start + 0x7C0;
-        body[identity_shaped_offset..identity_shaped_offset + 8]
-            .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        body[equipment_shaped_offset..equipment_shaped_offset + 8]
+            .copy_from_slice(&[21, 22, 23, 24, 25, 26, 27, 28]);
+        body[color_shaped_offset..color_shaped_offset + 8]
+            .copy_from_slice(&[31, 32, 33, 34, 35, 36, 37, 38]);
         body[weapon_shaped_offset..weapon_shaped_offset + 8]
-            .copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+            .copy_from_slice(&[41, 42, 43, 44, 45, 46, 47, 48]);
         body[monster_shaped_offset..monster_shaped_offset + 8]
-            .copy_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24]);
+            .copy_from_slice(&[51, 52, 53, 54, 55, 56, 57, 58]);
 
         let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
         let payload = &output[JP_CEMU_HEADER.len()..];
 
         assert_eq!(
-            &payload[identity_shaped_offset..identity_shaped_offset + 8],
-            &[1, 2, 3, 4, 5, 6, 7, 8]
+            &payload[last_slot_start + 0x4C..last_slot_start + 0x54],
+            &[1, 2, 4, 3, 8, 7, 6, 5]
+        );
+        assert_eq!(
+            &payload[last_slot_start + 0x110..last_slot_start + 0x118],
+            &[12, 11, 10, 9, 16, 15, 14, 13]
+        );
+        assert_eq!(
+            &payload[equipment_shaped_offset..equipment_shaped_offset + 8],
+            &[21, 22, 23, 24, 25, 26, 27, 28]
+        );
+        assert_eq!(
+            &payload[color_shaped_offset..color_shaped_offset + 8],
+            // The first u32 stays opaque. The second happens to be summary
+            // record 4's friendship score and follows trailer semantics.
+            &[31, 32, 33, 34, 38, 37, 36, 35]
         );
         assert_eq!(
             &payload[weapon_shaped_offset..weapon_shaped_offset + 8],
-            &[9, 10, 11, 12, 13, 14, 15, 16]
+            &[41, 42, 43, 44, 45, 46, 47, 48]
         );
         assert_eq!(
             &payload[monster_shaped_offset..monster_shaped_offset + 8],
-            &[17, 18, 19, 20, 21, 22, 23, 24]
+            &[51, 52, 53, 54, 55, 56, 57, 58]
         );
     }
 
     #[test]
-    fn remaps_every_received_card_friendship_score() {
+    fn remaps_exactly_the_33_received_card_friendship_scores() {
         let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         let body = &mut source[JP_3DS_HEADER.len()..];
 
-        // Slot 98 contains 0x38-byte received-card summary records. The
-        // earlier sparse MEOW table missed this fifth friendship score, leaving
-        // the 3DS little-endian 0x00000F10 as a huge Wii U number.
-        let fifth_score = 98 * 0xE00 + 4 * 0x38 + 0x34;
-        body[fifth_score..fifth_score + 4].copy_from_slice(&[0x10, 0x0F, 0x00, 0x00]);
+        // The trailer has a 12-byte header followed by exactly 33 0x38-byte
+        // summary records. Records 30 and 32 are beyond the sparse static
+        // friendship table and must still convert; record 33 is an out-of-table
+        // sentinel.
+        let summary_start = 98 * 0xE00 + 0x0C;
+        let record_30_score = summary_start + 30 * 0x38 + 0x28;
+        let record_32_score = summary_start + 32 * 0x38 + 0x28;
+        let record_33_score = summary_start + 33 * 0x38 + 0x28;
+        body[record_30_score..record_30_score + 4].copy_from_slice(&[0x10, 0x0F, 0x00, 0x00]);
+        body[record_32_score..record_32_score + 4].copy_from_slice(&[0x32, 0x10, 0x00, 0x00]);
+        body[record_33_score..record_33_score + 4].copy_from_slice(&[0x21, 0x43, 0x65, 0x87]);
 
         let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
         let payload = &output[JP_CEMU_HEADER.len()..];
 
         assert_eq!(
-            &payload[fifth_score..fifth_score + 4],
+            &payload[record_30_score..record_30_score + 4],
             &[0x00, 0x00, 0x0F, 0x10]
+        );
+        assert_eq!(
+            &payload[record_32_score..record_32_score + 4],
+            &[0x00, 0x00, 0x10, 0x32]
+        );
+        assert_eq!(
+            &payload[record_33_score..record_33_score + 4],
+            &[0x21, 0x43, 0x65, 0x87]
         );
     }
 
