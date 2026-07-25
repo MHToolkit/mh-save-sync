@@ -74,9 +74,25 @@ payloads have the same SHA-256
 and changes only its 3DS four-byte outer container into Cemu's 40-byte
 wrapper. `--reset-guild-cards` remains available only as an explicit
 destructive recovery option: it writes native empty Cemu components and drops
-both local and received cards. Runtime acceptance must still verify card UI,
-receiving a new card, and quest dispatch, but lack of a field-level map is not
-a reason to discard byte-for-byte compatible payloads.
+both local and received cards.
+
+The same official program initializes and uses the 3DS `cecd:u` mailbox for
+MH3G (`0x00048100`). CEC/StreetPass messages are outside the eight extdata
+components. The observed MH3G outgoing message has a `0xD80` header and a
+`0x2A08` body; its body after the first eight bytes is exactly the `0x2A00`
+record-sized candidate used by Cemu's fixed-slot geometry. `inspect-cec`
+reports that candidate and any source-slot anchor matches. Cemu's Japanese
+`cec` container has a 40-byte outer wrapper, a 0x1FC-byte cache prefix, and 50
+consecutive `0x2A00` slots. An isolated Cemu process-memory canary established
+that a source body record copied byte-for-byte into the first slot reaches
+guest memory while the title reads `cec`. `convert-cec` therefore imports each
+non-empty MH3G record into an empty fixed slot and preserves the outer wrapper,
+cache prefix, and existing occupied slots. It does not synthesize unknown
+index/validity metadata or overwrite a slot.
+
+This establishes a file-level CEC candidate only, not a Runtime Verified
+StreetPass migration. Runtime acceptance must still verify the guild-card UI,
+receiving a new card, and quest dispatch.
 
 This ADR does not grant Runtime Verified status to Cemu, Nemessix, or Azahar.
 Passing unit, differential, or file-level checks is not an emulator load proof.
