@@ -861,6 +861,7 @@ mod tests {
         fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
 
         let slot_start = 0xE00;
+        let rank_field = slot_start + 0x14;
         let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
         let record_field = slot_start + 0x7C0 + 32 * 10;
@@ -881,6 +882,7 @@ mod tests {
         let tail_colors = slot_start + 0x110;
         record[tail_colors..tail_colors + 8]
             .copy_from_slice(&[0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78, 0x89]);
+        record[rank_field..rank_field + 4].copy_from_slice(&[0x33, 0x00, 0xA1, 0xB2]);
         record[weapon_usage_field..weapon_usage_field + 8]
             .copy_from_slice(&[0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37, 0x00]);
         record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
@@ -901,6 +903,7 @@ mod tests {
 
         let target = empty_cemu_cec().unwrap();
         let conversion = convert_cec_records(temp.path(), &target, None).unwrap();
+        let converted_rank = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + rank_field;
         let converted_weapon_usage =
             CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + weapon_usage_field;
         let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
@@ -928,6 +931,10 @@ mod tests {
         assert_eq!(
             &conversion.bytes[converted_tail_colors..converted_tail_colors + 8],
             &[0x45, 0x34, 0x23, 0x12, 0x89, 0x78, 0x67, 0x56]
+        );
+        assert_eq!(
+            &conversion.bytes[converted_rank..converted_rank + 4],
+            &[0x00, 0x33, 0xA1, 0xB2]
         );
         assert_eq!(
             &conversion.bytes[converted_weapon_usage..converted_weapon_usage + 8],

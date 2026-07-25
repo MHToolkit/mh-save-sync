@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "137c7581bb31cb27b39e468bf181e2c6155c84f7608b9441cba471a98c7ef927"
+            "857e91f9f7ec6adf1399480fe4409c1d29ec7b376be6d8f6b28dda3032d965f1"
         );
     }
 
@@ -411,6 +411,28 @@ mod tests {
         assert_eq!(
             &payload[third_card_usage..third_card_usage + 8],
             &[0x00, 0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37]
+        );
+    }
+
+    #[test]
+    fn remaps_every_received_card_rank_as_an_independent_u16() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // The native Wii U lookup accepts 98 full card slots. The recovered
+        // sparse table does not cover rank +0x14 in every slot, so use the
+        // final slot to catch saves whose received cards are stored late.
+        let last_card_rank = 97 * 0xE00 + 0x14;
+        body[last_card_rank..last_card_rank + 4].copy_from_slice(&[0x33, 0x00, 0xA1, 0xB2]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(&payload[last_card_rank..last_card_rank + 2], &[0x00, 0x33]);
+        assert_eq!(
+            &payload[last_card_rank + 2..last_card_rank + 4],
+            &[0xA1, 0xB2]
         );
     }
 
@@ -576,6 +598,38 @@ mod tests {
             &card_body[queue_card_link..queue_card_link + queue_link.len()],
             &queue_link
         );
+    }
+
+    #[test]
+    fn remaps_all_offline_hunter_ranks_as_independent_u16_values() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+        let ranks = [742_u16, 51, 107, 4, 41, 302];
+
+        for (hunter, rank) in ranks.into_iter().enumerate() {
+            let rank_offset = 0x75E0 + hunter * 0x70 + 0x04;
+            body[rank_offset..rank_offset + 2].copy_from_slice(&rank.to_le_bytes());
+            body[rank_offset + 2..rank_offset + 4]
+                .copy_from_slice(&[0xA0 + hunter as u8, 0x50 + hunter as u8]);
+        }
+
+        let output = convert_3ds_to_cemu_named(&source, "user1").unwrap();
+        let output_body = &output[JP_CEMU_HEADER.len()..];
+
+        for (hunter, rank) in ranks.into_iter().enumerate() {
+            let rank_offset = 0x75E0 + hunter * 0x70 + 0x04;
+            assert_eq!(
+                &output_body[rank_offset..rank_offset + 2],
+                &rank.to_be_bytes(),
+                "offline hunter {hunter} rank"
+            );
+            assert_eq!(
+                &output_body[rank_offset + 2..rank_offset + 4],
+                &[0xA0 + hunter as u8, 0x50 + hunter as u8],
+                "offline hunter {hunter} rank-adjacent state"
+            );
+        }
     }
 
     #[test]
