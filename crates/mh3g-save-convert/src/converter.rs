@@ -579,6 +579,28 @@ mod tests {
     }
 
     #[test]
+    fn remaps_offline_hunter_candidate_ids_as_independent_u16_values() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // The offline-hall queue stores three table IDs immediately before
+        // its selected/state bytes. The 3DS serializes each ID little-endian;
+        // MH3G HD looks them up as independent big-endian u16 values.
+        body[0x7848..0x784E].copy_from_slice(&[0x83, 0x00, 0xEA, 0x00, 0xD2, 0x00]);
+        body[0x784E..0x7852].copy_from_slice(&[0x01, 0x01, 0x03, 0x02]);
+
+        let output = convert_3ds_to_cemu_named(&source, "user1").unwrap();
+        let output_body = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &output_body[0x7848..0x784E],
+            &[0x00, 0x83, 0x00, 0xEA, 0x00, 0xD2]
+        );
+        assert_eq!(&output_body[0x784E..0x7852], &[0x01, 0x01, 0x03, 0x02]);
+    }
+
+    #[test]
     fn remaps_all_received_card_compact_equipment_headers() {
         let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);

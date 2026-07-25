@@ -52,6 +52,8 @@ const OFFLINE_HUNTER_NAME_SIZE: usize = 0x10;
 const OFFLINE_HUNTER_EQUIPMENT_COUNT: usize = 5;
 const OFFLINE_HUNTER_EQUIPMENT_STRIDE: usize = 8;
 const OFFLINE_HUNTER_TAIL_COLOR_OFFSETS: [usize; 2] = [0x28, 0x2C];
+const OFFLINE_HUNTER_CANDIDATE_IDS_START: usize = 0x7848;
+const OFFLINE_HUNTER_CANDIDATE_ID_COUNT: usize = 3;
 const CARD_BODY_SIZE: usize = 0x57_FFC;
 const CARDBOX_BODY_SIZE: usize = 0x2F_FFC;
 pub const GUILD_CARD_SLOT_SIZE: usize = 0xE00;
@@ -575,6 +577,15 @@ fn apply_confirmed_numeric_and_record_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
+    for candidate in 0..OFFLINE_HUNTER_CANDIDATE_ID_COUNT {
+        copy_reversed(
+            source,
+            target,
+            OFFLINE_HUNTER_CANDIDATE_IDS_START + candidate * 2,
+            2,
+        )?;
+    }
+
     for offset in FULL_WIDTH_COUNTER_OFFSETS {
         copy_reversed(source, target, offset, 4)?;
     }
