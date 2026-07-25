@@ -397,12 +397,14 @@ fn read_mh3g_record(path: &Path) -> Result<Option<Vec<u8>>, ConversionError> {
     Ok(Some(record.to_vec()))
 }
 
-/// Collect MH3G StreetPass records from both CEC boxes.
+/// Collect received MH3G StreetPass records from the 3DS CEC inbox.
 ///
 /// The 3DS message wrapper is not copied into Cemu. The observed MH3G message
 /// body has an 8-byte prefix followed by one fixed 0x2A00-byte record, which is
-/// the same slot size used by Cemu's 50-record cache.
-pub fn collect_mh3g_records(root: &Path) -> Result<Vec<CecRecordSource>, ConversionError> {
+/// the same slot size used by Cemu's 50-record cache. Outgoing messages are
+/// deliberately not candidates: an `OutBox__` record describes the source
+/// hunter's own transmission, not a card received from another hunter.
+pub fn collect_received_mh3g_records(root: &Path) -> Result<Vec<CecRecordSource>, ConversionError> {
     if !root.is_dir() {
         return Err(ConversionError::InvalidSave(format!(
             "3DS CEC mailbox is not a directory: {}",
@@ -411,26 +413,24 @@ pub fn collect_mh3g_records(root: &Path) -> Result<Vec<CecRecordSource>, Convers
     }
     let mut records = Vec::new();
     let mut seen = BTreeSet::new();
-    for box_name in ["InBox___", "OutBox__"] {
-        let directory = root.join(box_name);
-        if !directory.join("BoxInfo_____").is_file() {
-            return Err(ConversionError::InvalidSave(format!(
-                "3DS CEC mailbox is missing BoxInfo_____: {}",
-                directory.display()
-            )));
-        }
-        for path in message_paths(&directory)? {
-            let Some(record) = read_mh3g_record(&path)? else {
-                continue;
-            };
-            let hash = sha256_hex(&record);
-            if seen.insert(hash.clone()) {
-                records.push(CecRecordSource {
-                    message_file: path,
-                    record,
-                    sha256: hash,
-                });
-            }
+    let directory = root.join("InBox___");
+    if !directory.join("BoxInfo_____").is_file() {
+        return Err(ConversionError::InvalidSave(format!(
+            "3DS CEC mailbox is missing InBox___/BoxInfo_____: {}",
+            directory.display()
+        )));
+    }
+    for path in message_paths(&directory)? {
+        let Some(record) = read_mh3g_record(&path)? else {
+            continue;
+        };
+        let hash = sha256_hex(&record);
+        if seen.insert(hash.clone()) {
+            records.push(CecRecordSource {
+                message_file: path,
+                record,
+                sha256: hash,
+            });
         }
     }
     Ok(records)
@@ -479,10 +479,10 @@ pub fn convert_cec_records(
     requested_slot: Option<usize>,
 ) -> Result<CecConversion, ConversionError> {
     validate_cemu_cec_bytes(target_bytes)?;
-    let records = collect_mh3g_records(source_dir)?;
+    let records = collect_received_mh3g_records(source_dir)?;
     if records.is_empty() {
         return Err(ConversionError::InvalidSave(
-            "3DS CEC mailbox contains no non-empty MH3G records".to_owned(),
+            "3DS CEC InBox___ contains no non-empty received MH3G records".to_owned(),
         ));
     }
 

@@ -97,6 +97,18 @@ fn cec_fixture(temp: &TempDir) -> PathBuf {
     let outbox = root.join("OutBox__");
     fs::create_dir_all(&inbox).unwrap();
     fs::create_dir_all(&outbox).unwrap();
+    fs::write(inbox.join("BoxInfo_____"), cec_box_info(1, 0x2A08)).unwrap();
+    fs::write(inbox.join("_CEC-TEST"), cec_message()).unwrap();
+    fs::write(outbox.join("BoxInfo_____"), cec_box_info(0, 0)).unwrap();
+    root
+}
+
+fn outbox_only_cec_fixture(temp: &TempDir) -> PathBuf {
+    let root = temp.path().join("3ds-cec-outbox-only");
+    let inbox = root.join("InBox___");
+    let outbox = root.join("OutBox__");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&outbox).unwrap();
     fs::write(inbox.join("BoxInfo_____"), cec_box_info(0, 0)).unwrap();
     fs::write(outbox.join("BoxInfo_____"), cec_box_info(1, 0x2A08)).unwrap();
     fs::write(outbox.join("_CEC-TEST"), cec_message()).unwrap();
@@ -161,7 +173,7 @@ fn inspect_reports_metadata_without_decoded_player_data() {
 }
 
 #[test]
-fn inspect_cec_reports_3ds_outbox_and_empty_cemu_cache_without_writing() {
+fn inspect_cec_reports_3ds_inbox_and_empty_cemu_cache_without_writing() {
     let temp = tempfile::tempdir().unwrap();
     let source = cec_fixture(&temp);
     let target = cemu_cec_fixture(&temp);
@@ -175,9 +187,9 @@ fn inspect_cec_reports_3ds_outbox_and_empty_cemu_cache_without_writing() {
     ]);
 
     assert_eq!(value["status"], "inspected-cec");
-    assert_eq!(value["source"]["outbox"]["declared_message_count"], 1);
-    assert_eq!(value["source"]["outbox"]["actual_message_count"], 1);
-    assert_eq!(value["source"]["inbox"]["declared_message_count"], 0);
+    assert_eq!(value["source"]["inbox"]["declared_message_count"], 1);
+    assert_eq!(value["source"]["inbox"]["actual_message_count"], 1);
+    assert_eq!(value["source"]["outbox"]["declared_message_count"], 0);
     assert_eq!(value["source"]["messages"][0]["title_id"], "0x00048100");
     assert_eq!(
         value["source"]["messages"][0]["record_candidate_offset"],
@@ -221,6 +233,29 @@ fn convert_cec_dry_run_plans_the_first_empty_cemu_slot_without_writing() {
     assert_eq!(value["imported_messages"], 1);
     assert_eq!(value["slots"][0], 0);
     assert!(value["backup"].is_null());
+    assert_eq!(fs::read(&target).unwrap(), before);
+}
+
+#[test]
+fn convert_cec_refuses_outbox_only_records_without_writing() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = outbox_only_cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let before = fs::read(&target).unwrap();
+
+    let output = binary()
+        .args([
+            "convert-cec",
+            "--source-dir",
+            &source.display().to_string(),
+            "--target",
+            &target.display().to_string(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("InBox___"));
     assert_eq!(fs::read(&target).unwrap(), before);
 }
 
