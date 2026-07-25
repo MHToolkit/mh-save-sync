@@ -861,9 +861,15 @@ mod tests {
         fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
 
         let slot_start = 0xE00;
+        let identity_field = slot_start + 0x5C;
+        let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
         let record_field = slot_start + 0x7C0 + 32 * 10;
         let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        record[identity_field..identity_field + 8]
+            .copy_from_slice(&[0x02, 0x07, 0x3E, 0x01, 0xFF, 0xFC, 0xFC, 0xFD]);
+        record[weapon_usage_field..weapon_usage_field + 8]
+            .copy_from_slice(&[0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37, 0x00]);
         record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
         record[record_field..record_field + 10]
             .copy_from_slice(&[0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0x00, 0x03, 0x00]);
@@ -882,9 +888,20 @@ mod tests {
 
         let target = empty_cemu_cec().unwrap();
         let conversion = convert_cec_records(temp.path(), &target, None).unwrap();
+        let converted_identity = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + identity_field;
+        let converted_weapon_usage =
+            CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + weapon_usage_field;
         let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
         let converted_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + record_field;
 
+        assert_eq!(
+            &conversion.bytes[converted_identity..converted_identity + 8],
+            &[0x02, 0x07, 0x01, 0x3E, 0xFD, 0xFC, 0xFC, 0xFF]
+        );
+        assert_eq!(
+            &conversion.bytes[converted_weapon_usage..converted_weapon_usage + 8],
+            &[0x00, 0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37]
+        );
         assert_eq!(
             &conversion.bytes[converted_date..converted_date + 2],
             &[0x07, 0xEA]
