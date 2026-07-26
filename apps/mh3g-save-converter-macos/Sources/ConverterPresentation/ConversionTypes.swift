@@ -142,6 +142,22 @@ public struct DryRunFingerprint: Equatable, Sendable {
     }
 }
 
+/// `system` is a distinct 3DS/Wii U file pair, so it must retain its own
+/// authorization instead of borrowing the selected `user#` slot fingerprint.
+public struct SystemDryRunFingerprint: Equatable, Sendable {
+    public let source: URL
+    public let target: URL
+    public let sourceSHA256: String
+    public let targetSHA256: String
+
+    public init(source: URL, target: URL, sourceSHA256: String, targetSHA256: String) {
+        self.source = source.standardizedFileURL
+        self.target = target.standardizedFileURL
+        self.sourceSHA256 = sourceSHA256
+        self.targetSHA256 = targetSHA256
+    }
+}
+
 public struct PlannedConverterCommand: Equatable, Sendable {
     public let operation: ConverterOperation
     public let arguments: [String]

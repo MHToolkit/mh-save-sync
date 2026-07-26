@@ -10,6 +10,7 @@ public final class ConversionWorkflow {
     public private(set) var targetInspection: InputInspection?
     public private(set) var components = ComponentSelection()
     public private(set) var dryRunFingerprint: DryRunFingerprint?
+    public private(set) var systemDryRunFingerprint: SystemDryRunFingerprint?
     public private(set) var failure: WorkflowFailure?
     public private(set) var latestReport: ConverterReport?
     public private(set) var activeOperation: ConverterOperation?
@@ -80,8 +81,7 @@ public final class ConversionWorkflow {
     }
 
     /// Core slot Dry Run is the authorization boundary for `writeCore` only.
-    /// Optional sources use distinct file or directory inputs and must never
-    /// inherit the user-slot fingerprint as their hash precondition.
+    /// `system` is a separate source/target pair with its own authorization.
     public func runCoreDryRun() async throws {
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         guard sourceInspection != nil, targetInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
@@ -138,12 +138,52 @@ public final class ConversionWorkflow {
         complete(with: report)
     }
 
-    public func writeSystem() async throws {
-        try requireIdleForOptionalWrite()
+    /// `system` does not share the selected `user#` slot's source or target.
+    /// Its Dry Run must therefore establish the two preconditions used by its
+    /// subsequent write independently.
+    public func runSystemDryRun() async throws {
+        try requireIdleForIndependentOperation()
         guard components.includeSystem,
               let source = components.systemSource,
               let target = components.systemTarget
         else { throw ConversionWorkflowError.missingSystemPaths }
+
+        systemDryRunFingerprint = nil
+        let report = try await execute(
+            .convertSystem,
+            arguments: [
+                ConverterOperation.convertSystem.rawValue,
+                source.path,
+                "--output", target.path,
+                "--dry-run",
+            ]
+        )
+        guard report.status == "dry-run",
+              let sourceSHA256 = report.hash(named: "source"),
+              let targetSHA256 = report.hash(named: "target_before")
+        else {
+            throw failureAndRethrow(
+                .convertSystem,
+                ConversionWorkflowError.invalidReport("system Dry Run requires source and target_before SHA-256"),
+                stderr: report.stderr ?? ""
+            )
+        }
+        systemDryRunFingerprint = SystemDryRunFingerprint(
+            source: source,
+            target: target,
+            sourceSHA256: sourceSHA256,
+            targetSHA256: targetSHA256
+        )
+        latestReport = report
+        state = .dryRun
+    }
+
+    public func writeSystem() async throws {
+        guard components.includeSystem,
+              let source = components.systemSource,
+              let target = components.systemTarget
+        else { throw ConversionWorkflowError.missingSystemPaths }
+        let fingerprint = try currentAuthorizedSystemFingerprint(source: source, target: target)
         let report = try await execute(
             .convertSystem,
             arguments: [
@@ -151,6 +191,8 @@ public final class ConversionWorkflow {
                 source.path,
                 "--output", target.path,
                 "--write",
+                "--expected-source-sha256", fingerprint.sourceSHA256,
+                "--expected-target-sha256", fingerprint.targetSHA256,
             ]
         )
         complete(with: report)
@@ -196,7 +238,7 @@ public final class ConversionWorkflow {
     }
 
     public func writeCEC() async throws {
-        try requireIdleForOptionalWrite()
+        try requireIdleForIndependentOperation()
         guard components.includesCEC else { throw ConversionWorkflowError.missingCECDirectories }
         guard components.acknowledgeExperimentalCEC else { throw ConversionWorkflowError.experimentalCECAcknowledgementRequired }
         guard let source = components.cecSourceDirectory, let target = components.cecTarget else {
@@ -244,6 +286,7 @@ public final class ConversionWorkflow {
             guard let source = components.systemSource, let target = components.systemTarget else {
                 throw ConversionWorkflowError.missingSystemPaths
             }
+            let fingerprint = try currentAuthorizedSystemFingerprint(source: source, target: target)
             plan.append(
                 PlannedConverterCommand(
                     operation: .convertSystem,
@@ -252,6 +295,8 @@ public final class ConversionWorkflow {
                         source.path,
                         "--output", target.path,
                         "--write",
+                        "--expected-source-sha256", fingerprint.sourceSHA256,
+                        "--expected-target-sha256", fingerprint.targetSHA256,
                     ]
                 )
             )
@@ -336,7 +381,18 @@ public final class ConversionWorkflow {
         return current
     }
 
-    private func requireIdleForOptionalWrite() throws {
+    private func currentAuthorizedSystemFingerprint(source: URL, target: URL) throws -> SystemDryRunFingerprint {
+        guard let authorized = systemDryRunFingerprint else {
+            throw ConversionWorkflowError.dryRunRequired
+        }
+        guard activeOperation == nil else { throw ConversionWorkflowError.dryRunRequired }
+        guard authorized.source == source.standardizedFileURL,
+              authorized.target == target.standardizedFileURL
+        else { throw ConversionWorkflowError.staleDryRun }
+        return authorized
+    }
+
+    private func requireIdleForIndependentOperation() throws {
         guard activeOperation == nil else { throw ConversionWorkflowError.dryRunRequired }
     }
 
@@ -393,10 +449,12 @@ public final class ConversionWorkflow {
         latestReport = report
         state = .success
         dryRunFingerprint = nil
+        systemDryRunFingerprint = nil
     }
 
     private func invalidateAuthorization(nextState: WorkflowState) {
         dryRunFingerprint = nil
+        systemDryRunFingerprint = nil
         latestReport = nil
         failure = nil
         state = nextState
