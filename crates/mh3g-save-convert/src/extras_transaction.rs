@@ -7,12 +7,21 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
-use std::{ffi::CString, os::unix::ffi::OsStrExt};
+#[cfg(unix)]
+use std::{
+    cell::RefCell,
+    ffi::CString,
+    marker::PhantomData,
+    os::{
+        fd::{AsRawFd, FromRawFd, RawFd},
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
+    rc::Rc,
+};
 
 use clap::ValueEnum;
 use fs2::FileExt;
@@ -25,13 +34,22 @@ use crate::{
     converter::validate_cemu_external_component_named,
     io_at_path,
     process_probe::{PlatformProcessProbe, ProcessProbe},
-    transaction::{remove_if_regular_file, sha256_hex, sync_directory, write_new_file},
+    transaction::{sha256_hex, sync_directory},
 };
 
-pub const EXTRA_INSTALL_MANIFEST_VERSION: u32 = 3;
+pub const EXTRA_INSTALL_MANIFEST_VERSION: u32 = 5;
+const LEGACY_EXTRA_INSTALL_MANIFEST_VERSION: u32 = 3;
+const PREVIOUS_EXTRA_INSTALL_MANIFEST_VERSION: u32 = 4;
 const EXTRA_MANIFEST_NAME: &str = ".mh3g-extra-install.json";
 const EXTRA_RECOVERY_JOURNAL_NAME: &str = ".mh3g-extra-recovery.json";
 const EXTRA_LOCK_NAME: &str = ".mh3g-extra-install.lock";
+const EXTRA_TRANSACTION_DIRECTORY_PREFIX: &str = ".mh3g-extra-transaction-";
+
+type ManifestDirectoryIdentity = (u64, u64);
+type ManifestDirectoryIdentities = (
+    Option<ManifestDirectoryIdentity>,
+    Option<ManifestDirectoryIdentity>,
+);
 
 const GUILD_CARD_COMPONENTS: [&str; 4] = ["card1", "card2", "card3", "cardbox"];
 const QUEST_COMPONENTS: [&str; 4] = ["quest1", "quest2", "quest3", "quest4"];
@@ -73,6 +91,16 @@ pub struct ExtraInstallEntry {
 pub struct ExtraInstallManifest {
     pub version: u32,
     pub transaction_id: String,
+    #[serde(default)]
+    pub transaction_dir: Option<PathBuf>,
+    /// POSIX device/inode identity of the target directory that owned this
+    /// transaction when its recovery journal was written.
+    #[serde(default)]
+    pub target_dir_identity: Option<(u64, u64)>,
+    /// POSIX device/inode identity of the transaction directory that contains
+    /// this recovery journal and its append-only artifacts.
+    #[serde(default)]
+    pub transaction_dir_identity: Option<(u64, u64)>,
     pub groups: Vec<ExtraGroup>,
     pub staging_dir: PathBuf,
     pub target_dir: PathBuf,
@@ -115,7 +143,6 @@ pub trait ExtraFileOperations {
         expected_staged: &[u8],
         expected_target: &[u8],
     ) -> Result<(), ConversionError>;
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError>;
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError>;
 }
 
@@ -124,7 +151,7 @@ pub struct StdExtraFileOperations;
 
 impl ExtraFileOperations for StdExtraFileOperations {
     fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
-        write_new_file(path, bytes)
+        write_new_extra_file(path, bytes)
     }
 
     fn replace_staged(
@@ -159,12 +186,8 @@ impl ExtraFileOperations for StdExtraFileOperations {
         )
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        remove_if_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
-        sync_directory(path)
+        sync_extra_directory(path)
     }
 }
 
@@ -190,7 +213,7 @@ fn conditional_exchange(
         (Ok(target_after), Ok(staged_after))
             if target_after == expected_staged && staged_after == expected_target =>
         {
-            sync_exchange_parent(target, operation)
+            sync_exchange_parents(staged, target, operation)
         }
         (target_after, staged_after) => {
             let observed_target = target_after
@@ -241,7 +264,7 @@ fn conditional_exchange(
                 )));
             }
             let restore = atomic_exchange_paths(staged, target, operation)
-                .and_then(|_| sync_exchange_parent(target, operation));
+                .and_then(|_| sync_exchange_parents(staged, target, operation));
             match restore {
                 Ok(()) => {
                     let restored_target = read_regular_file(
@@ -272,14 +295,28 @@ fn conditional_exchange(
     }
 }
 
-fn sync_exchange_parent(target: &Path, operation: &'static str) -> Result<(), ConversionError> {
-    let parent = target.parent().ok_or_else(|| {
+fn sync_exchange_parents(
+    staged: &Path,
+    target: &Path,
+    operation: &'static str,
+) -> Result<(), ConversionError> {
+    let staged_parent = staged.parent().ok_or_else(|| {
+        ConversionError::UnsafeInstall(format!(
+            "ExtData exchange staged path has no parent ({operation}): {}",
+            staged.display()
+        ))
+    })?;
+    let target_parent = target.parent().ok_or_else(|| {
         ConversionError::UnsafeInstall(format!(
             "ExtData exchange target has no parent ({operation}): {}",
             target.display()
         ))
     })?;
-    sync_directory(parent)
+    sync_extra_directory(staged_parent)?;
+    if staged_parent != target_parent {
+        sync_extra_directory(target_parent)?;
+    }
+    Ok(())
 }
 
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
@@ -292,12 +329,583 @@ fn c_path(path: &Path, operation: &'static str) -> Result<CString, ConversionErr
     })
 }
 
+#[cfg(unix)]
+#[derive(Debug)]
+struct ExtraDirectoryAnchor {
+    path: PathBuf,
+    file: File,
+    identity: FileIdentity,
+}
+
+#[cfg(unix)]
+impl ExtraDirectoryAnchor {
+    fn open(path: &Path, operation: &'static str) -> Result<Self, ConversionError> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let file = io_at_path(options.open(path), operation, path)?;
+        let opened = io_at_path(file.metadata(), operation, path)?;
+        let named = io_at_path(fs::symlink_metadata(path), operation, path)?;
+        if !opened.file_type().is_dir()
+            || !named.file_type().is_dir()
+            || directory_identity(&opened) != directory_identity(&named)
+        {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData directory changed while opening it: {}",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            identity: directory_identity(&opened),
+            file,
+        })
+    }
+
+    fn open_child(
+        &self,
+        name: &CString,
+        path: &Path,
+        operation: &'static str,
+    ) -> Result<Self, ConversionError> {
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return io_at_path(Err(std::io::Error::last_os_error()), operation, path);
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let opened = io_at_path(file.metadata(), operation, path)?;
+        let named = stat_at(self.file.as_raw_fd(), name, operation, path)?;
+        if !opened.file_type().is_dir()
+            || !stat_is_directory(&named)
+            || directory_identity(&opened) != stat_identity(&named)
+        {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData directory changed while opening it: {}",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            identity: directory_identity(&opened),
+            file,
+        })
+    }
+
+    fn ensure_named_binding(&self, operation: &'static str) -> Result<(), ConversionError> {
+        let metadata = io_at_path(fs::symlink_metadata(&self.path), operation, &self.path)?;
+        if !metadata.file_type().is_dir() || directory_identity(&metadata) != self.identity {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData directory path changed while transaction was active: {}",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct ExtraTransactionAnchors {
+    target: ExtraDirectoryAnchor,
+    transaction: Option<ExtraDirectoryAnchor>,
+}
+
+#[cfg(unix)]
+thread_local! {
+    static EXTRA_TRANSACTION_ANCHORS: RefCell<Option<ExtraTransactionAnchors>> = const { RefCell::new(None) };
+}
+
+/// Holds no file descriptor itself. The thread-local context owns the
+/// descriptors so every regular filesystem helper can resolve a planned path
+/// through `openat`/`renameat*` instead of reparsing a replaceable parent name.
+#[cfg(unix)]
+struct ExtraTransactionScope {
+    previous: Option<ExtraTransactionAnchors>,
+    // The anchors live in thread-local storage and must be dropped from the
+    // same thread that installed them.
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+#[cfg(unix)]
+impl ExtraTransactionScope {
+    fn open(target_dir: &Path) -> Result<Self, ConversionError> {
+        let target =
+            ExtraDirectoryAnchor::open(target_dir, "opening anchored ExtData target directory")?;
+        let previous = EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+            let mut anchors = cell.borrow_mut();
+            if anchors.is_some() {
+                return Err(ConversionError::UnsafeInstall(
+                    "nested ExtData transaction directory anchors are not supported".to_owned(),
+                ));
+            }
+            Ok(anchors.replace(ExtraTransactionAnchors {
+                target,
+                transaction: None,
+            }))
+        })?;
+        Ok(Self {
+            previous,
+            _not_send_or_sync: PhantomData,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ExtraTransactionScope {
+    fn drop(&mut self) {
+        EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+            let mut anchors = cell.borrow_mut();
+            *anchors = self.previous.take();
+        });
+    }
+}
+
+#[cfg(not(unix))]
+struct ExtraTransactionScope;
+
+#[cfg(not(unix))]
+impl ExtraTransactionScope {
+    fn open(_target_dir: &Path) -> Result<Self, ConversionError> {
+        Ok(Self)
+    }
+}
+
+#[cfg(unix)]
+fn directory_identity(metadata: &fs::Metadata) -> FileIdentity {
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(unix)]
+fn anchored_child_name(
+    parent: &Path,
+    path: &Path,
+    operation: &'static str,
+) -> Result<Option<CString>, ConversionError> {
+    if path.parent() != Some(parent) {
+        return Ok(None);
+    }
+    let name = path.file_name().ok_or_else(|| {
+        ConversionError::InvalidSave(format!(
+            "ExtData transaction path has no file name ({operation}): {}",
+            path.display()
+        ))
+    })?;
+    CString::new(name.as_bytes()).map(Some).map_err(|_| {
+        ConversionError::InvalidSave(format!(
+            "ExtData transaction path contains an embedded NUL ({operation}): {}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn anchored_file_location(
+    path: &Path,
+    operation: &'static str,
+) -> Result<Option<(RawFd, CString)>, ConversionError> {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let anchors = cell.borrow();
+        let Some(anchors) = anchors.as_ref() else {
+            return Ok(None);
+        };
+        if let Some(name) = anchored_child_name(&anchors.target.path, path, operation)? {
+            return Ok(Some((anchors.target.file.as_raw_fd(), name)));
+        }
+        if let Some(transaction) = anchors.transaction.as_ref()
+            && let Some(name) = anchored_child_name(&transaction.path, path, operation)?
+        {
+            return Ok(Some((transaction.file.as_raw_fd(), name)));
+        }
+        Ok(None)
+    })
+}
+
+#[cfg(unix)]
+fn extra_transaction_scope_is_active() -> bool {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| cell.borrow().is_some())
+}
+
+#[cfg(not(unix))]
+fn extra_transaction_scope_is_active() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn anchored_directory_fd(path: &Path) -> Option<RawFd> {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let anchors = cell.borrow();
+        let anchors = anchors.as_ref()?;
+        if path == anchors.target.path {
+            Some(anchors.target.file.as_raw_fd())
+        } else if anchors
+            .transaction
+            .as_ref()
+            .is_some_and(|transaction| path == transaction.path)
+        {
+            anchors
+                .transaction
+                .as_ref()
+                .map(|transaction| transaction.file.as_raw_fd())
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(unix)]
+fn anchored_directory_identity(path: &Path) -> Option<ManifestDirectoryIdentity> {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let anchors = cell.borrow();
+        let anchors = anchors.as_ref()?;
+        if path == anchors.target.path {
+            Some(anchors.target.identity)
+        } else if anchors
+            .transaction
+            .as_ref()
+            .is_some_and(|transaction| path == transaction.path)
+        {
+            anchors
+                .transaction
+                .as_ref()
+                .map(|transaction| transaction.identity)
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(unix)]
+fn is_within_anchored_transaction_namespace(path: &Path) -> bool {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let anchors = cell.borrow();
+        let Some(anchors) = anchors.as_ref() else {
+            return false;
+        };
+        path.starts_with(&anchors.target.path)
+            || anchors
+                .transaction
+                .as_ref()
+                .is_some_and(|transaction| path.starts_with(&transaction.path))
+    })
+}
+
+#[cfg(not(unix))]
+fn is_within_anchored_transaction_namespace(_path: &Path) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn ensure_extra_transaction_directory_bindings(
+    operation: &'static str,
+) -> Result<(), ConversionError> {
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let anchors = cell.borrow();
+        let Some(anchors) = anchors.as_ref() else {
+            return Ok(());
+        };
+        anchors.target.ensure_named_binding(operation)?;
+        if let Some(transaction) = anchors.transaction.as_ref() {
+            transaction.ensure_named_binding(operation)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(unix))]
+fn ensure_extra_transaction_directory_bindings(
+    _operation: &'static str,
+) -> Result<(), ConversionError> {
+    Ok(())
+}
+
+fn manifest_directory_identities(
+    target_dir: &Path,
+    transaction_dir: &Path,
+) -> Result<ManifestDirectoryIdentities, ConversionError> {
+    #[cfg(unix)]
+    {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before recording manifest identities",
+        )?;
+        let target_identity = anchored_directory_identity(target_dir).ok_or_else(|| {
+            ConversionError::UnsafeInstall(format!(
+                "ExtData target directory is outside the anchored transaction scope: {}",
+                target_dir.display()
+            ))
+        })?;
+        let transaction_identity =
+            anchored_directory_identity(transaction_dir).ok_or_else(|| {
+                ConversionError::UnsafeInstall(format!(
+                    "ExtData transaction directory is outside the anchored transaction scope: {}",
+                    transaction_dir.display()
+                ))
+            })?;
+        Ok((Some(target_identity), Some(transaction_identity)))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (target_dir, transaction_dir);
+        Err(ConversionError::UnsafeInstall(
+            "ExtData transactions require POSIX directory identities".to_owned(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn stat_at(
+    directory_fd: RawFd,
+    name: &CString,
+    operation: &'static str,
+    display_path: &Path,
+) -> Result<libc::stat, ConversionError> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory_fd,
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        Ok(unsafe { stat.assume_init() })
+    } else {
+        io_at_path(
+            Err(std::io::Error::last_os_error()),
+            operation,
+            display_path,
+        )
+    }
+}
+
+#[cfg(unix)]
+fn stat_is_regular(stat: &libc::stat) -> bool {
+    (stat.st_mode & libc::S_IFMT) == libc::S_IFREG
+}
+
+#[cfg(unix)]
+fn stat_is_directory(stat: &libc::stat) -> bool {
+    (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR
+}
+
+#[cfg(unix)]
+fn stat_identity(stat: &libc::stat) -> FileIdentity {
+    (stat.st_dev as u64, stat.st_ino)
+}
+
+#[cfg(unix)]
+fn create_anchored_transaction_directory(
+    path: &Path,
+    operation: &'static str,
+) -> Result<bool, ConversionError> {
+    let Some((target_fd, name)) = anchored_file_location(path, operation)? else {
+        return Ok(false);
+    };
+    let result = unsafe { libc::mkdirat(target_fd, name.as_ptr(), 0o700) };
+    if result != 0 {
+        return Err(
+            io_at_path::<()>(Err(std::io::Error::last_os_error()), operation, path)
+                .expect_err("an explicit I/O error cannot succeed"),
+        );
+    }
+    let created = stat_at(target_fd, &name, operation, path)?;
+    if !stat_is_directory(&created) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "created ExtData transaction path is not a directory: {}",
+            path.display()
+        )));
+    }
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let mut anchors = cell.borrow_mut();
+        let anchors = anchors.as_mut().ok_or_else(|| {
+            ConversionError::UnsafeInstall(
+                "ExtData transaction directory anchor disappeared during creation".to_owned(),
+            )
+        })?;
+        if anchors.transaction.is_some() {
+            return Err(ConversionError::UnsafeInstall(
+                "ExtData transaction directory anchor already exists".to_owned(),
+            ));
+        }
+        let opened = anchors.target.open_child(&name, path, operation)?;
+        if opened.identity != stat_identity(&created) {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData transaction directory changed while anchoring it: {}",
+                path.display()
+            )));
+        }
+        anchors.transaction = Some(opened);
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn anchor_existing_transaction_directory(
+    path: &Path,
+    operation: &'static str,
+) -> Result<bool, ConversionError> {
+    let Some((_, name)) = anchored_file_location(path, operation)? else {
+        return Ok(false);
+    };
+    EXTRA_TRANSACTION_ANCHORS.with(|cell| {
+        let mut anchors = cell.borrow_mut();
+        let anchors = anchors.as_mut().ok_or_else(|| {
+            ConversionError::UnsafeInstall(
+                "ExtData target directory anchor disappeared while reading a recovery journal"
+                    .to_owned(),
+            )
+        })?;
+        if anchors.transaction.is_some() {
+            return Err(ConversionError::UnsafeInstall(
+                "ExtData recovery journal has more than one transaction directory anchor"
+                    .to_owned(),
+            ));
+        }
+        anchors.transaction = Some(anchors.target.open_child(&name, path, operation)?);
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+/// Write an ExtData transaction artifact with create-new semantics.
+///
+/// This deliberately differs from the single-save transaction helper: if the
+/// write or `sync_all` fails, the partially written pathname is retained. A
+/// later writer might otherwise replace the name between the error and an
+/// attempted cleanup, making an unlink delete somebody else's recovery
+/// material. The enclosing per-transaction directory is retained for the
+/// same reason.
+fn write_new_extra_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+    #[cfg(unix)]
+    if let Some((directory_fd, name)) =
+        anchored_file_location(path, "creating append-only ExtData transaction artifact")?
+    {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before creating transaction artifact",
+        )?;
+        let fd = unsafe {
+            libc::openat(
+                directory_fd,
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return io_at_path(
+                Err(std::io::Error::last_os_error()),
+                "creating append-only ExtData transaction artifact",
+                path,
+            );
+        }
+        return write_new_extra_file_to_open_file(unsafe { File::from_raw_fd(fd) }, bytes, path);
+    }
+
+    if extra_transaction_scope_is_active() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData transaction artifact is outside the anchored directories: {}",
+            path.display()
+        )));
+    }
+
+    let file = io_at_path(
+        OpenOptions::new().write(true).create_new(true).open(path),
+        "creating append-only ExtData transaction artifact",
+        path,
+    )?;
+    write_new_extra_file_to_open_file(file, bytes, path)
+}
+
+fn write_new_extra_file_to_open_file(
+    mut file: File,
+    bytes: &[u8],
+    path: &Path,
+) -> Result<(), ConversionError> {
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        return io_at_path(
+            Err(error),
+            "writing append-only ExtData transaction artifact",
+            path,
+        );
+    }
+    Ok(())
+}
+
+fn sync_extra_directory(path: &Path) -> Result<(), ConversionError> {
+    #[cfg(unix)]
+    if let Some(directory_fd) = anchored_directory_fd(path) {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before syncing transaction metadata",
+        )?;
+        let result = unsafe { libc::fsync(directory_fd) };
+        if result != 0 {
+            return io_at_path(
+                Err(std::io::Error::last_os_error()),
+                "syncing ExtData transaction directory",
+                path,
+            );
+        }
+        return Ok(());
+    }
+    if extra_transaction_scope_is_active() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData directory is outside the anchored transaction directories: {}",
+            path.display()
+        )));
+    }
+    sync_directory(path)
+}
+
 #[cfg(target_os = "macos")]
 fn atomic_exchange_paths(
     staged: &Path,
     target: &Path,
     operation: &'static str,
 ) -> Result<(), ConversionError> {
+    let staged_at = anchored_file_location(staged, operation)?;
+    let target_at = anchored_file_location(target, operation)?;
+    match (staged_at, target_at) {
+        (Some((staged_fd, staged_name)), Some((target_fd, target_name))) => {
+            ensure_extra_transaction_directory_bindings(
+                "rechecking ExtData directories before atomic exchange",
+            )?;
+            const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
+            let result = unsafe {
+                libc::renameatx_np(
+                    staged_fd,
+                    staged_name.as_ptr(),
+                    target_fd,
+                    target_name.as_ptr(),
+                    libc::RENAME_SWAP | RENAME_NOFOLLOW_ANY,
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            return io_at_path(Err(std::io::Error::last_os_error()), operation, target);
+        }
+        (None, None) if !extra_transaction_scope_is_active() => {}
+        _ => {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData atomic exchange path is outside the anchored transaction directories ({operation}; staged={}, target={})",
+                staged.display(),
+                target.display()
+            )));
+        }
+    }
+
     let staged_c = c_path(staged, operation)?;
     let target_c = c_path(target, operation)?;
     let result =
@@ -315,6 +923,38 @@ fn atomic_exchange_paths(
     target: &Path,
     operation: &'static str,
 ) -> Result<(), ConversionError> {
+    let staged_at = anchored_file_location(staged, operation)?;
+    let target_at = anchored_file_location(target, operation)?;
+    match (staged_at, target_at) {
+        (Some((staged_fd, staged_name)), Some((target_fd, target_name))) => {
+            ensure_extra_transaction_directory_bindings(
+                "rechecking ExtData directories before atomic exchange",
+            )?;
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_renameat2 as libc::c_long,
+                    staged_fd,
+                    staged_name.as_ptr(),
+                    target_fd,
+                    target_name.as_ptr(),
+                    libc::RENAME_EXCHANGE,
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            return io_at_path(Err(std::io::Error::last_os_error()), operation, target);
+        }
+        (None, None) if !extra_transaction_scope_is_active() => {}
+        _ => {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData atomic exchange path is outside the anchored transaction directories ({operation}; staged={}, target={})",
+                staged.display(),
+                target.display()
+            )));
+        }
+    }
+
     let staged_c = c_path(staged, operation)?;
     let target_c = c_path(target, operation)?;
     let result = unsafe {
@@ -353,13 +993,24 @@ struct ExtraInstallLock {
 impl ExtraInstallLock {
     fn acquire(target_dir: &Path) -> Result<Self, ConversionError> {
         let path = target_dir.join(EXTRA_LOCK_NAME);
+        #[cfg(unix)]
+        if let Some(target_fd) = anchored_directory_fd(target_dir) {
+            return Self::acquire_anchored(target_fd, &path);
+        }
+        if extra_transaction_scope_is_active() {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData install lock is outside the anchored target directory: {}",
+                path.display()
+            )));
+        }
+
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
 
-            options.custom_flags(libc::O_NOFOLLOW);
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
         }
         #[cfg(windows)]
         {
@@ -417,6 +1068,85 @@ impl ExtraInstallLock {
             path.display()
         )))
     }
+
+    #[cfg(unix)]
+    fn acquire_anchored(target_fd: RawFd, path: &Path) -> Result<Self, ConversionError> {
+        let name = CString::new(EXTRA_LOCK_NAME).expect("lock name is a fixed NUL-free literal");
+        for _ in 0..2 {
+            ensure_extra_transaction_directory_bindings(
+                "rechecking ExtData target directory before opening install lock",
+            )?;
+            let fd = unsafe {
+                libc::openat(
+                    target_fd,
+                    name.as_ptr(),
+                    libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    0o600,
+                )
+            };
+            if fd < 0 {
+                return io_at_path(
+                    Err(std::io::Error::last_os_error()),
+                    "opening anchored ExtData install lock",
+                    path,
+                );
+            }
+            let file = unsafe { File::from_raw_fd(fd) };
+            let file_metadata = io_at_path(
+                file.metadata(),
+                "reading anchored ExtData install lock",
+                path,
+            )?;
+            let named = stat_at(
+                target_fd,
+                &name,
+                "reading anchored ExtData install lock metadata",
+                path,
+            )?;
+            if !file_metadata.file_type().is_file()
+                || !stat_is_regular(&named)
+                || file_identity(&file_metadata) != stat_identity(&named)
+            {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "ExtData install lock is not a stable regular file: {}",
+                    path.display()
+                )));
+            }
+            match file.try_lock_exclusive() {
+                Ok(()) => {
+                    ensure_extra_transaction_directory_bindings(
+                        "rechecking ExtData target directory after locking",
+                    )?;
+                    let final_named = stat_at(
+                        target_fd,
+                        &name,
+                        "rechecking anchored ExtData install lock metadata",
+                        path,
+                    )?;
+                    if stat_is_regular(&final_named)
+                        && file_identity(&file_metadata) == stat_identity(&final_named)
+                    {
+                        return Ok(Self { _file: file });
+                    }
+                    // Dropping the handle releases the advisory lock before a
+                    // bounded retry against the replacement directory entry.
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData group installation is already locked: {}",
+                        path.display()
+                    )));
+                }
+                Err(error) => {
+                    return io_at_path(Err(error), "locking anchored ExtData install lock", path);
+                }
+            }
+        }
+        Err(ConversionError::UnsafeInstall(format!(
+            "ExtData install lock changed while being acquired: {}",
+            path.display()
+        )))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -447,8 +1177,8 @@ type FileIdentity = (u64, Option<u128>);
 struct ExtraInstallPlan {
     staging_dir: PathBuf,
     target_dir: PathBuf,
+    transaction_dir: PathBuf,
     groups: Vec<ExtraGroup>,
-    manifest_path: PathBuf,
     recovery_journal_path: PathBuf,
     transaction_id: String,
     staging_set_sha256: String,
@@ -477,10 +1207,15 @@ impl ExtraInstallPlan {
         }
     }
 
-    fn manifest(&self) -> ExtraInstallManifest {
-        ExtraInstallManifest {
+    fn manifest(&self) -> Result<ExtraInstallManifest, ConversionError> {
+        let (target_dir_identity, transaction_dir_identity) =
+            manifest_directory_identities(&self.target_dir, &self.transaction_dir)?;
+        Ok(ExtraInstallManifest {
             version: EXTRA_INSTALL_MANIFEST_VERSION,
             transaction_id: self.transaction_id.clone(),
+            transaction_dir: Some(self.transaction_dir.clone()),
+            target_dir_identity,
+            transaction_dir_identity,
             groups: self.groups.clone(),
             staging_dir: self.staging_dir.clone(),
             target_dir: self.target_dir.clone(),
@@ -491,7 +1226,7 @@ impl ExtraInstallPlan {
                 .iter()
                 .map(install_entry_from_prepared)
                 .collect(),
-        }
+        })
     }
 }
 
@@ -508,9 +1243,13 @@ fn install_entry_from_prepared(entry: &PreparedEntry) -> ExtraInstallEntry {
     }
 }
 
-/// Return the controlled recovery journal location for an ExtData target
-/// directory. A journal is only retained if an installation cannot prove that
-/// every selected component reached its final state.
+/// Return the root-level recovery journal location used by pre-v4 transactions.
+///
+/// New transactions never write here: each v5 transaction has a unique,
+/// append-only child directory.  This helper remains available only so callers
+/// can identify an already-created legacy journal. Legacy journals lack the
+/// persisted directory identities required for a safe rollback and are
+/// therefore rejected before mutation.
 pub fn recovery_journal_path_for_target_dir(
     target_dir: impl AsRef<Path>,
 ) -> Result<PathBuf, ConversionError> {
@@ -532,9 +1271,11 @@ pub fn dry_run_extra_groups_with(
     expected_target_set_sha256: Option<&str>,
     probe: &dyn ProcessProbe,
 ) -> Result<ExtraInstallReport, ConversionError> {
+    let target_dir = normalize_directory(target_dir.as_ref(), "target ExtData directory")?;
+    let _scope = ExtraTransactionScope::open(&target_dir)?;
     let plan = prepare_extra_install(
         staging_dir.as_ref(),
-        target_dir.as_ref(),
+        &target_dir,
         groups,
         expected_staging_set_sha256,
         expected_target_set_sha256,
@@ -591,9 +1332,10 @@ pub fn install_extra_groups_with(
     probe: &dyn ProcessProbe,
     operations: &dyn ExtraFileOperations,
 ) -> Result<ExtraInstallReport, ConversionError> {
-    let target_dir = normalize_directory(target_dir.as_ref(), "target ExtData directory")?;
-    let _lock = ExtraInstallLock::acquire(&target_dir)?;
     require_durable_extra_transaction_support()?;
+    let target_dir = normalize_directory(target_dir.as_ref(), "target ExtData directory")?;
+    let _scope = ExtraTransactionScope::open(&target_dir)?;
+    let _lock = ExtraInstallLock::acquire(&target_dir)?;
     let plan = prepare_extra_install(
         staging_dir.as_ref(),
         &target_dir,
@@ -604,17 +1346,17 @@ pub fn install_extra_groups_with(
     )?;
     validate_install_artifacts_absent(&plan)?;
 
-    let mut backups_created = Vec::<OwnedArtifact>::new();
     let mut temporary_paths = vec![None; plan.entries.len()];
-    let mut replacement_attempts = Vec::new();
     let mut recovery_journal = None::<OwnedArtifact>;
     let mut replacement_started = false;
 
     let result = (|| {
+        create_transaction_directory(&plan)?;
+
         // Persist a complete, rollback-valid journal before creating any
         // backup or temporary file.  A hard interruption at any later point
         // can therefore recover by inspecting before/after states.
-        let recovery_bytes = serde_json::to_vec_pretty(&plan.manifest())?;
+        let recovery_bytes = serde_json::to_vec_pretty(&plan.manifest()?)?;
         // This must have create-new semantics: a second writer that reaches
         // this path after preflight owns its journal, not us.
         operations.write_new_file(&plan.recovery_journal_path, &recovery_bytes)?;
@@ -623,6 +1365,7 @@ pub fn install_extra_groups_with(
             &recovery_bytes,
             "capturing ExtData recovery journal",
         )?);
+        operations.sync_directory(&plan.transaction_dir)?;
         operations.sync_directory(&plan.target_dir)?;
 
         for entry in &plan.entries {
@@ -635,11 +1378,7 @@ pub fn install_extra_groups_with(
                         backup.display()
                     )));
                 }
-                backups_created.push(capture_owned_regular_file(
-                    backup,
-                    previous,
-                    "capturing staged ExtData backup",
-                )?);
+                capture_owned_regular_file(backup, previous, "capturing staged ExtData backup")?;
             }
         }
 
@@ -661,6 +1400,7 @@ pub fn install_extra_groups_with(
 
         // The journal, every backup, and every staged replacement are now
         // durable before the first target name can be changed.
+        operations.sync_directory(&plan.transaction_dir)?;
         operations.sync_directory(&plan.target_dir)?;
 
         for (index, entry) in plan.entries.iter().enumerate() {
@@ -683,7 +1423,6 @@ pub fn install_extra_groups_with(
                 &entry.staging_bytes,
                 previous,
             )?;
-            replacement_attempts.push(index);
             // An atomic exchange leaves the former target at the controlled
             // temporary path.  Retain its identity for compensated failure
             // handling and for a later explicit rollback.
@@ -692,6 +1431,7 @@ pub fn install_extra_groups_with(
                 previous,
                 "capturing exchanged ExtData target snapshot",
             )?);
+            operations.sync_directory(&plan.transaction_dir)?;
             operations.sync_directory(&plan.target_dir)?;
         }
 
@@ -702,6 +1442,7 @@ pub fn install_extra_groups_with(
                 .expect("journal is captured before any transaction artifact"),
             "rechecking retained ExtData recovery journal after installation",
         )?;
+        operations.sync_directory(&plan.transaction_dir)?;
         operations.sync_directory(&plan.target_dir)?;
         Ok(plan.report())
     })();
@@ -714,23 +1455,20 @@ pub fn install_extra_groups_with(
                     "ExtData group installation reached an atomic target exchange but did not finish cleanly: {install_error}; stop the emulator and roll back the retained recovery journal"
                 )));
             }
-            let cleanup_errors = cleanup_failed_install(
-                &plan,
-                operations,
-                probe,
-                &mut temporary_paths,
-                &replacement_attempts,
-                &backups_created,
-                recovery_journal.as_ref(),
-            );
-            if cleanup_errors.is_empty() {
-                Err(install_error)
+            let retained_state = if let Some(journal) = recovery_journal.as_ref() {
+                format!(
+                    "retained recovery journal for audit and explicit rollback: {}",
+                    journal.path.display()
+                )
             } else {
-                Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData group installation failed: {install_error}; cleanup also failed: {}",
-                    cleanup_errors.join("; ")
-                )))
-            }
+                format!(
+                    "no recovery journal was written and no target exchange began; retained transaction directory for audit: {}",
+                    plan.transaction_dir.display()
+                )
+            };
+            Err(ConversionError::UnsafeInstall(format!(
+                "ExtData group installation failed before an atomic target exchange: {install_error}; {retained_state}"
+            )))
         }
     }
 }
@@ -815,31 +1553,45 @@ pub fn rollback_extra_groups(manifest_path: impl AsRef<Path>) -> Result<(), Conv
     )
 }
 
-/// Roll back a complete ExtData manifest.  Every entry is validated before a
-/// target changes, and backups/manifest are only consumed after all targets
-/// are restored and re-verified.
+/// Roll back a complete ExtData manifest. Every entry is validated before a
+/// target changes. The journal, backups, and transaction directory are
+/// deliberately retained after a verified rollback for audit and recovery.
 pub fn rollback_extra_groups_with(
     manifest_path: impl AsRef<Path>,
     probe: &dyn ProcessProbe,
     operations: &dyn ExtraFileOperations,
 ) -> Result<(), ConversionError> {
     reject_running_emulator(probe)?;
-    let (manifest_path, target_dir) = normalize_manifest_path(manifest_path.as_ref())?;
-    let _lock = ExtraInstallLock::acquire(&target_dir)?;
     require_durable_extra_transaction_support()?;
+    let (manifest_path, target_dir) = normalize_manifest_path(manifest_path.as_ref())?;
+    let _scope = ExtraTransactionScope::open(&target_dir)?;
+    #[cfg(unix)]
+    if manifest_path.parent() != Some(target_dir.as_path())
+        && !anchor_existing_transaction_directory(
+            manifest_path
+                .parent()
+                .expect("normalized manifest has a parent"),
+            "opening anchored ExtData transaction directory for rollback",
+        )?
+    {
+        return Err(ConversionError::UnsafeInstall(
+            "ExtData rollback transaction directory is not anchored to its target".to_owned(),
+        ));
+    }
+    ensure_extra_transaction_directory_bindings("checking ExtData rollback directory bindings")?;
     reject_running_emulator(probe)?;
     let manifest_bytes = read_regular_file(&manifest_path, "reading ExtData rollback manifest")?;
     let manifest: ExtraInstallManifest = serde_json::from_slice(&manifest_bytes)?;
     let entries = validate_rollback_manifest(&manifest, &manifest_path, &target_dir)?;
-    let companion = matching_transaction_record(&manifest_path, &target_dir, &manifest)?;
-    let mut transaction_records = vec![TransactionArtifact {
-        path: manifest_path.clone(),
-        bytes: manifest_bytes.clone(),
-    }];
-    if let Some(companion) = companion {
-        transaction_records.push(companion);
-    }
-
+    // A v5 journal binds both directories by inode.  Validate it before
+    // creating the advisory lock or reading a target component, so a
+    // same-path replacement cannot acquire transaction material from the
+    // former directory.
+    ensure_extra_transaction_directory_bindings(
+        "rechecking ExtData rollback directory bindings after manifest validation",
+    )?;
+    let _lock = ExtraInstallLock::acquire(&target_dir)?;
+    reject_running_emulator(probe)?;
     let rollback_states = prepare_rollback_states(&entries)?;
     for state in &rollback_states {
         if !state.needs_restore {
@@ -889,77 +1641,14 @@ pub fn rollback_extra_groups_with(
         }
     }
     operations.sync_directory(&target_dir)?;
+    if let Some(transaction_dir) = manifest.transaction_dir.as_deref() {
+        // A rollback swaps a target name with a staging name in this distinct
+        // transaction directory.  Persist both namespaces before reporting a
+        // restored target state.
+        operations.sync_directory(transaction_dir)?;
+        operations.sync_directory(&target_dir)?;
+    }
     verify_restored_targets(&entries)?;
-    remove_recovery_temporaries(&entries, probe, operations)?;
-
-    let backups = rollback_states
-        .iter()
-        .filter_map(|state| {
-            state
-                .entry
-                .entry
-                .backup
-                .as_ref()
-                .zip(state.entry.previous.as_ref())
-                .map(|(backup, previous)| (backup.clone(), previous.clone()))
-        })
-        .collect::<Vec<(PathBuf, Vec<u8>)>>();
-    let mut removed_backups = Vec::new();
-    for (backup, _) in &backups {
-        reject_running_emulator(probe)?;
-        let expected = backups
-            .iter()
-            .find(|(candidate, _)| candidate == backup)
-            .map(|(_, bytes)| bytes.as_slice())
-            .expect("backup must be present in rollback snapshot");
-        if let Err(error) = remove_owned_regular_file(
-            backup,
-            expected,
-            "removing consumed ExtData rollback backup",
-            operations,
-        ) {
-            let mut potentially_removed = removed_backups.clone();
-            potentially_removed.push(backup.clone());
-            let recovery_errors = restore_consumed_artifacts(
-                &backups,
-                &potentially_removed,
-                &transaction_records,
-                operations,
-            );
-            return Err(consumption_error("backup", error, recovery_errors));
-        }
-        removed_backups.push(backup.clone());
-    }
-    for record in &transaction_records {
-        reject_running_emulator(probe)?;
-        if let Err(error) = remove_owned_regular_file(
-            &record.path,
-            &record.bytes,
-            "removing consumed ExtData transaction record",
-            operations,
-        ) {
-            let recovery_errors = restore_consumed_artifacts(
-                &backups,
-                &removed_backups,
-                &transaction_records,
-                operations,
-            );
-            return Err(consumption_error(
-                "transaction record",
-                error,
-                recovery_errors,
-            ));
-        }
-    }
-    if let Err(error) = operations.sync_directory(&target_dir) {
-        let recovery_errors = restore_consumed_artifacts(
-            &backups,
-            &removed_backups,
-            &transaction_records,
-            operations,
-        );
-        return Err(consumption_error("directory sync", error, recovery_errors));
-    }
     Ok(())
 }
 
@@ -972,17 +1661,17 @@ fn prepare_extra_install(
     probe: &dyn ProcessProbe,
 ) -> Result<ExtraInstallPlan, ConversionError> {
     let staging_dir = normalize_directory(staging_dir, "staged ExtData directory")?;
-    let target_dir = normalize_directory(target_dir, "target ExtData directory")?;
+    let target_dir = target_dir.to_path_buf();
     if staging_dir == target_dir {
         return Err(ConversionError::InvalidSave(
             "staged and target ExtData directories alias the same directory".to_owned(),
         ));
     }
     reject_running_emulator(probe)?;
-    let groups = normalize_groups(groups)?;
-    let manifest_path = target_dir.join(EXTRA_MANIFEST_NAME);
-    let recovery_journal_path = target_dir.join(EXTRA_RECOVERY_JOURNAL_NAME);
     let transaction_id = Uuid::new_v4().hyphenated().to_string();
+    let transaction_dir = controlled_transaction_directory(&target_dir, &transaction_id)?;
+    let recovery_journal_path = transaction_dir.join(EXTRA_RECOVERY_JOURNAL_NAME);
+    let groups = normalize_groups(groups)?;
     let mut entries = selected_components(&groups)
         .into_iter()
         .map(|(group, component)| {
@@ -1006,11 +1695,11 @@ fn prepare_extra_install(
                 )));
             }
             let backup = Some(controlled_backup_path(
-                &target_dir,
+                &transaction_dir,
                 component,
                 &sha256_hex(&previous),
             )?);
-            let temporary = controlled_temporary_path(&target_dir, component, &transaction_id)?;
+            let temporary = controlled_temporary_path(&transaction_dir, component, &transaction_id)?;
             Ok(PreparedEntry {
                 group,
                 component,
@@ -1040,8 +1729,8 @@ fn prepare_extra_install(
     Ok(ExtraInstallPlan {
         staging_dir,
         target_dir,
+        transaction_dir,
         groups,
-        manifest_path,
         recovery_journal_path,
         transaction_id,
         staging_set_sha256,
@@ -1081,18 +1770,38 @@ fn selected_components(groups: &[ExtraGroup]) -> Vec<(ExtraGroup, &'static str)>
 }
 
 fn validate_install_artifacts_absent(plan: &ExtraInstallPlan) -> Result<(), ConversionError> {
-    reject_existing_path(&plan.manifest_path, "ExtData install manifest")?;
-    reject_existing_path(&plan.recovery_journal_path, "ExtData recovery journal")?;
-    for entry in &plan.entries {
-        if let Some(backup) = entry.backup.as_deref() {
-            reject_existing_path(backup, "ExtData backup")?;
-        }
-        reject_existing_path(&entry.temporary, "ExtData staged component")?;
-    }
-    Ok(())
+    reject_existing_path(&plan.transaction_dir, "ExtData transaction directory")
 }
 
 fn reject_existing_path(path: &Path, label: &str) -> Result<(), ConversionError> {
+    #[cfg(unix)]
+    if let Some((directory_fd, name)) =
+        anchored_file_location(path, "reading anchored ExtData transaction artifact")?
+    {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before validating transaction namespace",
+        )?;
+        return match stat_at(
+            directory_fd,
+            &name,
+            "reading anchored ExtData transaction artifact",
+            path,
+        ) {
+            Ok(_) => Err(ConversionError::UnsafeInstall(format!(
+                "{label} already exists: {}",
+                path.display()
+            ))),
+            Err(error) if is_not_found_error(&error) => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
+    if extra_transaction_scope_is_active() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData transaction artifact is outside the anchored directories: {}",
+            path.display()
+        )));
+    }
+
     match fs::symlink_metadata(path) {
         Ok(_) => Err(ConversionError::UnsafeInstall(format!(
             "{label} already exists: {}",
@@ -1103,158 +1812,45 @@ fn reject_existing_path(path: &Path, label: &str) -> Result<(), ConversionError>
     }
 }
 
-fn cleanup_failed_install(
-    plan: &ExtraInstallPlan,
-    operations: &dyn ExtraFileOperations,
-    probe: &dyn ProcessProbe,
-    temporary_paths: &mut [Option<OwnedArtifact>],
-    replacement_attempts: &[usize],
-    backups_created: &[OwnedArtifact],
-    recovery_journal: Option<&OwnedArtifact>,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    if !cleanup_process_gate(probe, &mut errors) {
-        return errors;
+/// Create the single namespace owned by this transaction.  We intentionally
+/// never remove this directory or its contents: POSIX does not offer an
+/// unlink-if-this-inode-and-this-content-still-match primitive, so any cleanup
+/// after a pathname check could delete a file created by another writer.
+fn create_transaction_directory(plan: &ExtraInstallPlan) -> Result<(), ConversionError> {
+    #[cfg(unix)]
+    if create_anchored_transaction_directory(
+        &plan.transaction_dir,
+        "creating ExtData transaction directory",
+    )? {
+        ensure_extra_transaction_directory_bindings(
+            "validating created ExtData transaction directory",
+        )?;
+        // This commits the new child name before the recovery journal and
+        // staged values are written inside it.
+        return sync_extra_directory(&plan.target_dir);
     }
 
-    for index in replacement_attempts.iter().rev().copied() {
-        let entry = &plan.entries[index];
-        if !cleanup_process_gate(probe, &mut errors) {
-            return errors;
-        }
-        if let Err(error) = require_current_bytes(
-            &entry.target,
-            Some(entry.staging_bytes.as_slice()),
-            "rechecking ExtData target before failed-install compensation",
-        ) {
-            errors.push(format!(
-                "retain ExtData recovery journal because target is no longer owned by this transaction: {error}"
-            ));
-            return errors;
-        }
-        let previous = entry
-            .previous
-            .as_deref()
-            .expect("new ExtData installation requires initialized targets");
-        let temporary = temporary_paths[index]
-            .as_ref()
-            .expect("successful ExtData exchange retains its controlled temporary");
-        if let Err(error) = validate_owned_regular_file(
-            temporary,
-            "rechecking exchanged ExtData target before failed-install compensation",
-        ) {
-            errors.push(format!(
-                "retain ExtData recovery journal because exchanged target snapshot changed externally: {error}"
-            ));
-            return errors;
-        }
-        let result = operations.restore_target(
-            &temporary.path,
-            &entry.target,
-            previous,
-            &entry.staging_bytes,
-        );
-        if let Err(error) = result {
-            errors.push(format!("restore prior ExtData component: {error}"));
-            return errors;
-        }
-        temporary_paths[index] = match capture_owned_regular_file(
-            &entry.temporary,
-            &entry.staging_bytes,
-            "capturing compensated ExtData staged component",
-        ) {
-            Ok(temporary) => Some(temporary),
-            Err(error) => {
-                errors.push(format!(
-                    "retain ExtData recovery journal because compensated staged component changed externally: {error}"
-                ));
-                return errors;
-            }
-        };
-    }
-    if !cleanup_process_gate(probe, &mut errors) {
-        return errors;
-    }
-    if let Err(error) = operations.sync_directory(&plan.target_dir) {
-        errors.push(format!(
-            "sync restored ExtData transaction directory: {error}"
-        ));
-        return errors;
+    if extra_transaction_scope_is_active() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData transaction directory is outside the anchored target directory: {}",
+            plan.transaction_dir.display()
+        )));
     }
 
-    for temporary in temporary_paths.iter().flatten() {
-        if !cleanup_process_gate(probe, &mut errors) {
-            return errors;
-        }
-        if let Err(error) = remove_owned_artifact(
-            temporary,
-            "removing staged ExtData component after failed installation",
-            operations,
-        ) {
-            errors.push(format!("remove staged ExtData component: {error}"));
-            return errors;
-        }
-    }
-    for backup in backups_created {
-        if !cleanup_process_gate(probe, &mut errors) {
-            return errors;
-        }
-        if let Err(error) = remove_owned_artifact(
-            backup,
-            "removing ExtData backup after failed installation",
-            operations,
-        ) {
-            errors.push(format!("remove new ExtData backup: {error}"));
-            return errors;
-        }
-    }
-    if let Some(recovery_journal) = recovery_journal {
-        if !cleanup_process_gate(probe, &mut errors) {
-            return errors;
-        }
-        if let Err(error) = remove_owned_artifact(
-            recovery_journal,
-            "removing ExtData recovery journal after failed installation",
-            operations,
-        ) {
-            errors.push(format!("remove ExtData recovery journal: {error}"));
-            return errors;
-        }
-    }
-    record_cleanup(
-        &mut errors,
-        "sync ExtData transaction directory",
-        operations.sync_directory(&plan.target_dir),
-    );
-    errors
-}
-
-fn cleanup_process_gate(probe: &dyn ProcessProbe, errors: &mut Vec<String>) -> bool {
-    match reject_running_emulator(probe) {
-        Ok(()) => true,
-        Err(error) => {
-            errors.push(format!(
-                "retain ExtData recovery material because failed-install compensation is unsafe: {error}"
-            ));
-            false
-        }
-    }
-}
-
-fn require_current_bytes(
-    path: &Path,
-    expected: Option<&[u8]>,
-    operation: &'static str,
-) -> Result<(), ConversionError> {
-    let actual = read_optional_regular_file(path, operation)?;
-    if actual.as_deref() == expected {
-        Ok(())
-    } else {
-        Err(ConversionError::UnsafeInstall(format!(
-            "ExtData target changed outside this transaction: {}",
-            path.display()
-        )))
-    }
+    io_at_path(
+        fs::create_dir(&plan.transaction_dir),
+        "creating ExtData transaction directory",
+        &plan.transaction_dir,
+    )?;
+    validate_controlled_transaction_directory(
+        &plan.transaction_dir,
+        &plan.target_dir,
+        &plan.transaction_id,
+        "validating created ExtData transaction directory",
+    )?;
+    // This commits the new child name before the recovery journal and staged
+    // values are written inside it.
+    sync_extra_directory(&plan.target_dir)
 }
 
 fn capture_owned_regular_file(
@@ -1286,37 +1882,6 @@ fn validate_owned_regular_file(
         Some(&artifact.identity),
         operation,
     )
-}
-
-fn remove_owned_artifact<O: ExtraFileOperations + ?Sized>(
-    artifact: &OwnedArtifact,
-    operation: &'static str,
-    operations: &O,
-) -> Result<(), ConversionError> {
-    match fs::symlink_metadata(&artifact.path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => {
-            validate_owned_regular_file(artifact, operation)?;
-            operations.remove_regular_file(&artifact.path)
-        }
-        Err(error) => io_at_path(Err(error), operation, &artifact.path),
-    }
-}
-
-fn remove_owned_regular_file(
-    path: &Path,
-    expected: &[u8],
-    operation: &'static str,
-    operations: &dyn ExtraFileOperations,
-) -> Result<(), ConversionError> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => {
-            validate_regular_file_bytes(path, expected, None, operation)?;
-            operations.remove_regular_file(path)
-        }
-        Err(error) => io_at_path(Err(error), operation, path),
-    }
 }
 
 fn validate_regular_file_bytes(
@@ -1351,12 +1916,6 @@ fn validate_regular_file_bytes(
     Ok(())
 }
 
-fn record_cleanup(errors: &mut Vec<String>, step: &str, result: Result<(), ConversionError>) {
-    if let Err(error) = result {
-        errors.push(format!("{step}: {error}"));
-    }
-}
-
 fn normalize_directory(path: &Path, label: &str) -> Result<PathBuf, ConversionError> {
     let metadata = io_at_path(
         fs::symlink_metadata(path),
@@ -1373,6 +1932,20 @@ fn normalize_directory(path: &Path, label: &str) -> Result<PathBuf, ConversionEr
 }
 
 fn read_regular_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, ConversionError> {
+    #[cfg(unix)]
+    if let Some((directory_fd, name)) = anchored_file_location(path, operation)? {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before reading transaction file",
+        )?;
+        return read_anchored_regular_file(directory_fd, &name, path, operation);
+    }
+    if extra_transaction_scope_is_active() && is_within_anchored_transaction_namespace(path) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData file is inside the anchored transaction directories but has no FD-relative mapping ({operation}): {}",
+            path.display()
+        )));
+    }
+
     let initial_path_metadata = io_at_path(fs::symlink_metadata(path), operation, path)?;
     if !initial_path_metadata.file_type().is_file() {
         return Err(ConversionError::InvalidSave(format!(
@@ -1407,6 +1980,50 @@ fn read_regular_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, Co
     Ok(bytes)
 }
 
+#[cfg(unix)]
+fn read_anchored_regular_file(
+    directory_fd: RawFd,
+    name: &CString,
+    path: &Path,
+    operation: &'static str,
+) -> Result<Vec<u8>, ConversionError> {
+    let initial = stat_at(directory_fd, name, operation, path)?;
+    if !stat_is_regular(&initial) {
+        return Err(ConversionError::InvalidSave(format!(
+            "ExtData component must be a regular non-symlink file: {}",
+            path.display()
+        )));
+    }
+    let fd = unsafe {
+        libc::openat(
+            directory_fd,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return io_at_path(Err(std::io::Error::last_os_error()), operation, path);
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let opened = io_at_path(file.metadata(), operation, path)?;
+    if !opened.file_type().is_file() || file_identity(&opened) != stat_identity(&initial) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData component changed while opening it: {}",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::with_capacity(opened.len().try_into().unwrap_or(0));
+    io_at_path(file.read_to_end(&mut bytes), operation, path)?;
+    let final_stat = stat_at(directory_fd, name, operation, path)?;
+    if !stat_is_regular(&final_stat) || stat_identity(&final_stat) != file_identity(&opened) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData component changed while reading it: {}",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
 fn read_required_staged_component(path: &Path) -> Result<Vec<u8>, ConversionError> {
     match read_regular_file(path, "reading staged ExtData component") {
         Ok(bytes) => Ok(bytes),
@@ -1433,13 +2050,19 @@ fn open_regular_file_no_follow(
     path: &Path,
     operation: &'static str,
 ) -> Result<File, ConversionError> {
+    if extra_transaction_scope_is_active() && is_within_anchored_transaction_namespace(path) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData file is inside the anchored transaction directories but has no FD-relative mapping ({operation}): {}",
+            path.display()
+        )));
+    }
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
 
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     #[cfg(windows)]
     {
@@ -1471,6 +2094,27 @@ fn regular_file_identity(
     path: &Path,
     operation: &'static str,
 ) -> Result<FileIdentity, ConversionError> {
+    #[cfg(unix)]
+    if let Some((directory_fd, name)) = anchored_file_location(path, operation)? {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before reading transaction identity",
+        )?;
+        let metadata = stat_at(directory_fd, &name, operation, path)?;
+        if !stat_is_regular(&metadata) {
+            return Err(ConversionError::InvalidSave(format!(
+                "ExtData transaction artifact must be a regular non-symlink file: {}",
+                path.display()
+            )));
+        }
+        return Ok(stat_identity(&metadata));
+    }
+    if extra_transaction_scope_is_active() && is_within_anchored_transaction_namespace(path) {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData file identity is inside the anchored transaction directories but has no FD-relative mapping ({operation}): {}",
+            path.display()
+        )));
+    }
+
     let metadata = io_at_path(fs::symlink_metadata(path), operation, path)?;
     if !metadata.file_type().is_file() {
         return Err(ConversionError::InvalidSave(format!(
@@ -1499,6 +2143,18 @@ fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
 }
 
 fn files_alias(staging: &Path, target: &Path) -> Result<bool, ConversionError> {
+    #[cfg(unix)]
+    if extra_transaction_scope_is_active() {
+        let target_identity =
+            regular_file_identity(target, "reading anchored target ExtData component identity")?;
+        let staging_metadata = io_at_path(
+            fs::metadata(staging),
+            "reading staged ExtData component identity",
+            staging,
+        )?;
+        return Ok(file_identity(&staging_metadata) == target_identity);
+    }
+
     let staging_canonical = io_at_path(
         fs::canonicalize(staging),
         "resolving staged ExtData component identity",
@@ -1535,22 +2191,80 @@ fn files_alias(staging: &Path, target: &Path) -> Result<bool, ConversionError> {
     }
 }
 
-fn controlled_backup_path(
+fn controlled_transaction_directory(
     target_dir: &Path,
+    transaction_id: &str,
+) -> Result<PathBuf, ConversionError> {
+    validate_transaction_id(transaction_id)?;
+    Ok(target_dir.join(format!(
+        "{EXTRA_TRANSACTION_DIRECTORY_PREFIX}{transaction_id}"
+    )))
+}
+
+fn controlled_backup_path(
+    transaction_dir: &Path,
     component: &str,
     previous_sha256: &str,
 ) -> Result<PathBuf, ConversionError> {
     validate_sha256(previous_sha256, "previous")?;
-    Ok(target_dir.join(format!(".{component}.mh3g-extra-backup-{previous_sha256}")))
+    Ok(transaction_dir.join(format!(".{component}.mh3g-extra-backup-{previous_sha256}")))
 }
 
 fn controlled_temporary_path(
-    target_dir: &Path,
+    transaction_dir: &Path,
     component: &str,
     transaction_id: &str,
 ) -> Result<PathBuf, ConversionError> {
     validate_transaction_id(transaction_id)?;
-    Ok(target_dir.join(format!(".{component}.mh3g-extra-tmp-{transaction_id}")))
+    Ok(transaction_dir.join(format!(".{component}.mh3g-extra-tmp-{transaction_id}")))
+}
+
+fn validate_controlled_transaction_directory(
+    transaction_dir: &Path,
+    target_dir: &Path,
+    transaction_id: &str,
+    operation: &'static str,
+) -> Result<(), ConversionError> {
+    let expected = controlled_transaction_directory(target_dir, transaction_id)?;
+    if !is_normalized_absolute(transaction_dir) || transaction_dir != expected {
+        return Err(ConversionError::InvalidSave(
+            "ExtData transaction directory is not bound to its target directory".to_owned(),
+        ));
+    }
+
+    #[cfg(unix)]
+    if let Some((directory_fd, name)) = anchored_file_location(transaction_dir, operation)? {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before validating the transaction directory",
+        )?;
+        let metadata = stat_at(directory_fd, &name, operation, transaction_dir)?;
+        if !stat_is_directory(&metadata) {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData transaction directory is not a real directory: {}",
+                transaction_dir.display()
+            )));
+        }
+        return Ok(());
+    }
+    if extra_transaction_scope_is_active() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData transaction directory is outside the anchored transaction scope: {}",
+            transaction_dir.display()
+        )));
+    }
+
+    let metadata = io_at_path(
+        fs::symlink_metadata(transaction_dir),
+        operation,
+        transaction_dir,
+    )?;
+    if !metadata.file_type().is_dir() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData transaction directory is not a real directory: {}",
+            transaction_dir.display()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_transaction_id(transaction_id: &str) -> Result<(), ConversionError> {
@@ -1649,11 +2363,88 @@ fn normalize_manifest_path(manifest_path: &Path) -> Result<(PathBuf, PathBuf), C
             manifest_path.display()
         ))
     })?;
-    let target_dir = normalize_directory(parent, "ExtData rollback target directory")?;
+    let parent = normalize_directory(parent, "ExtData rollback manifest directory")?;
+    let target_dir = if parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(EXTRA_TRANSACTION_DIRECTORY_PREFIX))
+    {
+        let target_dir = parent.parent().ok_or_else(|| {
+            ConversionError::InvalidSave(format!(
+                "ExtData transaction directory has no target parent: {}",
+                parent.display()
+            ))
+        })?;
+        normalize_directory(target_dir, "ExtData rollback target directory")?
+    } else {
+        parent.clone()
+    };
     Ok((
-        target_dir.join(filename.expect("filename was validated above")),
+        parent.join(filename.expect("filename was validated above")),
         target_dir,
     ))
+}
+
+fn validate_manifest_directory_identities(
+    manifest: &ExtraInstallManifest,
+    target_dir: &Path,
+    transaction_dir: &Path,
+) -> Result<(), ConversionError> {
+    let expected_target_identity = manifest.target_dir_identity.ok_or_else(|| {
+        ConversionError::InvalidSave(
+            "v5 ExtData manifest must record its target directory identity".to_owned(),
+        )
+    })?;
+    let expected_transaction_identity = manifest.transaction_dir_identity.ok_or_else(|| {
+        ConversionError::InvalidSave(
+            "v5 ExtData manifest must record its transaction directory identity".to_owned(),
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        ensure_extra_transaction_directory_bindings(
+            "rechecking ExtData directories before validating manifest identities",
+        )?;
+        let observed_target_identity = anchored_directory_identity(target_dir).ok_or_else(|| {
+            ConversionError::UnsafeInstall(format!(
+                "ExtData rollback target directory is outside the anchored transaction scope: {}",
+                target_dir.display()
+            ))
+        })?;
+        let observed_transaction_identity = anchored_directory_identity(transaction_dir).ok_or_else(|| {
+            ConversionError::UnsafeInstall(format!(
+                "ExtData rollback transaction directory is outside the anchored transaction scope: {}",
+                transaction_dir.display()
+            ))
+        })?;
+        if observed_target_identity != expected_target_identity {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData rollback target directory identity does not match its recovery journal: {}",
+                target_dir.display()
+            )));
+        }
+        if observed_transaction_identity != expected_transaction_identity {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "ExtData rollback transaction directory identity does not match its recovery journal: {}",
+                transaction_dir.display()
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            target_dir,
+            transaction_dir,
+            expected_target_identity,
+            expected_transaction_identity,
+        );
+        Err(ConversionError::UnsafeInstall(
+            "v5 ExtData rollback requires POSIX directory identity verification".to_owned(),
+        ))
+    }
 }
 
 fn validate_rollback_manifest(
@@ -1661,7 +2452,12 @@ fn validate_rollback_manifest(
     manifest_path: &Path,
     target_dir: &Path,
 ) -> Result<Vec<RollbackEntry>, ConversionError> {
-    if manifest.version != EXTRA_INSTALL_MANIFEST_VERSION {
+    if !matches!(
+        manifest.version,
+        EXTRA_INSTALL_MANIFEST_VERSION
+            | PREVIOUS_EXTRA_INSTALL_MANIFEST_VERSION
+            | LEGACY_EXTRA_INSTALL_MANIFEST_VERSION
+    ) {
         return Err(ConversionError::InvalidSave(format!(
             "unsupported ExtData install manifest version: {}",
             manifest.version
@@ -1670,10 +2466,6 @@ fn validate_rollback_manifest(
     if !is_normalized_absolute(&manifest.staging_dir)
         || !is_normalized_absolute(&manifest.target_dir)
         || manifest.target_dir != target_dir
-        || !matches!(
-            manifest_path.file_name().and_then(|name| name.to_str()),
-            Some(EXTRA_MANIFEST_NAME | EXTRA_RECOVERY_JOURNAL_NAME)
-        )
     {
         return Err(ConversionError::InvalidSave(
             "ExtData manifest paths must be normalized absolute controlled paths".to_owned(),
@@ -1683,6 +2475,57 @@ fn validate_rollback_manifest(
     validate_sha256(&manifest.target_set_sha256, "manifest target set")?;
     validate_transaction_id(&manifest.transaction_id)?;
     validate_manifest_groups(&manifest.groups)?;
+
+    let transaction_artifact_dir = if matches!(
+        manifest.version,
+        EXTRA_INSTALL_MANIFEST_VERSION | PREVIOUS_EXTRA_INSTALL_MANIFEST_VERSION
+    ) {
+        let transaction_dir = manifest.transaction_dir.as_deref().ok_or_else(|| {
+            ConversionError::InvalidSave(
+                "transactional ExtData manifest must record its transaction directory".to_owned(),
+            )
+        })?;
+        validate_controlled_transaction_directory(
+            transaction_dir,
+            target_dir,
+            &manifest.transaction_id,
+            "validating ExtData rollback transaction directory",
+        )?;
+        if manifest_path != transaction_dir.join(EXTRA_RECOVERY_JOURNAL_NAME) {
+            return Err(ConversionError::InvalidSave(
+                "transactional ExtData rollback manifest is not the transaction recovery journal"
+                    .to_owned(),
+            ));
+        }
+        transaction_dir.to_path_buf()
+    } else {
+        if manifest.transaction_dir.is_some()
+            || manifest_path.parent() != Some(target_dir)
+            || !matches!(
+                manifest_path.file_name().and_then(|name| name.to_str()),
+                Some(EXTRA_MANIFEST_NAME | EXTRA_RECOVERY_JOURNAL_NAME)
+            )
+        {
+            return Err(ConversionError::InvalidSave(
+                "legacy ExtData manifest is not in its controlled target directory".to_owned(),
+            ));
+        }
+        target_dir.to_path_buf()
+    };
+
+    if manifest.version == EXTRA_INSTALL_MANIFEST_VERSION {
+        validate_manifest_directory_identities(manifest, target_dir, &transaction_artifact_dir)?;
+    } else {
+        // v3/v4 journals predate persisted directory identities.  Their
+        // component hashes and controlled filenames cannot distinguish an
+        // original ExtData directory from a replacement at the same path,
+        // especially after a crash or process restart.  Recognize the legacy
+        // layout, but never mutate it without that proof.
+        return Err(ConversionError::UnsafeInstall(format!(
+            "ExtData v{} rollback lacks persisted target and transaction directory identities; refuse to mutate a legacy journal",
+            manifest.version
+        )));
+    }
 
     let mut entry_groups = BTreeMap::<ExtraGroup, BTreeSet<String>>::new();
     let mut rollback_entries = Vec::with_capacity(manifest.entries.len());
@@ -1713,8 +2556,11 @@ fn validate_rollback_manifest(
                 "ExtData manifest target is not bound to its target directory".to_owned(),
             ));
         }
-        let expected_temporary =
-            controlled_temporary_path(target_dir, &entry.component, &manifest.transaction_id)?;
+        let expected_temporary = controlled_temporary_path(
+            &transaction_artifact_dir,
+            &entry.component,
+            &manifest.transaction_id,
+        )?;
         if !is_normalized_absolute(&entry.temporary) || entry.temporary != expected_temporary {
             return Err(ConversionError::InvalidSave(
                 "ExtData manifest temporary is not the controlled transaction path".to_owned(),
@@ -1728,8 +2574,11 @@ fn validate_rollback_manifest(
         ) {
             (true, Some(before_sha256), Some(backup)) => {
                 validate_sha256(before_sha256, "manifest previous")?;
-                let expected_backup =
-                    controlled_backup_path(target_dir, &entry.component, before_sha256)?;
+                let expected_backup = controlled_backup_path(
+                    &transaction_artifact_dir,
+                    &entry.component,
+                    before_sha256,
+                )?;
                 if !is_normalized_absolute(backup) || backup != &expected_backup {
                     return Err(ConversionError::InvalidSave(
                         "ExtData manifest backup is not the controlled backup path".to_owned(),
@@ -1810,48 +2659,6 @@ fn validate_manifest_groups(groups: &[ExtraGroup]) -> Result<(), ConversionError
         ));
     }
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct TransactionArtifact {
-    path: PathBuf,
-    bytes: Vec<u8>,
-}
-
-fn matching_transaction_record(
-    manifest_path: &Path,
-    target_dir: &Path,
-    manifest: &ExtraInstallManifest,
-) -> Result<Option<TransactionArtifact>, ConversionError> {
-    let companion_name = match manifest_path.file_name().and_then(|name| name.to_str()) {
-        Some(EXTRA_MANIFEST_NAME) => EXTRA_RECOVERY_JOURNAL_NAME,
-        Some(EXTRA_RECOVERY_JOURNAL_NAME) => EXTRA_MANIFEST_NAME,
-        _ => unreachable!("normalized rollback manifest names are validated"),
-    };
-    let companion_path = target_dir.join(companion_name);
-    let Some(bytes) = read_optional_regular_file(
-        &companion_path,
-        "reading companion ExtData transaction record",
-    )?
-    else {
-        return Ok(None);
-    };
-    let companion: ExtraInstallManifest = serde_json::from_slice(&bytes).map_err(|error| {
-        ConversionError::InvalidSave(format!(
-            "companion ExtData transaction record is invalid: {error}"
-        ))
-    })?;
-    validate_rollback_manifest(&companion, &companion_path, target_dir)?;
-    if &companion != manifest {
-        return Err(ConversionError::UnsafeInstall(
-            "ExtData active manifest and recovery journal do not describe the same transaction"
-                .to_owned(),
-        ));
-    }
-    Ok(Some(TransactionArtifact {
-        path: companion_path,
-        bytes,
-    }))
 }
 
 #[derive(Debug, Clone)]
@@ -1985,110 +2792,6 @@ fn verify_restored_targets(entries: &[RollbackEntry]) -> Result<(), ConversionEr
         }
     }
     Ok(())
-}
-
-fn remove_recovery_temporaries(
-    entries: &[RollbackEntry],
-    probe: &dyn ProcessProbe,
-    operations: &dyn ExtraFileOperations,
-) -> Result<(), ConversionError> {
-    for rollback_entry in entries {
-        reject_running_emulator(probe)?;
-        let entry = &rollback_entry.entry;
-        let Some(bytes) = read_optional_regular_file(
-            &entry.temporary,
-            "reading ExtData recovery temporary file",
-        )?
-        else {
-            continue;
-        };
-        let temporary = capture_owned_regular_file(
-            &entry.temporary,
-            &bytes,
-            "capturing ExtData recovery temporary file",
-        )?;
-        let temporary_sha256 = sha256_hex(&temporary.bytes);
-        let is_after = temporary_sha256 == entry.after_sha256;
-        let is_before = entry
-            .before_sha256
-            .as_deref()
-            .is_some_and(|before_sha256| temporary_sha256 == before_sha256);
-        if !is_after && !is_before {
-            return Err(ConversionError::UnsafeInstall(format!(
-                "ExtData recovery temporary file has unexpected bytes for {}: {}",
-                entry.component,
-                entry.temporary.display()
-            )));
-        }
-        remove_owned_artifact(
-            &temporary,
-            "removing ExtData recovery temporary file",
-            operations,
-        )?;
-    }
-    Ok(())
-}
-
-fn restore_consumed_artifacts(
-    backups: &[(PathBuf, Vec<u8>)],
-    removed_backups: &[PathBuf],
-    transaction_records: &[TransactionArtifact],
-    operations: &dyn ExtraFileOperations,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    for removed_backup in removed_backups {
-        let restored = backups
-            .iter()
-            .find(|(backup, _)| backup == removed_backup)
-            .ok_or_else(|| {
-                ConversionError::UnsafeInstall(format!(
-                    "missing cached ExtData backup bytes: {}",
-                    removed_backup.display()
-                ))
-            })
-            .and_then(|(backup, bytes)| restore_artifact_file(backup, bytes, operations));
-        record_cleanup(&mut errors, "recreate consumed ExtData backup", restored);
-    }
-    for record in transaction_records {
-        record_cleanup(
-            &mut errors,
-            "recreate consumed ExtData transaction record",
-            restore_artifact_file(&record.path, &record.bytes, operations),
-        );
-    }
-    errors
-}
-
-fn restore_artifact_file(
-    path: &Path,
-    expected: &[u8],
-    operations: &dyn ExtraFileOperations,
-) -> Result<(), ConversionError> {
-    match read_optional_regular_file(path, "reading ExtData recovery artifact")? {
-        None => operations.write_new_file(path, expected),
-        Some(actual) if actual == expected => Ok(()),
-        Some(_) => Err(ConversionError::UnsafeInstall(format!(
-            "ExtData recovery artifact has unexpected bytes: {}",
-            path.display()
-        ))),
-    }
-}
-
-fn consumption_error(
-    phase: &str,
-    error: ConversionError,
-    recovery_errors: Vec<String>,
-) -> ConversionError {
-    if recovery_errors.is_empty() {
-        ConversionError::UnsafeInstall(format!(
-            "ExtData rollback could not consume {phase}: {error}; restored rollback metadata"
-        ))
-    } else {
-        ConversionError::UnsafeInstall(format!(
-            "ExtData rollback could not consume {phase}: {error}; recovery also failed: {}",
-            recovery_errors.join("; ")
-        ))
-    }
 }
 
 fn component_group(component: &str) -> Option<ExtraGroup> {

@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde_json::Value;
 use sha2::Digest;
@@ -57,6 +62,39 @@ fn extras_fixture(temp: &TempDir) -> PathBuf {
         fs::write(source_dir.join(component), bytes).unwrap();
     }
     source_dir
+}
+
+fn staged_extras_fixture(temp: &TempDir) -> PathBuf {
+    let source_dir = extras_fixture(temp);
+    let staging_dir = temp.path().join("staged-extras");
+    let report = run_json(&[
+        "convert-extras".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--output-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--write".into(),
+    ]);
+    assert_eq!(report["status"], "written");
+    staging_dir
+}
+
+fn initialized_extra_target(temp: &TempDir, staging_dir: &Path) -> PathBuf {
+    let target_dir = temp.path().join("cemu-extras");
+    fs::create_dir_all(&target_dir).unwrap();
+    for component in [
+        "card1", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ] {
+        fs::copy(staging_dir.join(component), target_dir.join(component)).unwrap();
+    }
+
+    // Keep a valid Cemu header while ensuring the target set is observably
+    // different from the staged set before installation.
+    let card1 = target_dir.join("card1");
+    let mut bytes = fs::read(&card1).unwrap();
+    bytes[0x28] = 0xA5;
+    fs::write(card1, bytes).unwrap();
+    target_dir
 }
 
 fn write_source(path: PathBuf) -> PathBuf {
@@ -400,6 +438,130 @@ fn write_then_rollback_restores_previous_slot() {
     assert_eq!(fs::read(&target).unwrap(), previous);
     assert!(!manifest.exists());
     assert!(!backup.exists());
+}
+
+#[test]
+fn install_extras_dry_run_reports_one_complete_group_without_writing() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let staging_dir = staged_extras_fixture(&temp);
+    let target_dir = initialized_extra_target(&temp, &staging_dir);
+    let card1_before = fs::read(target_dir.join("card1")).unwrap();
+
+    let report = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--dry-run".into(),
+    ]);
+
+    assert_eq!(report["operation"], "install-extras");
+    assert_eq!(report["status"], "dry-run");
+    assert_eq!(report["groups"][0], "guild-cards");
+    assert_eq!(report["groups"].as_array().unwrap().len(), 1);
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(entries.iter().all(|entry| entry["group"] == "guild-cards"));
+    let manifest = PathBuf::from(report["manifest"].as_str().unwrap());
+    // v5 reserves an append-only per-transaction directory during planning.
+    // Dry-run reports the exact journal location it would use, but creates
+    // neither the directory nor the journal.
+    let transaction_dir = manifest.parent().unwrap();
+    assert_eq!(manifest.file_name().unwrap(), ".mh3g-extra-recovery.json");
+    assert_eq!(
+        transaction_dir.parent().unwrap(),
+        target_dir.canonicalize().unwrap()
+    );
+    assert!(
+        transaction_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".mh3g-extra-transaction-")
+    );
+    assert!(!manifest.exists());
+    assert!(!transaction_dir.exists());
+    assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
+}
+
+#[test]
+fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let staging_dir = staged_extras_fixture(&temp);
+    let target_dir = initialized_extra_target(&temp, &staging_dir);
+    let card1_before = fs::read(target_dir.join("card1")).unwrap();
+
+    let dry_run = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--dry-run".into(),
+    ]);
+    let expected_staging = dry_run["staging_set_sha256"].as_str().unwrap();
+    let expected_target = dry_run["target_set_sha256_before"].as_str().unwrap();
+
+    let written = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--expected-staging-set-sha256".into(),
+        expected_staging.into(),
+        "--expected-target-set-sha256".into(),
+        expected_target.into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(written["operation"], "install-extras");
+    assert_eq!(written["status"], "written");
+    assert_eq!(written["groups"][0], "guild-cards");
+    assert_eq!(written["entries"].as_array().unwrap().len(), 4);
+    let manifest = PathBuf::from(written["manifest"].as_str().unwrap());
+    assert!(manifest.exists());
+    assert_eq!(
+        fs::read(target_dir.join("card1")).unwrap(),
+        fs::read(staging_dir.join("card1")).unwrap()
+    );
+
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-extras".into(),
+        "--manifest".into(),
+        manifest.to_string_lossy().into_owned(),
+    ]);
+
+    assert_eq!(rolled_back["operation"], "rollback-extras");
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert_eq!(rolled_back["groups"][0], "guild-cards");
+    assert_eq!(rolled_back["entries"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        PathBuf::from(rolled_back["manifest"].as_str().unwrap()),
+        manifest
+    );
+    assert!(manifest.exists());
+    let transaction_dir = manifest.parent().unwrap();
+    assert!(transaction_dir.is_dir());
+    assert!(fs::read_dir(transaction_dir).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("mh3g-extra-backup-")
+    }));
+    assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
 }
 
 #[test]

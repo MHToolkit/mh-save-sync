@@ -13,8 +13,7 @@ use mh3g_save_convert::{
     ConversionError,
     extras_transaction::{
         ExtraFileOperations, ExtraGroup, ExtraInstallManifest, StdExtraFileOperations,
-        dry_run_extra_groups_with, install_extra_groups_with, recovery_journal_path_for_target_dir,
-        rollback_extra_groups_with,
+        dry_run_extra_groups_with, install_extra_groups_with, rollback_extra_groups_with,
     },
     process_probe::ProcessProbe,
     profile::build_jp_cemu_header,
@@ -119,6 +118,40 @@ fn assert_no_transaction_artifacts(directory: &Path) {
     );
 }
 
+fn transaction_directories(directory: &Path) -> Vec<PathBuf> {
+    let mut paths = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".mh3g-extra-transaction-"))
+                && path.is_dir()
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn only_transaction_directory(directory: &Path) -> PathBuf {
+    let paths = transaction_directories(directory);
+    assert_eq!(
+        paths.len(),
+        1,
+        "expected one transaction directory: {paths:?}"
+    );
+    paths.into_iter().next().unwrap()
+}
+
+fn transaction_journal(directory: &Path) -> PathBuf {
+    let journal = only_transaction_directory(directory).join(".mh3g-extra-recovery.json");
+    assert!(
+        journal.is_file(),
+        "expected retained recovery journal: {journal:?}"
+    );
+    journal.canonicalize().unwrap()
+}
+
 struct FailingOperations {
     replacements: AtomicUsize,
     fail_second_replace: bool,
@@ -128,6 +161,49 @@ struct FailingOperations {
 struct RecoveryJournalCollision {
     collided: AtomicBool,
     external_bytes: Vec<u8>,
+}
+
+struct FailsAfterMaterializingFirstAppendOnlyArtifact {
+    writes: AtomicUsize,
+}
+
+struct FailsBeforeFirstExchangeAndReplacesCleanupPath {
+    sync_calls: AtomicUsize,
+}
+
+impl ExtraFileOperations for FailsBeforeFirstExchangeAndReplacesCleanupPath {
+    fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+        StdExtraFileOperations.write_new_file(path, bytes)
+    }
+
+    fn replace_staged(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
+    }
+
+    fn restore_target(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
+    }
+
+    fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
+        if self.sync_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            return Err(ConversionError::UnsafeInstall(
+                "injected pre-exchange durability failure".to_owned(),
+            ));
+        }
+        StdExtraFileOperations.sync_directory(path)
+    }
 }
 
 impl ExtraFileOperations for RecoveryJournalCollision {
@@ -163,8 +239,40 @@ impl ExtraFileOperations for RecoveryJournalCollision {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
+    fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
+        StdExtraFileOperations.sync_directory(path)
+    }
+}
+
+impl ExtraFileOperations for FailsAfterMaterializingFirstAppendOnlyArtifact {
+    fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+        StdExtraFileOperations.write_new_file(path, bytes)?;
+        if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(ConversionError::UnsafeInstall(
+                "injected failure after append-only artifact materialization".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn replace_staged(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
+    }
+
+    fn restore_target(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -210,10 +318,6 @@ impl ExtraFileOperations for RequiresPreparedMaterialSync {
         expected_target: &[u8],
     ) -> Result<(), ConversionError> {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
-    }
-
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -284,10 +388,6 @@ impl ExtraFileOperations for FailingOperations {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -352,10 +452,6 @@ impl ExtraFileOperations for PanicAfterFirstReplacement {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -389,10 +485,6 @@ impl ExtraFileOperations for ExternalWriteAtFirstReplacement {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -424,10 +516,6 @@ impl ExtraFileOperations for ExternalWriteAtFirstRestore {
             fs::write(&self.target, &self.replacement).unwrap();
         }
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
-    }
-
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -469,10 +557,6 @@ impl ExtraFileOperations for MutatingTargetDuringStaging {
         expected_target: &[u8],
     ) -> Result<(), ConversionError> {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
-    }
-
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -521,10 +605,6 @@ impl ExtraFileOperations for BackupCollision {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -568,10 +648,6 @@ impl ExtraFileOperations for PanicAfterFirstBackup {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -601,13 +677,18 @@ struct ReplacesTemporaryAtWriteGate {
 impl ProcessProbe for ReplacesTemporaryAtWriteGate {
     fn matching_process(&self) -> Result<Option<String>, ConversionError> {
         if !self.swapped.load(Ordering::SeqCst) {
-            let temporary = fs::read_dir(&self.target_dir)
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
+            let temporary = transaction_directories(&self.target_dir)
+                .into_iter()
+                .flat_map(|directory| {
+                    fs::read_dir(directory)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .collect::<Vec<_>>()
+                })
                 .find(|path| {
                     path.file_name()
                         .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.contains("mh3g-extra-tmp-"))
+                        .is_some_and(|name| name.contains("card1.mh3g-extra-tmp-"))
                 });
             if let Some(temporary) = temporary {
                 fs::remove_file(&temporary).unwrap();
@@ -654,10 +735,6 @@ impl ExtraFileOperations for StartsEmulatorAfterFirstReplacement {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -699,10 +776,6 @@ impl ExtraFileOperations for MutatesCompletedTargetAfterFirstReplacement {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
-    }
-
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         StdExtraFileOperations.sync_directory(path)
     }
@@ -712,6 +785,21 @@ struct WritesExternalTargetAndFailsSecondReplacement {
     replacements: AtomicUsize,
     target: PathBuf,
     replacement: Vec<u8>,
+}
+
+#[cfg(unix)]
+struct ReplacesTargetDirectoryAtJournalWrite {
+    target_dir: PathBuf,
+    moved_target_dir: PathBuf,
+    external_target_dir: PathBuf,
+    swapped: AtomicBool,
+}
+
+#[cfg(unix)]
+struct ReplacesTransactionDirectoryAtTemporaryWrite {
+    moved_transaction_dir: PathBuf,
+    external_transaction_dir: PathBuf,
+    swapped: AtomicBool,
 }
 
 impl ExtraFileOperations for WritesExternalTargetAndFailsSecondReplacement {
@@ -745,8 +833,84 @@ impl ExtraFileOperations for WritesExternalTargetAndFailsSecondReplacement {
         StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
+    fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
+        StdExtraFileOperations.sync_directory(path)
+    }
+}
+
+#[cfg(unix)]
+impl ExtraFileOperations for ReplacesTargetDirectoryAtJournalWrite {
+    fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == ".mh3g-extra-recovery.json")
+            && !self.swapped.swap(true, Ordering::SeqCst)
+        {
+            fs::rename(&self.target_dir, &self.moved_target_dir).unwrap();
+            std::os::unix::fs::symlink(&self.external_target_dir, &self.target_dir).unwrap();
+        }
+        StdExtraFileOperations.write_new_file(path, bytes)
+    }
+
+    fn replace_staged(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
+    }
+
+    fn restore_target(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
+    }
+
+    fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
+        StdExtraFileOperations.sync_directory(path)
+    }
+}
+
+#[cfg(unix)]
+impl ExtraFileOperations for ReplacesTransactionDirectoryAtTemporaryWrite {
+    fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if filename.contains("mh3g-extra-tmp-") && !self.swapped.swap(true, Ordering::SeqCst) {
+            let transaction_dir = path.parent().unwrap();
+            fs::rename(transaction_dir, &self.moved_transaction_dir).unwrap();
+            std::os::unix::fs::symlink(&self.external_transaction_dir, transaction_dir).unwrap();
+        }
+        StdExtraFileOperations.write_new_file(path, bytes)
+    }
+
+    fn replace_staged(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
+    }
+
+    fn restore_target(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+        expected_target: &[u8],
+    ) -> Result<(), ConversionError> {
+        StdExtraFileOperations.restore_target(staged, target, expected_staged, expected_target)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -787,10 +951,6 @@ impl ExtraFileOperations for StartsEmulatorDuringRollback {
             self.running.store(true, Ordering::SeqCst);
         }
         result
-    }
-
-    fn remove_regular_file(&self, path: &Path) -> Result<(), ConversionError> {
-        StdExtraFileOperations.remove_regular_file(path)
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
@@ -914,6 +1074,11 @@ fn reports_and_persists_groups_in_canonical_order() {
         manifest.groups,
         vec![ExtraGroup::GuildCards, ExtraGroup::Quests]
     );
+    #[cfg(unix)]
+    {
+        assert!(manifest.target_dir_identity.is_some());
+        assert!(manifest.transaction_dir_identity.is_some());
+    }
 }
 
 #[test]
@@ -936,10 +1101,7 @@ fn installs_every_component_from_a_valid_complete_staged_group() {
     .unwrap();
 
     assert!(report.manifest_path.is_file());
-    assert_eq!(
-        report.manifest_path,
-        recovery_journal_path_for_target_dir(&target).unwrap()
-    );
+    assert_eq!(report.manifest_path, transaction_journal(&target));
     assert!(!target.join(".mh3g-extra-install.json").exists());
     for component in ExtraGroup::GuildCards.components() {
         assert_eq!(
@@ -974,17 +1136,55 @@ fn refuses_to_overwrite_a_recovery_journal_created_after_preflight() {
     )
     .unwrap_err();
 
-    assert!(matches!(error, ConversionError::IoAtPath { .. }));
+    assert!(matches!(error, ConversionError::UnsafeInstall(_)));
     assert_target_bytes(&target, &before);
-    assert_eq!(
-        fs::read(target.join(".mh3g-extra-recovery.json")).unwrap(),
-        external_journal
-    );
+    let journal = transaction_journal(&target);
+    assert_eq!(fs::read(&journal).unwrap(), external_journal);
     assert!(!target.join(".mh3g-extra-install.json").exists());
-    assert!(fs::read_dir(&target).unwrap().all(|entry| {
-        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-        !name.contains("mh3g-extra-backup-") && !name.contains("mh3g-extra-tmp-")
-    }));
+    assert!(
+        fs::read_dir(journal.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                name == ".mh3g-extra-recovery.json"
+            })
+    );
+}
+
+#[test]
+fn append_only_journal_is_retained_when_the_write_call_fails_after_materialization() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x32);
+    write_group(&target, ExtraGroup::GuildCards, 0x92);
+    let before = target_bytes(&target, ExtraGroup::GuildCards);
+
+    let error = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &FailsAfterMaterializingFirstAppendOnlyArtifact {
+            writes: AtomicUsize::new(0),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ConversionError::UnsafeInstall(message) if message.contains("materialization"))
+    );
+    assert_target_bytes(&target, &before);
+    let journal = transaction_journal(&target);
+    assert!(journal.is_file());
+    assert!(
+        fs::read_dir(journal.parent().unwrap())
+            .unwrap()
+            .all(|entry| entry.unwrap().file_name() == ".mh3g-extra-recovery.json"),
+        "the failed append-only write must not trigger cleanup of retained recovery material"
+    );
 }
 
 #[test]
@@ -1029,12 +1229,92 @@ fn successful_install_retains_its_create_new_recovery_journal_as_active_record()
     )
     .unwrap();
 
-    assert_eq!(
-        report.manifest_path,
-        recovery_journal_path_for_target_dir(&target).unwrap()
-    );
+    assert_eq!(report.manifest_path, transaction_journal(&target));
     assert!(report.manifest_path.is_file());
     assert!(!target.join(".mh3g-extra-install.json").exists());
+}
+
+#[test]
+fn pre_exchange_failure_never_invokes_a_path_based_cleanup_delete() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    let external_source = target.join("unrelated-external-file");
+    write_group(&staging, ExtraGroup::GuildCards, 0x35);
+    write_group(&target, ExtraGroup::GuildCards, 0x95);
+    let before = target_bytes(&target, ExtraGroup::GuildCards);
+    fs::write(&external_source, b"external cleanup artifact").unwrap();
+
+    let error = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &FailsBeforeFirstExchangeAndReplacesCleanupPath {
+            sync_calls: AtomicUsize::new(0),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, ConversionError::UnsafeInstall(_)));
+    assert_target_bytes(&target, &before);
+    assert_eq!(
+        fs::read(&external_source).unwrap(),
+        b"external cleanup artifact"
+    );
+    let transaction_dir = only_transaction_directory(&target);
+    assert!(transaction_dir.join(".mh3g-extra-recovery.json").is_file());
+}
+
+#[test]
+fn rollback_retains_a_completed_transaction_directory_and_next_install_uses_a_new_one() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x36);
+    write_group(&target, ExtraGroup::GuildCards, 0x96);
+    let before = target_bytes(&target, ExtraGroup::GuildCards);
+
+    let first = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let first_transaction_dir = first.manifest_path.parent().unwrap().to_path_buf();
+    assert!(
+        first_transaction_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".mh3g-extra-transaction-"))
+    );
+
+    rollback_extra_groups_with(&first.manifest_path, &Stopped, &StdExtraFileOperations).unwrap();
+    assert_target_bytes(&target, &before);
+    assert!(first.manifest_path.is_file());
+    assert!(first_transaction_dir.is_dir());
+
+    let second = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    assert_ne!(
+        second.manifest_path.parent(),
+        Some(first_transaction_dir.as_path())
+    );
+    assert_eq!(transaction_directories(&target).len(), 2);
 }
 
 #[test]
@@ -1065,12 +1345,12 @@ fn second_replacement_failure_retains_recovery_material_for_explicit_rollback() 
         fs::read(target.join("card1")).unwrap(),
         fs::read(staging.join("card1")).unwrap()
     );
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
+    let journal = transaction_journal(&target);
     assert!(journal.is_file());
 
     rollback_extra_groups_with(&journal, &Stopped, &StdExtraFileOperations).unwrap();
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(journal.is_file());
 }
 
 #[test]
@@ -1105,11 +1385,7 @@ fn failed_replacement_does_not_delete_or_overwrite_the_failed_external_target() 
         fs::read(target.join("card1")).unwrap(),
         fs::read(staging.join("card1")).unwrap()
     );
-    assert!(
-        recovery_journal_path_for_target_dir(&target)
-            .unwrap()
-            .is_file()
-    );
+    assert!(transaction_journal(&target).is_file());
 }
 
 #[test]
@@ -1135,18 +1411,18 @@ fn interrupted_install_publishes_a_recovery_journal_before_any_replacement() {
     }));
     assert!(interrupted.is_err());
 
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
+    let journal = transaction_journal(&target);
     assert!(journal.is_file());
     assert!(fs::read(target.join("card1")).unwrap() != before[0].1.clone().unwrap());
 
     rollback_extra_groups_with(&journal, &Stopped, &StdExtraFileOperations).unwrap();
 
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(journal.is_file());
 }
 
 #[test]
-fn rollback_only_removes_temporaries_listed_in_its_transaction_record() {
+fn rollback_retains_owned_temporaries_and_leaves_foreign_paths_untouched() {
     let temp = tempdir().unwrap();
     let staging = temp.path().join("staging");
     let target = temp.path().join("target");
@@ -1171,19 +1447,24 @@ fn rollback_only_removes_temporaries_listed_in_its_transaction_record() {
     let foreign_bytes = fs::read(staging.join("card1")).unwrap();
     fs::write(&foreign_temporary, &foreign_bytes).unwrap();
 
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
+    let journal = transaction_journal(&target);
     rollback_extra_groups_with(&journal, &Stopped, &StdExtraFileOperations).unwrap();
 
     assert_target_bytes(&target, &before);
     assert_eq!(fs::read(&foreign_temporary).unwrap(), foreign_bytes);
-    assert!(!journal.exists());
+    assert!(journal.exists());
+    assert!(
+        fs::read_dir(journal.parent().unwrap())
+            .unwrap()
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("mh3g-extra-tmp-")
+            })
+    );
     assert!(!target.join(".mh3g-extra-install.json").exists());
-    assert!(fs::read_dir(&target).unwrap().all(|entry| {
-        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-        name == ".mh3g-extra-install.lock"
-            || name == ".card1.mh3g-extra-tmp-foreign-transaction"
-            || !name.contains("mh3g-extra-")
-    }));
 }
 
 #[test]
@@ -1210,20 +1491,24 @@ fn interruption_after_first_backup_is_recoverable_from_the_prepared_journal() {
     }));
     assert!(interrupted.is_err());
 
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
+    let journal = transaction_journal(&target);
     assert!(journal.is_file());
-    assert!(fs::read_dir(&target).unwrap().any(|entry| {
-        entry
+    assert!(
+        fs::read_dir(journal.parent().unwrap())
             .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains("mh3g-extra-backup-")
-    }));
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("mh3g-extra-backup-")
+            })
+    );
     assert_target_bytes(&target, &before);
 
     rollback_extra_groups_with(&journal, &Stopped, &StdExtraFileOperations).unwrap();
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(journal.is_file());
 }
 
 #[test]
@@ -1254,11 +1539,7 @@ fn does_not_compensate_when_a_completed_target_is_externally_rewritten() {
         matches!(error, ConversionError::UnsafeInstall(message) if message.contains("atomic target exchange"))
     );
     assert_eq!(fs::read(target.join("card1")).unwrap(), external);
-    assert!(
-        recovery_journal_path_for_target_dir(&target)
-            .unwrap()
-            .is_file()
-    );
+    assert!(transaction_journal(&target).is_file());
     assert!(!target.join(".mh3g-extra-install.json").exists());
 }
 
@@ -1296,23 +1577,22 @@ fn leaves_recovery_material_untouched_when_cemu_starts_between_replacements() {
         fs::read(target.join("card1")).unwrap(),
         fs::read(staging.join("card1")).unwrap()
     );
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
+    let journal = transaction_journal(&target);
     assert!(journal.is_file());
 
     running.store(false, Ordering::SeqCst);
     rollback_extra_groups_with(&journal, &probe, &StdExtraFileOperations).unwrap();
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(journal.is_file());
 }
 
 #[test]
-fn rollback_consumes_a_legacy_matching_manifest_and_recovery_journal_together() {
+fn rollback_refuses_a_pre_v4_root_manifest_without_directory_identities() {
     let temp = tempdir().unwrap();
     let staging = temp.path().join("staging");
     let target = temp.path().join("target");
     write_group(&staging, ExtraGroup::GuildCards, 0x4D);
     write_group(&target, ExtraGroup::GuildCards, 0xAD);
-    let before = target_bytes(&target, ExtraGroup::GuildCards);
 
     let installed = install_extra_groups_with(
         &staging,
@@ -1324,16 +1604,88 @@ fn rollback_consumes_a_legacy_matching_manifest_and_recovery_journal_together() 
         &StdExtraFileOperations,
     )
     .unwrap();
+    let mut legacy: ExtraInstallManifest =
+        serde_json::from_slice(&fs::read(&installed.manifest_path).unwrap()).unwrap();
+    legacy.version = 3;
+    legacy.transaction_dir = None;
+    legacy.target_dir_identity = None;
+    legacy.transaction_dir_identity = None;
+    let canonical_target = target.canonicalize().unwrap();
+    for entry in &mut legacy.entries {
+        let legacy_temporary = canonical_target.join(entry.temporary.file_name().unwrap());
+        fs::hard_link(&entry.temporary, &legacy_temporary).unwrap();
+        entry.temporary = legacy_temporary;
+        let legacy_backup =
+            canonical_target.join(entry.backup.as_ref().unwrap().file_name().unwrap());
+        fs::hard_link(entry.backup.as_ref().unwrap(), &legacy_backup).unwrap();
+        entry.backup = Some(legacy_backup);
+    }
+    let mut legacy_json = serde_json::to_value(&legacy).unwrap();
+    let legacy_object = legacy_json.as_object_mut().unwrap();
+    legacy_object.remove("target_dir_identity");
+    legacy_object.remove("transaction_dir_identity");
+    let legacy_bytes = serde_json::to_vec_pretty(&legacy_json).unwrap();
     let manifest = target.join(".mh3g-extra-install.json");
-    let journal = recovery_journal_path_for_target_dir(&target).unwrap();
-    fs::hard_link(&journal, &manifest).unwrap();
+    let journal = target.join(".mh3g-extra-recovery.json");
+    fs::write(&manifest, &legacy_bytes).unwrap();
+    fs::write(&journal, &legacy_bytes).unwrap();
     assert!(manifest.is_file());
     assert!(journal.is_file());
+    let installed_target = target_bytes(&target, ExtraGroup::GuildCards);
 
-    rollback_extra_groups_with(&manifest, &Stopped, &StdExtraFileOperations).unwrap();
-    assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
-    assert!(!installed.manifest_path.exists());
+    let error =
+        rollback_extra_groups_with(&manifest, &Stopped, &StdExtraFileOperations).unwrap_err();
+    assert!(
+        matches!(error, ConversionError::UnsafeInstall(message) if message.contains("lacks persisted"))
+    );
+    assert_target_bytes(&target, &installed_target);
+    assert!(manifest.is_file());
+    assert!(journal.is_file());
+    assert!(installed.manifest_path.is_file());
+}
+
+#[test]
+fn rollback_refuses_a_v4_transaction_manifest_without_directory_identities() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x4E);
+    write_group(&target, ExtraGroup::GuildCards, 0xAE);
+
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let mut v4: ExtraInstallManifest =
+        serde_json::from_slice(&fs::read(&installed.manifest_path).unwrap()).unwrap();
+    v4.version = 4;
+    v4.target_dir_identity = None;
+    v4.transaction_dir_identity = None;
+    let mut v4_json = serde_json::to_value(&v4).unwrap();
+    let v4_object = v4_json.as_object_mut().unwrap();
+    v4_object.remove("target_dir_identity");
+    v4_object.remove("transaction_dir_identity");
+    fs::write(
+        &installed.manifest_path,
+        serde_json::to_vec_pretty(&v4_json).unwrap(),
+    )
+    .unwrap();
+    let installed_target = target_bytes(&target, ExtraGroup::GuildCards);
+
+    let error =
+        rollback_extra_groups_with(&installed.manifest_path, &Stopped, &StdExtraFileOperations)
+            .unwrap_err();
+    assert!(
+        matches!(error, ConversionError::UnsafeInstall(message) if message.contains("lacks persisted"))
+    );
+    assert_target_bytes(&target, &installed_target);
+    assert!(installed.manifest_path.is_file());
 }
 
 #[test]
@@ -1364,7 +1716,7 @@ fn a_stale_lock_inode_does_not_block_install_or_rollback() {
         .unwrap();
 
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(installed.manifest_path.is_file());
     assert!(target.join(".mh3g-extra-install.lock").is_file());
 }
 
@@ -1434,7 +1786,7 @@ fn a_temporary_replaced_by_a_symlink_is_not_followed_or_removed() {
     assert!(matches!(error, ConversionError::UnsafeInstall(_)));
     assert_target_bytes(&target, &before);
     assert_eq!(fs::read(&external).unwrap(), external_bytes);
-    let temporary = fs::read_dir(&target)
+    let temporary = fs::read_dir(only_transaction_directory(&target))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .find(|path| {
@@ -1452,11 +1804,190 @@ fn a_temporary_replaced_by_a_symlink_is_not_followed_or_removed() {
             .file_type()
             .is_symlink()
     );
-    assert!(
-        recovery_journal_path_for_target_dir(&target)
-            .unwrap()
-            .is_file()
+    assert!(transaction_journal(&target).is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_target_directory_replaced_by_a_symlink_never_receives_transaction_material() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    let moved_target = temp.path().join("moved-target");
+    let external_target = temp.path().join("external-target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x3A);
+    write_group(&target, ExtraGroup::GuildCards, 0x4A);
+    fs::create_dir(&external_target).unwrap();
+    let sentinel = external_target.join("sentinel");
+    fs::write(&sentinel, b"external target remains untouched").unwrap();
+
+    let error = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &ReplacesTargetDirectoryAtJournalWrite {
+            target_dir: target.clone(),
+            moved_target_dir: moved_target,
+            external_target_dir: external_target.clone(),
+            swapped: AtomicBool::new(false),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, ConversionError::UnsafeInstall(_)));
+    assert_eq!(
+        fs::read(&sentinel).unwrap(),
+        b"external target remains untouched"
     );
+    assert!(
+        fs::read_dir(&external_target)
+            .unwrap()
+            .all(|entry| entry.unwrap().file_name() == "sentinel"),
+        "target-directory replacement must not create a journal, backup, or temporary in the external directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_transaction_directory_replaced_by_a_symlink_never_receives_transaction_material() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    let moved_transaction = temp.path().join("moved-transaction");
+    let external_transaction = temp.path().join("external-transaction");
+    write_group(&staging, ExtraGroup::GuildCards, 0x3B);
+    write_group(&target, ExtraGroup::GuildCards, 0x4B);
+    fs::create_dir(&external_transaction).unwrap();
+    let sentinel = external_transaction.join("sentinel");
+    fs::write(&sentinel, b"external transaction remains untouched").unwrap();
+
+    let error = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &ReplacesTransactionDirectoryAtTemporaryWrite {
+            moved_transaction_dir: moved_transaction,
+            external_transaction_dir: external_transaction.clone(),
+            swapped: AtomicBool::new(false),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, ConversionError::UnsafeInstall(_)));
+    assert_eq!(
+        fs::read(&sentinel).unwrap(),
+        b"external transaction remains untouched"
+    );
+    assert!(
+        fs::read_dir(&external_transaction)
+            .unwrap()
+            .all(|entry| entry.unwrap().file_name() == "sentinel"),
+        "transaction-directory replacement must not create a backup or temporary in the external directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_rejects_a_recreated_target_directory_even_with_copied_transaction_artifacts() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    let moved_target = temp.path().join("moved-target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x3C);
+    write_group(&target, ExtraGroup::GuildCards, 0x4C);
+
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let original_transaction = installed.manifest_path.parent().unwrap().to_path_buf();
+    let transaction_name = original_transaction.file_name().unwrap().to_owned();
+
+    fs::rename(&target, &moved_target).unwrap();
+    write_group(&target, ExtraGroup::GuildCards, 0x3C);
+    let copied_transaction = target.join(transaction_name);
+    fs::create_dir(&copied_transaction).unwrap();
+    for entry in fs::read_dir(moved_target.join(original_transaction.file_name().unwrap())).unwrap()
+    {
+        let entry = entry.unwrap();
+        fs::hard_link(entry.path(), copied_transaction.join(entry.file_name())).unwrap();
+    }
+    let replacement_before = target_bytes(&target, ExtraGroup::GuildCards);
+
+    let error = rollback_extra_groups_with(
+        copied_transaction.join(".mh3g-extra-recovery.json"),
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ConversionError::UnsafeInstall(ref message) if message.contains("identity")),
+        "unexpected rollback result: {error:?}"
+    );
+    assert_target_bytes(&target, &replacement_before);
+    assert!(
+        !target.join(".mh3g-extra-install.lock").exists(),
+        "directory identity rejection must occur before creating a lock in the replacement target"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_rejects_a_recreated_transaction_directory_even_with_copied_artifacts() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    let moved_transaction = temp.path().join("moved-transaction");
+    write_group(&staging, ExtraGroup::GuildCards, 0x3D);
+    write_group(&target, ExtraGroup::GuildCards, 0x4D);
+
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let original_transaction = installed.manifest_path.parent().unwrap().to_path_buf();
+    let transaction_name = original_transaction.file_name().unwrap().to_owned();
+
+    fs::rename(&original_transaction, &moved_transaction).unwrap();
+    let copied_transaction = target.join(transaction_name);
+    fs::create_dir(&copied_transaction).unwrap();
+    for entry in fs::read_dir(&moved_transaction).unwrap() {
+        let entry = entry.unwrap();
+        fs::hard_link(entry.path(), copied_transaction.join(entry.file_name())).unwrap();
+    }
+    let installed_target = target_bytes(&target, ExtraGroup::GuildCards);
+
+    let error = rollback_extra_groups_with(
+        copied_transaction.join(".mh3g-extra-recovery.json"),
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ConversionError::UnsafeInstall(ref message) if message.contains("transaction directory identity")),
+        "unexpected rollback result: {error:?}"
+    );
+    assert_target_bytes(&target, &installed_target);
 }
 
 #[test]
@@ -1508,7 +2039,7 @@ fn rollback_stops_writing_when_cemu_starts_after_its_first_restore() {
     running.store(false, Ordering::SeqCst);
     rollback_extra_groups_with(&installed.manifest_path, &probe, &StdExtraFileOperations).unwrap();
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(installed.manifest_path.is_file());
 }
 
 #[test]
@@ -1519,10 +2050,6 @@ fn failed_backup_creation_never_removes_a_file_this_transaction_did_not_create()
     write_group(&staging, ExtraGroup::GuildCards, 0x46);
     write_group(&target, ExtraGroup::GuildCards, 0xA6);
     let original = fs::read(target.join("card1")).unwrap();
-    let external_backup = target.join(format!(
-        ".card1.mh3g-extra-backup-{}",
-        sha256_hex(&original)
-    ));
 
     let error = install_extra_groups_with(
         &staging,
@@ -1540,13 +2067,13 @@ fn failed_backup_creation_never_removes_a_file_this_transaction_did_not_create()
     assert!(
         matches!(error, ConversionError::UnsafeInstall(message) if message.contains("collision"))
     );
+    let external_backup = only_transaction_directory(&target).join(format!(
+        ".card1.mh3g-extra-backup-{}",
+        sha256_hex(&original)
+    ));
     assert_eq!(fs::read(&external_backup).unwrap(), original);
     assert_eq!(fs::read(target.join("card1")).unwrap(), original);
-    assert!(
-        !recovery_journal_path_for_target_dir(&target)
-            .unwrap()
-            .exists()
-    );
+    assert!(transaction_journal(&target).is_file());
     assert!(!target.join(".mh3g-extra-install.json").exists());
 }
 
@@ -1579,6 +2106,7 @@ fn rechecks_target_state_immediately_before_replacing_any_component() {
     );
     assert_eq!(fs::read(target.join("card1")).unwrap(), external);
     assert!(!target.join(".mh3g-extra-install.json").exists());
+    assert!(transaction_journal(&target).is_file());
 }
 
 #[test]
@@ -1607,11 +2135,7 @@ fn refuses_a_target_write_in_the_last_replace_window_without_losing_it() {
 
     assert!(matches!(error, ConversionError::UnsafeInstall(_)));
     assert_eq!(fs::read(target.join("card1")).unwrap(), external);
-    assert!(
-        recovery_journal_path_for_target_dir(&target)
-            .unwrap()
-            .is_file()
-    );
+    assert!(transaction_journal(&target).is_file());
 }
 
 #[test]
@@ -1722,7 +2246,7 @@ fn rollback_resumes_after_a_restored_target_backup_was_already_consumed() {
         .unwrap();
 
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    assert!(installed.manifest_path.is_file());
 }
 
 #[test]
@@ -1946,7 +2470,7 @@ fn rejects_manifest_groups_that_are_missing_duplicated_or_mismatched() {
 }
 
 #[test]
-fn recovery_journal_creation_failure_leaves_targets_and_artifacts_untouched() {
+fn recovery_journal_creation_failure_retains_an_empty_transaction_directory() {
     let temp = tempdir().unwrap();
     let staging = temp.path().join("staging");
     let target = temp.path().join("target");
@@ -1970,7 +2494,8 @@ fn recovery_journal_creation_failure_leaves_targets_and_artifacts_untouched() {
         matches!(error, ConversionError::UnsafeInstall(message) if message.contains("recovery journal creation"))
     );
     assert_target_bytes(&target, &before);
-    assert_no_transaction_artifacts(&target);
+    let transaction_dir = only_transaction_directory(&target);
+    assert!(fs::read_dir(transaction_dir).unwrap().next().is_none());
 }
 
 #[test]

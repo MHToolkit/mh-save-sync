@@ -14,6 +14,10 @@ use mh3g_save_convert::{
         reset_guild_card_component_to_cemu_named,
     },
     events::event_snapshot,
+    extras_transaction::{
+        ExtraGroup, ExtraInstallEntry, ExtraInstallManifest, dry_run_extra_groups,
+        install_extra_groups, rollback_extra_groups,
+    },
     io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
@@ -125,6 +129,33 @@ enum Command {
         #[arg(long)]
         reset_guild_cards: bool,
     },
+    /// Install one or more complete staged ExtData groups into an initialized Cemu target.
+    InstallExtras {
+        /// Directory containing all staged Cemu card*/quest* outputs.
+        #[arg(long)]
+        staging_dir: PathBuf,
+        /// Initialized Cemu MH3G save directory containing the selected component groups.
+        #[arg(long)]
+        target_dir: PathBuf,
+        /// Complete ExtData group(s) to install, for example guild-cards,quests.
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 1.., required = true)]
+        groups: Vec<ExtraGroup>,
+        /// Require the staged group fingerprint observed during dry-run.
+        #[arg(long)]
+        expected_staging_set_sha256: Option<String>,
+        /// Require the target group fingerprint observed during dry-run.
+        #[arg(long)]
+        expected_target_set_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Roll back a complete ExtData transaction from its retained recovery journal.
+    RollbackExtras {
+        #[arg(long)]
+        manifest: PathBuf,
+    },
     /// Restore a save slot from a prior installation manifest.
     Rollback {
         #[arg(long)]
@@ -229,6 +260,29 @@ struct ExtrasReport {
 }
 
 #[derive(Debug, Serialize)]
+struct ExtraInstallCliReport {
+    operation: &'static str,
+    status: &'static str,
+    groups: Vec<ExtraGroup>,
+    entries: Vec<ExtraInstallEntry>,
+    manifest: PathBuf,
+    staging_dir: PathBuf,
+    target_dir: PathBuf,
+    staging_set_sha256: String,
+    target_set_sha256_before: String,
+    backup_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExtraRollbackCliReport {
+    operation: &'static str,
+    status: &'static str,
+    groups: Vec<ExtraGroup>,
+    entries: Vec<ExtraInstallEntry>,
+    manifest: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
 struct CecConversionReport {
     source_dir: PathBuf,
     target: PathBuf,
@@ -325,6 +379,29 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 reset_guild_cards,
             )?)?
         ),
+        Command::InstallExtras {
+            staging_dir,
+            target_dir,
+            groups,
+            expected_staging_set_sha256,
+            expected_target_set_sha256,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&install_extras(
+                staging_dir,
+                target_dir,
+                groups,
+                expected_staging_set_sha256,
+                expected_target_set_sha256,
+                dry_run,
+                write,
+            )?)?
+        ),
+        Command::RollbackExtras { manifest } => {
+            println!("{}", serde_json::to_string(&rollback_extras(manifest)?)?)
+        }
         command => {
             let report = match command {
                 Command::Inspect { source } => inspect(source)?,
@@ -346,7 +423,9 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 | Command::InspectCec { .. }
                 | Command::ConvertCec { .. }
                 | Command::RollbackCec { .. }
-                | Command::ConvertExtras { .. } => unreachable!(),
+                | Command::ConvertExtras { .. }
+                | Command::InstallExtras { .. }
+                | Command::RollbackExtras { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
         }
@@ -764,6 +843,65 @@ fn convert_extras(
         output_dir,
         components,
         status: if write { "written" } else { "dry-run" },
+    })
+}
+
+fn install_extras(
+    staging_dir: PathBuf,
+    target_dir: PathBuf,
+    groups: Vec<ExtraGroup>,
+    expected_staging_set_sha256: Option<String>,
+    expected_target_set_sha256: Option<String>,
+    dry_run: bool,
+    write: bool,
+) -> Result<ExtraInstallCliReport, ConversionError> {
+    debug_assert!(!(dry_run && write));
+    let report = if write {
+        install_extra_groups(
+            &staging_dir,
+            &target_dir,
+            &groups,
+            expected_staging_set_sha256.as_deref(),
+            expected_target_set_sha256.as_deref(),
+        )?
+    } else {
+        dry_run_extra_groups(
+            &staging_dir,
+            &target_dir,
+            &groups,
+            expected_staging_set_sha256.as_deref(),
+            expected_target_set_sha256.as_deref(),
+        )?
+    };
+    let backup_paths = report
+        .entries
+        .iter()
+        .filter_map(|entry| entry.backup.clone())
+        .collect();
+    Ok(ExtraInstallCliReport {
+        operation: "install-extras",
+        status: if write { "written" } else { "dry-run" },
+        groups: report.groups,
+        entries: report.entries,
+        manifest: report.manifest_path,
+        staging_dir: report.staging_dir,
+        target_dir: report.target_dir,
+        staging_set_sha256: report.staging_set_sha256,
+        target_set_sha256_before: report.target_set_sha256,
+        backup_paths,
+    })
+}
+
+fn rollback_extras(manifest: PathBuf) -> Result<ExtraRollbackCliReport, ConversionError> {
+    let manifest_bytes = read_file(&manifest, "reading ExtData rollback manifest")?;
+    let recorded: ExtraInstallManifest = serde_json::from_slice(&manifest_bytes)?;
+    rollback_extra_groups(&manifest)?;
+    Ok(ExtraRollbackCliReport {
+        operation: "rollback-extras",
+        status: "rolled-back",
+        groups: recorded.groups,
+        entries: recorded.entries,
+        manifest,
     })
 }
 
