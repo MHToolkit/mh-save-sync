@@ -95,7 +95,7 @@ CEMU_CEC="$CEMU_DIR/cec"
 mh3g-save-convert inspect <SOURCE>
 ```
 
-`<SOURCE>` 是一个 `user1`/`user2`/`user3` 或 `system` 文件。它会检查日版 `0x2B` profile，输出 profile、大小和哈希信息，不写入任何内容：
+`<SOURCE>` 是一个能够识别的日版 3DS 或 Cemu `user1`/`user2`/`user3` 或 `system` 文件。它会检查 3DS `0x2B` profile 或 Cemu 容器，输出 profile、大小和哈希信息，不写入任何内容。它也可用于回读转换后的输出：
 
 ```bash
 "${CLI[@]}" inspect "$SOURCE"
@@ -234,6 +234,14 @@ mh3g-save-convert rollback-cec --manifest <MANIFEST>
 转换器目前只识别日版 `0x2B` profile。静态表和来源记录位于 `crates/mh3g-save-convert/data/catalog-provenance.json`；更详细的数据边界参见 [`docs/adr/0013-mh3g-cross-format-conversion.md`](docs/adr/0013-mh3g-cross-format-conversion.md) 和[准确的 MH3G 文件契约](docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md)。
 
 **macOS arm64（已于 2026-07-26 完成隔离 CLI 验证）：**打包后的 release 二进制通过包内校验和、ZIP 校验和、解压以及解压后 `--help` 检查。两个真实日版源槽位（`user1` 和 `user2`）分别通过 `inspect`、`inspect-progress`、`inspect-events`、不创建目标的显式 dry-run、隔离写入、输出回读、重复安装/backup/history 生成和 manifest 绑定回滚。两个源文件均保持逐字节不变；输出大小均为 `0x8A24`，写入哈希与 dry-run 哈希一致。真实八文件 ExtData 目录同样通过了不创建输出目录的 dry-run，并成功写入全新的暂存目录，全部输出大小和哈希均符合报告。CEC 只读检查显示收件箱消息为 0、当前猎人的 outbox 消息为 1，因此没有执行实验性 CEC 写入。本次没有启动 Cemu，也没有读取或写入现有 MLC；这是 CLI/文件级验证，不是新增的游戏内运行时结论。
+
+在 Apple Silicon Mac 上复现同一安装包：
+
+```bash
+./scripts/package-mh3g-macos.sh artifacts/mh3g-converter
+```
+
+该命令会生成 `mh3g-save-convert-macos-arm64.zip`、对应 `.zip.sha256` sidecar，以及包含二进制、双语 README 和包内二进制校验和的解压暂存目录。打包脚本不会读取任何存档。
 
 **Windows x64：**`.github/workflows/mh3g-converter-windows.yml` 会构建原生静态链接的 `x86_64-pc-windows-msvc` 可执行文件，打包校验和及启动器，模拟 Mark-of-the-Web，并执行合成存档写入/回滚证明。当前 PR 的 GitHub-hosted workflow 结果才是安装包 CI 证据；它不能证明某台具体电脑上的 AppLocker、Smart App Control、杀毒软件、压缩包预览或目录权限策略。只能下载成功 workflow 生成的 artifact，先核对 ZIP SHA-256 sidecar，再完整解压，然后使用包内 `Run-Converter.ps1`。如果 Windows 返回 error 5（`Access is denied`），请保留包含操作名和路径的完整错误行。
 

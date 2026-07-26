@@ -131,9 +131,10 @@ if you are not building from source.
 mh3g-save-convert inspect <SOURCE>
 ```
 
-`<SOURCE>` is one `user1`/`user2`/`user3` or `system` file. It validates the
-Japanese `0x2B` profile, reports profile/size/hash information, and writes
-nothing:
+`<SOURCE>` is one recognized Japanese 3DS or Cemu `user1`/`user2`/`user3` or
+`system` file. It validates the 3DS `0x2B` profile or the Cemu container,
+reports profile/size/hash information, and writes nothing. This is also the
+readback check for a converted output:
 
 ```bash
 "${CLI[@]}" inspect "$SOURCE"
@@ -319,6 +320,16 @@ Read-only CEC inspection reported zero received inbox messages and one local
 outbox message, so experimental CEC writing was not attempted. Cemu was not
 started and no existing MLC was read or written; this is CLI/file validation,
 not a new gameplay/runtime claim.
+
+Build and reproduce the same package on an Apple Silicon Mac:
+
+```bash
+./scripts/package-mh3g-macos.sh artifacts/mh3g-converter
+```
+
+This creates `mh3g-save-convert-macos-arm64.zip`, its `.zip.sha256` sidecar,
+and the extracted staging directory with the binary, bilingual README, and
+inner binary checksum. The script never reads a save.
 
 **Windows x64:** `.github/workflows/mh3g-converter-windows.yml` builds a native
 statically linked `x86_64-pc-windows-msvc` executable, packages its checksum and
