@@ -21,7 +21,10 @@ use mh3g_save_convert::{
     io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
-    transaction::{install, manifest_path_for_target, rollback, sha256_hex},
+    transaction::{
+        InstallExpectations, existing_target_sha256, install_with_expectations,
+        manifest_path_for_target, rollback, sha256_hex,
+    },
 };
 use serde::Serialize;
 
@@ -98,6 +101,12 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Require the source SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_sha256: Option<String>,
+        /// Require the target SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -108,6 +117,12 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Require the source SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_sha256: Option<String>,
+        /// Require the target SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -172,6 +187,19 @@ struct Report {
     backup: Option<PathBuf>,
     manifest: Option<PathBuf>,
     status: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct HashPreconditions {
+    source_sha256: Option<String>,
+    target_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComponentConversionProfile {
+    validate_path: fn(&Path) -> Result<(), ConversionError>,
+    source: SaveProfile,
+    output: SaveProfile,
 }
 
 #[derive(Debug, Serialize)]
@@ -408,15 +436,33 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 Command::Convert {
                     source,
                     output,
+                    expected_source_sha256,
+                    expected_target_sha256,
                     dry_run,
                     write,
-                } => convert(source, output, dry_run, write)?,
+                } => convert(
+                    source,
+                    output,
+                    expected_source_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                )?,
                 Command::ConvertSystem {
                     source,
                     output,
+                    expected_source_sha256,
+                    expected_target_sha256,
                     dry_run,
                     write,
-                } => convert_system(source, output, dry_run, write)?,
+                } => convert_system(
+                    source,
+                    output,
+                    expected_source_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                )?,
                 Command::Rollback { manifest } => rollback_save(manifest)?,
                 Command::InspectProgress { .. }
                 | Command::InspectEvents { .. }
@@ -649,49 +695,64 @@ fn inspect(source: PathBuf) -> Result<Report, ConversionError> {
 fn convert(
     source: PathBuf,
     output: PathBuf,
+    expected_source_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
     convert_component(
         source,
         output,
+        HashPreconditions {
+            source_sha256: expected_source_sha256,
+            target_sha256: expected_target_sha256,
+        },
         dry_run,
         write,
-        validate_slot_path,
-        SaveProfile::JpThreeDs,
-        SaveProfile::JpCemu,
+        ComponentConversionProfile {
+            validate_path: validate_slot_path,
+            source: SaveProfile::JpThreeDs,
+            output: SaveProfile::JpCemu,
+        },
     )
 }
 
 fn convert_system(
     source: PathBuf,
     output: PathBuf,
+    expected_source_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
     convert_component(
         source,
         output,
+        HashPreconditions {
+            source_sha256: expected_source_sha256,
+            target_sha256: expected_target_sha256,
+        },
         dry_run,
         write,
-        validate_system_path,
-        SaveProfile::JpThreeDsSystem,
-        SaveProfile::JpCemuSystem,
+        ComponentConversionProfile {
+            validate_path: validate_system_path,
+            source: SaveProfile::JpThreeDsSystem,
+            output: SaveProfile::JpCemuSystem,
+        },
     )
 }
 
 fn convert_component(
     source: PathBuf,
     output: PathBuf,
+    expectations: HashPreconditions,
     dry_run: bool,
     write: bool,
-    validate_path: fn(&Path) -> Result<(), ConversionError>,
-    expected_source_profile: SaveProfile,
-    expected_output_profile: SaveProfile,
+    profile: ComponentConversionProfile,
 ) -> Result<Report, ConversionError> {
     debug_assert!(!(dry_run && write));
-    validate_path(&source)?;
-    validate_path(&output)?;
+    (profile.validate_path)(&source)?;
+    (profile.validate_path)(&output)?;
     if source.file_name() != output.file_name() {
         return Err(ConversionError::InvalidSave(format!(
             "source and output save component names must match: {} != {}",
@@ -708,7 +769,7 @@ fn convert_component(
 
     let source_bytes = read_file(&source, "reading source save")?;
     let source_inspection = inspect_bytes(&source_bytes)?;
-    if source_inspection.profile != expected_source_profile {
+    if source_inspection.profile != profile.source {
         return Err(ConversionError::InvalidSave(format!(
             "unexpected source profile: {:?}",
             source_inspection.profile
@@ -720,15 +781,27 @@ fn convert_component(
         .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
     let converted = convert_source_to_cemu(&source_bytes, filename)?;
     let converted_inspection = inspect_bytes(&converted)?;
-    debug_assert_eq!(converted_inspection.profile, expected_output_profile);
+    debug_assert_eq!(converted_inspection.profile, profile.output);
+    // A Dry Run establishes the target fingerprint up front. A real write
+    // must instead let the installer read it under the per-slot lock.
+    let target_sha256_before = if write {
+        None
+    } else {
+        existing_target_sha256(&output)?
+    };
+
+    let mut hashes = BTreeMap::from([
+        ("source".to_owned(), source_inspection.sha256),
+        ("output".to_owned(), converted_inspection.sha256),
+    ]);
+    if let Some(target_sha256_before) = target_sha256_before {
+        hashes.insert("target_before".to_owned(), target_sha256_before);
+    }
 
     let mut report = Report {
         profile: Some(converted_inspection.profile),
         size: Some(converted_inspection.size),
-        hashes: BTreeMap::from([
-            ("source".to_owned(), source_inspection.sha256),
-            ("output".to_owned(), converted_inspection.sha256),
-        ]),
+        hashes,
         output: Some(output.clone()),
         backup: None,
         manifest: None,
@@ -737,7 +810,21 @@ fn convert_component(
 
     if write {
         let manifest_path = manifest_path_for_target(&output)?;
-        let manifest = install(&source_bytes, &converted, &output, &manifest_path)?;
+        let manifest = install_with_expectations(
+            &source_bytes,
+            &converted,
+            &output,
+            &manifest_path,
+            InstallExpectations {
+                source_sha256: expectations.source_sha256.as_deref(),
+                target_sha256: expectations.target_sha256.as_deref(),
+            },
+        )?;
+        if let Some(target_sha256_before) = manifest.previous_sha256.as_ref() {
+            report
+                .hashes
+                .insert("target_before".to_owned(), target_sha256_before.clone());
+        }
         report.backup = manifest.backup;
         report.manifest = Some(manifest_path);
         report.status = "written";
@@ -1004,7 +1091,7 @@ mod tests {
         bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         fs::write(&source, bytes).unwrap();
 
-        let report = convert_system(source, output.clone(), false, false).unwrap();
+        let report = convert_system(source, output.clone(), None, None, false, false).unwrap();
 
         assert_eq!(report.profile, Some(SaveProfile::JpCemuSystem));
         assert_eq!(report.status, "dry-run");

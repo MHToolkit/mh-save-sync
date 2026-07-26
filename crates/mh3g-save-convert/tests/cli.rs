@@ -14,12 +14,17 @@ use mh3g_save_convert::profile::build_jp_cemu_header;
 #[cfg(target_os = "macos")]
 use std::{
     os::unix::fs::PermissionsExt,
-    process::{Child, Stdio},
+    process::{Child, Output, Stdio},
     sync::Mutex,
 };
 
+#[cfg(not(target_os = "macos"))]
+use std::process::Output;
+
 const THREE_DS_SIZE: usize = 0x8A00;
 const CEMU_SIZE: usize = 0x8A24;
+const THREE_DS_SYSTEM_SIZE: usize = 0x3000;
+const CEMU_SYSTEM_SIZE: usize = 0x3024;
 const CEMU_CEC_PAYLOAD_SIZE: usize = 0x835FC;
 #[cfg(target_os = "macos")]
 static PROCESS_GUARD: Mutex<()> = Mutex::new(());
@@ -36,6 +41,16 @@ fn slot_fixture(temp: &TempDir, slot: &str) -> PathBuf {
     let directory = temp.path().join("3ds");
     fs::create_dir_all(&directory).unwrap();
     write_source(directory.join(slot))
+}
+
+fn system_fixture(temp: &TempDir) -> PathBuf {
+    let directory = temp.path().join("3ds");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("system");
+    let mut bytes = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+    bytes[..4].copy_from_slice(&[0x2B, 0, 0, 0]);
+    fs::write(&path, bytes).unwrap();
+    path
 }
 
 fn target_slot(temp: &TempDir, slot: &str) -> PathBuf {
@@ -202,6 +217,24 @@ fn run_json_with_stopped_emulators(args: &[String]) -> Value {
 #[cfg(not(target_os = "macos"))]
 fn run_json_with_stopped_emulators(args: &[String]) -> Value {
     run_json(args)
+}
+
+#[cfg(target_os = "macos")]
+fn run_output_with_stopped_emulators(args: &[String]) -> Output {
+    let directory = tempfile::tempdir().unwrap();
+    let pgrep = directory.path().join("pgrep");
+    fs::write(&pgrep, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&pgrep, fs::Permissions::from_mode(0o755)).unwrap();
+    binary()
+        .env("PATH", directory.path())
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_output_with_stopped_emulators(args: &[String]) -> Output {
+    binary().args(args).output().unwrap()
 }
 
 fn keys(value: &Value) -> BTreeSet<String> {
@@ -406,6 +439,134 @@ fn convert_defaults_to_dry_run_and_creates_no_files() {
 }
 
 #[test]
+fn convert_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_write_rejects_a_stale_expected_source_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("source SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_dry_run_reports_the_existing_target_hash() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let report = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+
+    assert_eq!(report["status"], "dry-run");
+    assert_eq!(
+        report["hashes"]["target_before"],
+        hex::encode(sha2::Sha256::digest(previous))
+    );
+}
+
+#[test]
+fn convert_system_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = target_slot(&temp, "system");
+    let previous = vec![0xA5; CEMU_SYSTEM_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".system.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
 fn write_then_rollback_restores_previous_slot() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
@@ -415,11 +576,23 @@ fn write_then_rollback_restores_previous_slot() {
     let previous = vec![0xA5; CEMU_SIZE];
     fs::write(&target, &previous).unwrap();
 
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+
     let converted = run_json_with_stopped_emulators(&[
         "convert".into(),
         source.to_string_lossy().into_owned(),
         "--output".into(),
         target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-sha256".into(),
+        dry_run["hashes"]["target_before"].as_str().unwrap().into(),
         "--write".into(),
     ]);
     assert_eq!(converted["status"], "written");
