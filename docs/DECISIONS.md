@@ -14,6 +14,10 @@
 │ 0009 │ macOS and Android background policy        │ Accepted │
 │ 0010 │ Export bundle and format versioning        │ Accepted │
 │ 0013 │ Japanese MH3G 3DS-to-Cemu conversion       │ Accepted │
+│ 0014 │ Native MH3G converter UI                    │ Accepted │
 └──────┴────────────────────────────────────────────┴──────────┘
+
+The native converter UI decision is [ADR 0014: Native MH3G converter UI
+shells](adr/0014-mh3g-native-converter-ui.md).
 
 Entries are Accepted for phase1-alpha implementation authority. Runtime support levels remain evidence-scoped: an accepted ADR does not upgrade any emulator to Runtime Verified without the evidence bundle in `docs/research/EMULATOR_SAVE_MATRIX.md`.

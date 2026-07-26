@@ -19,9 +19,35 @@
 
 `mh3g-save-convert` 用于把**一个日版 MH3G 3DS 角色槽位**转换到编号相同的日版 MH3G HD Cemu 槽位。它是仅在本地执行的单向工具：不会上传存档、不会修改 3DS 源文件、不支持其他地区版本，也不能把 Cemu 存档反向转换成 3DS 存档。转换器会保留已记录转换范围以外的字节，但字节得到保留并不能证明两个平台中所有游戏字段的含义完全相同。
 
+### 原生 macOS 工作台（开发中）
+
+`apps/mh3g-save-converter-macos` 是独立的前台 SwiftUI App，不是已有的 MH Save
+Sync 菜单栏客户端。它只通过 argv 数组调用随包的 `mh3g-save-convert` 并读取其
+JSON 报告；不会在 UI 内重写字节转换、备份、manifest、模拟器进程检查或回滚规则。
+窗口会正常出现于 Dock 和 Cmd-Tab，首屏就是四阶段工作台；默认跟随系统语言，也可在
+设置中切换简体中文或 English。
+
+App 只接受用户明确选择的 `user1`、`user2`、`user3`、`system`、ExtData 与 CEC
+路径。它不会推断 MLC 根目录、递归扫描目录，也不接受压缩包。核心角色写入只有在当前
+Dry Run 指纹仍与所选源 SHA-256、目标 SHA-256 和组件范围一致时才会启用。CEC 位于
+单独、默认折叠的实验性页面；正常的公会名片/离线伙伴组不依赖它。
+
+在 arm64 macOS 开发主机上，可只使用合成 fixture 构建并验证：
+
+```bash
+bash scripts/build-mh3g-save-converter-macos-app.sh
+bash scripts/mh3g-save-converter-macos-smoke.sh
+bash scripts/package-mh3g-save-converter-macos.sh
+```
+
+smoke 脚本会创建临时零内容 fixture，并始终验证 inspect、dry-run、包内 diagnostics 和源文件
+hash 不变。没有模拟器运行时，它还会验证事务写入和 manifest 绑定回滚；若 Nemessix、Azahar
+或 Cemu 已在运行，则会验证 CLI 拒绝合成写入且临时目标未创建。它不会启动 Cemu，也不会打开
+真实 MLC。
+
 > **使用前必读：**当前 CLI **不能直接读取 ZIP、7z 或 RAR**，也不会在任意存档目录中递归搜索可能的文件。必须先把压缩包完整解压到普通本地目录，然后按照下文要求传入准确的文件或准确层级的目录。不要从 QQ 或浏览器的压缩包预览界面直接运行程序。路径中包含空格时必须加引号。
 
-执行任何 `--write`、`rollback` 或 `rollback-cec` 前，必须完全退出 Nemessix、Azahar 和 Cemu，并等待相应进程结束。`inspect`、`inspect-progress`、`inspect-events`、`inspect-cec` 以及所有 `--dry-run` 操作都只读。
+执行任何 `--write`、`rollback`、`rollback-extras` 或 `rollback-cec` 前，必须完全退出 Nemessix、Azahar 和 Cemu，并等待相应进程结束。`inspect`、`inspect-progress`、`inspect-events`、`inspect-cec` 以及所有 `--dry-run` 操作都只读。
 
 ### 选择正确的解压后输入
 
@@ -31,7 +57,7 @@
 | --- | --- | --- | --- | --- |
 | 核心角色槽位 | `title/00040000/00048100/data/00000001/` 下一个明确的 `user1`、`user2` 或 `user3` 文件 | 整个 title 目录、全部槽位、ExtData、ZIP | 必需：三选一 | 角色、剧情/任务进度、农场、狩猎船、本地离线猎人数据；只写入同编号且同名的 Cemu `user#` 目标 |
 | 共享 system | 同一 title savedata 目录中的一个明确 `system` 文件 | 整个 title 目录、ZIP | 可选 | 共享系统数据；只写入明确指定的 Cemu `system` 目标 |
-| 共享 ExtData | 完整的 `extdata/00000000/00000481/user/` 目录，其直接子文件必须包括 `card1`、`card2`、`card3`、`cardbox`、`quest1`、`quest2`、`quest3`、`quest4` | `00000481` 父目录、`boss/`、不完整文件集合、ZIP | 可选 | 在新的暂存目录中生成转换后的 `card*` 和 `quest*` 文件 |
+| 共享 ExtData | 完整的 `extdata/00000000/00000481/user/` 目录，其直接子文件必须包括 `card1`、`card2`、`card3`、`cardbox`、`quest1`、`quest2`、`quest3`、`quest4` | `00000481` 父目录、`boss/`、不完整文件集合、ZIP | 可选 | 将全部八个文件转换到新的暂存目录；再由独立、受保护的 `install-extras` 事务把完整的 `guild-cards`、`quests` 或两者安装到已初始化的 Cemu 目标 |
 | 擦身通信/猎人搜索 CEC | 包含 `InBox___` 的准确 `CEC/00048100/` 目录 | SD 卡 ExtData、单独的 `InBox___` 子目录、ZIP | 可选且为实验性功能 | 读取收到的原始擦身消息，只可能写入 Cemu `cec` |
 
 使用 Nemessix 时，请把 `<ID0>` 和 `<ID1>` 替换为 `sdmc/Nintendo 3DS/` 下两层实际的 32 位十六进制目录名；全零 ID 只是本地模拟器中的常见示例：
@@ -85,6 +111,10 @@ CEMU_CEC="$CEMU_DIR/cec"
 
 `convert` 接收一个源 `user#` 文件和 `--output <同名-user#>`。`user2` 只能写入名为 `user2` 的目标，不能覆盖 `user1` 或任意改名文件。不传 `--write` 时转换保持 dry-run；在脚本中建议显式传入 `--dry-run`，以便清楚表达只读意图。`--write` 与 `--dry-run` 互斥。
 
+对于 GUI 和自动化调用，`convert` 与 `convert-system` 还提供可选的写入前置条件：`--expected-source-sha256` 和 `--expected-target-sha256`。这两个参数都只能与 `--write` 一起使用。它们的值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样只要任一文件在 dry-run 后发生变化，写入就会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
+
+仅当目标文件已存在时，JSON 才会提供 `hashes.target_before`。如果它不存在，不要伪造哨兵哈希或传入 `--expected-target-sha256`：已提供目标前置条件时，目标缺失会被刻意拒绝。首次安装仍可按调用方策略只使用源哈希前置条件。
+
 ### 完整命令参考
 
 下面所有命令都使用前文定义的 `CLI` 数组。如果不从源码构建，请替换为打包好的二进制文件。
@@ -129,7 +159,7 @@ mh3g-save-convert inspect-events [--target <TARGET>] [--all] <SOURCE>
 #### `convert`：转换一个角色槽位
 
 ```text
-mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` 与 `<OUTPUT>` 必须拥有相同的 `user#` 文件名。只读执行：
@@ -144,12 +174,29 @@ mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
 "${CLI[@]}" convert "$SOURCE" --output "$TARGET" --write
 ```
 
+面向已有目标文件的 GUI/自动化写入，应保留一份 dry-run JSON，并将其中哈希作为 argv 值传入。下面的 Bash 示例依赖 `jq`，不使用 `eval`，也不会由 JSON 重建 shell 命令：
+
+```bash
+set -euo pipefail
+
+DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$DRY_RUN_JSON")
+TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$SOURCE_SHA256" \
+  --expected-target-sha256 "$TARGET_SHA256" \
+  --write
+```
+
+当目标不存在或报告不包含这两个哈希时，`jq -e` 会使这个受保护流程停止。两个 `--expected-...` 参数不能用于 dry-run，也不能脱离 `--write` 单独传入。
+
 如果目标原本存在，`--write` 会在同目录创建 `.user2.mh3g-backup-<previous-sha256>` 和 `.user2.mh3g-install.json`；重复安装还可能生成 `.user2.mh3g-install-history-<sha256>.json`。在 Cemu 中手动验证成功前，请保留 manifest。
 
 #### `convert-system`：转换共享 system 数据
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 只能使用明确的 `system` 文件；它不会读取 `user#` 或 ExtData：
@@ -159,7 +206,19 @@ mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE
 "${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --write
 ```
 
-它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥。
+它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥。相同的受保护写入流程也适用，但必须使用该次 `convert-system` dry-run 的哈希，不能复用角色槽位转换的结果：
+
+```bash
+SYSTEM_TARGET="$CEMU_DIR/system"
+SYSTEM_DRY_RUN_JSON=$("${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" --dry-run)
+SYSTEM_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$SYSTEM_DRY_RUN_JSON")
+SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" \
+  --expected-source-sha256 "$SYSTEM_SOURCE_SHA256" \
+  --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
+  --write
+```
 
 #### `convert-extras`：生成共享 ExtData 暂存文件
 
@@ -176,7 +235,38 @@ EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras"
 "${CLI[@]}" convert-extras --source-dir "$EXTRAS_SOURCE" --output-dir "$EXTRAS_OUTPUT" --write
 ```
 
-`quest1` 到 `quest4` 会增加 Cemu 容器。`card1` 到 `card3` 和 `cardbox` 会先应用已恢复的跨平台字段映射，然后写入 wrapper。`--reset-guild-cards` 是明确的破坏性恢复开关：它会生成空白原生 Cemu `card*` 文件，并丢弃本地和已收到的名片数据。正常迁移不要使用它。手动安装生成文件前，必须先备份 Cemu 目标目录。
+`quest1` 到 `quest4` 会增加 Cemu 容器。`card1` 到 `card3` 和 `cardbox` 会先应用已恢复的跨平台字段映射，然后写入 wrapper。`--reset-guild-cards` 是明确的破坏性恢复开关：它会生成空白原生 Cemu `card*` 文件，并丢弃本地和已收到的名片数据。正常迁移不要使用它。不要手工把单个生成文件复制进 Cemu；请使用下方受保护的完整组件组安装命令。
+
+#### `install-extras`：事务安装暂存 ExtData 组件组
+
+```text
+mh3g-save-convert install-extras [--dry-run | --write] \
+  --staging-dir <暂存目录> --target-dir <已初始化的-Cemu-存档目录> \
+  --groups <guild-cards,quests>
+```
+
+它故意与 `convert-extras` 分离。`--staging-dir` 必须包含全部八个生成文件，而 `--groups`
+只能选择完整组件组：`guild-cards` 表示 `card1`、`card2`、`card3` 和 `cardbox`；`quests`
+表示 `quest1` 到 `quest4`。目标必须是已初始化的 MH3G Cemu 存档目录，并且已经包含被选择的
+同名组件。写入会创建绑定 manifest 的恢复事务并保留目标原始字节；不会单独安装某一个 `card#`
+或 `quest#` 文件。
+
+安装前应紧接着执行 Dry Run，并把两组报告哈希绑定到写入：
+
+```bash
+EXTRAS_INSTALL_DRY_RUN_JSON=$("${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests --dry-run)
+EXTRAS_STAGING_SHA256=$(jq -er '.staging_set_sha256' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+EXTRAS_TARGET_SHA256=$(jq -er '.target_set_sha256_before' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+
+"${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests \
+  --expected-staging-set-sha256 "$EXTRAS_STAGING_SHA256" \
+  --expected-target-set-sha256 "$EXTRAS_TARGET_SHA256" \
+  --write
+```
 
 #### `inspect-cec`：读取擦身通信/猎人搜索邮箱
 
@@ -194,8 +284,13 @@ mh3g-save-convert inspect-cec --source-dir <CEC-DIR> [--target <CEMU-CEC>] \
 #### `convert-cec`：实验性导入收到的消息
 
 ```text
-mh3g-save-convert convert-cec [--dry-run | --write --experimental] \
-  [--slot <SLOT>] --source-dir <CEC-DIR> --target <CEMU-CEC>
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --dry-run
+
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --write --experimental \
+  --expected-source-record-set-sha256 <SHA-256> \
+  --expected-target-sha256 <SHA-256>
 ```
 
 CEC 既不是主存档，也不是持久公会名片仓库。`InBox___/_*` 是收到的原始消息；`OutBox__/_*` 是本机猎人的发出广播，会被故意忽略。`BoxInfo_____` 是邮箱元数据。只有非空收件箱记录会成为候选导入。已有公会名片和离线集会所伙伴使用下面这组持久数据：
@@ -206,17 +301,29 @@ CEC 既不是主存档，也不是持久公会名片仓库。`InBox___/_*` 是�
 
 即使持久名片列表非空，CEC 收件箱为空也完全正常。`convert-cec` 是独立的**实验性**功能：目前拥有文件级证据，但不代表所有 Wii U UI 都已获得完整运行时保证。它不会写入任何 `user#`、`system`、`card*` 或 `quest*`。默认使用第一个空 Cemu 槽位；`--slot <SLOT>` 用于指定第一个候选槽位，已有非空记录永远不会被覆盖。
 
+CEC Dry Run 会报告与记录顺序无关的 `source_record_set_sha256`，以及
+`target_sha256_before`（`cec` 尚不存在时，它表示规范的空 Cemu 容器）。写入必须带上
+两项值；工具会在取得 CEC 目标锁后重新检查：
+
 ```bash
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 --write --experimental
+CEC_DRY_RUN_JSON=$("${CLI[@]}" convert-cec \
+  --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run)
+CEC_SOURCE_RECORD_SET_SHA256=$(jq -er '.source_record_set_sha256' <<<"$CEC_DRY_RUN_JSON")
+CEC_TARGET_SHA256=$(jq -er '.target_sha256_before' <<<"$CEC_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 \
+  --expected-source-record-set-sha256 "$CEC_SOURCE_RECORD_SET_SHA256" \
+  --expected-target-sha256 "$CEC_TARGET_SHA256" \
+  --write --experimental
 ```
 
 3DS 源 wrapper 和观察到的 8 字节消息前缀不会被复制。成功写入 CEC 后，必要时会生成 `.cec.mh3g-backup-<previous-sha256>`，并在目标旁生成 `.cec.mh3g-install.json`。
 
-#### `rollback` 与 `rollback-cec`：只恢复已知事务
+#### `rollback`、`rollback-extras` 与 `rollback-cec`：只恢复已知事务
 
 ```text
 mh3g-save-convert rollback --manifest <MANIFEST>
+mh3g-save-convert rollback-extras --manifest <EXTDATA-MANIFEST>
 mh3g-save-convert rollback-cec --manifest <MANIFEST>
 ```
 
@@ -224,10 +331,11 @@ mh3g-save-convert rollback-cec --manifest <MANIFEST>
 
 ```bash
 "${CLI[@]}" rollback --manifest "$CEMU_DIR/.user2.mh3g-install.json"
+"${CLI[@]}" rollback-extras --manifest "$EXTRAS_MANIFEST"
 "${CLI[@]}" rollback-cec --manifest "$CEMU_DIR/.cec.mh3g-install.json"
 ```
 
-回滚只会恢复或删除 manifest 绑定的目标，并清理该事务控制的文件。它不会修改 3DS 源文件。
+回滚只会恢复 manifest 绑定的核心目标、ExtData 组件组或 CEC 目标，不会修改 3DS 源文件。请保留每次成功写入输出的 `manifest` 路径；`install-extras` 的 manifest 会在写入 JSON 中返回，并不是固定文件名。
 
 ### 运行证据和安装包
 

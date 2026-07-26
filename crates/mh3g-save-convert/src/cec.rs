@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -8,10 +9,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ConversionError, io_at_path,
+    process_probe::{PlatformProcessProbe, ProcessProbe},
     profile::build_jp_cemu_header,
     transaction::{
-        MacOsProcessProbe, ProcessProbe, atomic_replace, remove_if_regular_file, sha256_hex,
-        sync_directory, unique_path, write_new_file,
+        atomic_replace, remove_if_regular_file, sha256_hex, sync_directory, unique_path,
+        write_new_file,
     },
     transforms::{GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections},
 };
@@ -114,8 +116,23 @@ pub struct CecConversion {
     pub bytes: Vec<u8>,
     pub records: Vec<CecRecordSource>,
     pub slots: Vec<usize>,
+    /// Order-independent fingerprint of every valid received source record
+    /// observed while planning this conversion, including records already
+    /// present in the target cache.
+    pub source_record_set_sha256: String,
     pub before_sha256: String,
     pub after_sha256: String,
+}
+
+/// Optional CEC hashes captured by the immediately preceding Dry Run.
+///
+/// The source fingerprint covers the complete deduplicated received-record
+/// set. The target fingerprint is the current `cec` bytes, or the stable
+/// canonical empty Cemu container when the file does not yet exist.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CecInstallExpectations<'a> {
+    pub source_record_set_sha256: Option<&'a str>,
+    pub target_sha256: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +151,53 @@ pub struct CecInstallResult {
     pub backup: Option<PathBuf>,
     pub manifest: PathBuf,
     pub installed_sha256: String,
+}
+
+/// Actual lock-scoped plan and result for a CEC import.
+#[derive(Debug)]
+pub struct CecInstalledConversion {
+    pub conversion: CecConversion,
+    pub install: CecInstallResult,
+}
+
+/// Serializes all mutations of one Cemu CEC target directory.
+///
+/// Both installation and rollback acquire this create-new lock before reading
+/// the manifest or target. This prevents a second transaction from treating a
+/// partially committed first transaction as its own prior state.
+struct CecInstallLock {
+    path: PathBuf,
+    _file: File,
+}
+
+impl CecInstallLock {
+    fn acquire(parent: &Path) -> Result<Self, ConversionError> {
+        let path = parent.join(".cec.mh3g-install.lock");
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "CEC installation is already locked: {}",
+                    path.display()
+                )));
+            }
+            Err(error) => return io_at_path(Err(error), "creating CEC install lock", &path),
+        };
+        if let Err(error) =
+            writeln!(file, "pid={}", std::process::id()).and_then(|_| file.sync_all())
+        {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return io_at_path(Err(error), "writing CEC install lock", &path);
+        }
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for CecInstallLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -454,6 +518,26 @@ pub fn collect_received_mh3g_records(root: &Path) -> Result<Vec<CecRecordSource>
     Ok(records)
 }
 
+/// Return an order-independent fingerprint for the received source records.
+///
+/// The input has normally already been deduplicated by
+/// `collect_received_mh3g_records`, but this function applies set semantics
+/// itself so callers cannot accidentally turn mailbox ordering into a write
+/// precondition. The domain separator makes the digest distinct from a raw
+/// record or Cemu container digest.
+pub fn source_record_set_sha256(records: &[CecRecordSource]) -> String {
+    let hashes = records
+        .iter()
+        .map(|record| record.sha256.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut canonical = b"mh3g-cec-source-record-set-v1\0".to_vec();
+    for hash in hashes {
+        canonical.extend_from_slice(hash.as_bytes());
+        canonical.push(0);
+    }
+    sha256_hex(&canonical)
+}
+
 fn validate_cemu_cec_bytes(bytes: &[u8]) -> Result<(), ConversionError> {
     let expected_header = build_jp_cemu_header("cec", CEMU_CEC_PAYLOAD_SIZE)?;
     if bytes.len() != CEMU_HEADER_SIZE + CEMU_CEC_PAYLOAD_SIZE
@@ -498,12 +582,27 @@ pub fn convert_cec_records(
 ) -> Result<CecConversion, ConversionError> {
     validate_cemu_cec_bytes(target_bytes)?;
     let records = collect_received_mh3g_records(source_dir)?;
+    convert_collected_cec_records(records, target_bytes, requested_slot)
+}
+
+fn convert_collected_cec_records(
+    mut records: Vec<CecRecordSource>,
+    target_bytes: &[u8],
+    requested_slot: Option<usize>,
+) -> Result<CecConversion, ConversionError> {
+    validate_cemu_cec_bytes(target_bytes)?;
     if records.is_empty() {
         return Err(ConversionError::InvalidSave(
             "3DS CEC InBox___ contains no non-empty received MH3G records".to_owned(),
         ));
     }
 
+    // A CEC Dry Run authorizes the set of raw received records, not their
+    // mailbox filenames. Canonicalize before fixed Cemu slot assignment so
+    // swapping two mailbox files cannot change the approved output while
+    // leaving its record-set fingerprint unchanged.
+    records.sort_by(|left, right| left.sha256.cmp(&right.sha256));
+    let source_record_set_sha256 = source_record_set_sha256(&records);
     let mut output = target_bytes.to_vec();
     let before_sha256 = sha256_hex(target_bytes);
     let records = records
@@ -573,6 +672,7 @@ pub fn convert_cec_records(
         bytes: output,
         records: pending,
         slots,
+        source_record_set_sha256,
         before_sha256,
     })
 }
@@ -584,6 +684,58 @@ pub fn install_cec(
     target: &Path,
     conversion: &CecConversion,
 ) -> Result<CecInstallResult, ConversionError> {
+    install_cec_with(
+        source_dir,
+        target,
+        conversion,
+        &PlatformProcessProbe::default(),
+    )
+}
+
+struct CecInstallContext {
+    parent: PathBuf,
+    _install_lock: CecInstallLock,
+    previous: Option<Vec<u8>>,
+    previous_sha256: Option<String>,
+}
+
+fn validate_cec_install_expectations(
+    expectations: CecInstallExpectations<'_>,
+) -> Result<(), ConversionError> {
+    for (label, value) in [
+        ("source record set", expectations.source_record_set_sha256),
+        ("target", expectations.target_sha256),
+    ] {
+        if let Some(value) = value
+            && !(value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(ConversionError::InvalidSave(format!(
+                "expected {label} SHA-256 is not a SHA-256 hex digest"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_expected_cec_hash(
+    expected: Option<&str>,
+    observed: &str,
+    label: &str,
+) -> Result<(), ConversionError> {
+    if let Some(expected) = expected
+        && !expected.eq_ignore_ascii_case(observed)
+    {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "{label} SHA-256 does not match the expected dry-run value"
+        )));
+    }
+    Ok(())
+}
+
+fn prepare_cec_install(
+    target: &Path,
+    probe: &dyn ProcessProbe,
+) -> Result<CecInstallContext, ConversionError> {
     if target.file_name().and_then(|name| name.to_str()) != Some("cec") {
         return Err(ConversionError::InvalidSave(format!(
             "Cemu CEC target must be named cec: {}",
@@ -599,6 +751,7 @@ pub fn install_cec(
             parent.display()
         )));
     }
+    let install_lock = CecInstallLock::acquire(parent)?;
     let target_is_symlink = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata.file_type().is_symlink(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -611,7 +764,7 @@ pub fn install_cec(
             "CEC target cannot be a symlink".to_owned(),
         ));
     }
-    if let Some(name) = MacOsProcessProbe.matching_process()? {
+    if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
             "emulator process is running: {name}"
         )));
@@ -643,15 +796,118 @@ pub fn install_cec(
         Err(error) => return io_at_path(Err(error), "reading Cemu CEC target", target),
     };
     let previous_sha256 = previous.as_deref().map(sha256_hex);
-    let observed_sha256 = match previous_sha256.as_deref() {
-        Some(hash) => hash.to_owned(),
-        None => sha256_hex(&empty_cemu_cec()?),
-    };
+    Ok(CecInstallContext {
+        parent: parent.to_path_buf(),
+        _install_lock: install_lock,
+        previous,
+        previous_sha256,
+    })
+}
+
+fn observed_cec_target_sha256(context: &CecInstallContext) -> Result<String, ConversionError> {
+    match context.previous_sha256.as_deref() {
+        Some(hash) => Ok(hash.to_owned()),
+        None => Ok(sha256_hex(&empty_cemu_cec()?)),
+    }
+}
+
+pub fn install_cec_with(
+    source_dir: &Path,
+    target: &Path,
+    conversion: &CecConversion,
+    probe: &dyn ProcessProbe,
+) -> Result<CecInstallResult, ConversionError> {
+    let context = prepare_cec_install(target, probe)?;
+    let observed_sha256 = observed_cec_target_sha256(&context)?;
     if observed_sha256 != conversion.before_sha256 {
         return Err(ConversionError::UnsafeInstall(
             "CEC target changed after the conversion plan was created".to_owned(),
         ));
     }
+    install_cec_transaction(source_dir, target, conversion, &context)
+}
+
+/// Rebuild and install a CEC conversion while holding the per-target lock.
+///
+/// This is the write counterpart to a CEC Dry Run: it re-reads both the Cemu
+/// target and the complete 3DS received-record set after obtaining the lock,
+/// verifies the caller's fingerprints, and only then derives the bytes to
+/// install from that in-memory snapshot.
+pub fn install_cec_from_source_with_expectations(
+    source_dir: &Path,
+    target: &Path,
+    requested_slot: Option<usize>,
+    expectations: CecInstallExpectations<'_>,
+) -> Result<CecInstalledConversion, ConversionError> {
+    install_cec_from_source_with_expectations_and_probe(
+        source_dir,
+        target,
+        requested_slot,
+        expectations,
+        &PlatformProcessProbe::default(),
+    )
+}
+
+fn install_cec_from_source_with_expectations_and_probe(
+    source_dir: &Path,
+    target: &Path,
+    requested_slot: Option<usize>,
+    expectations: CecInstallExpectations<'_>,
+    probe: &dyn ProcessProbe,
+) -> Result<CecInstalledConversion, ConversionError> {
+    validate_cec_install_expectations(expectations)?;
+    let context = prepare_cec_install(target, probe)?;
+    let observed_target_sha256 = observed_cec_target_sha256(&context)?;
+    ensure_expected_cec_hash(
+        expectations.target_sha256,
+        &observed_target_sha256,
+        "target",
+    )?;
+
+    let source_records = collect_received_mh3g_records(source_dir)?;
+    let observed_source_record_set_sha256 = source_record_set_sha256(&source_records);
+    ensure_expected_cec_hash(
+        expectations.source_record_set_sha256,
+        &observed_source_record_set_sha256,
+        "source record set",
+    )?;
+
+    let empty_target: Vec<u8>;
+    let target_bytes = match context.previous.as_deref() {
+        Some(bytes) => bytes,
+        None => {
+            empty_target = empty_cemu_cec()?;
+            &empty_target
+        }
+    };
+    let conversion = convert_collected_cec_records(source_records, target_bytes, requested_slot)?;
+    if conversion.source_record_set_sha256 != observed_source_record_set_sha256 {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC source record set changed while the write plan was created".to_owned(),
+        ));
+    }
+    if conversion.before_sha256 != observed_target_sha256 {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC target changed while the write plan was created".to_owned(),
+        ));
+    }
+    let install = install_cec_transaction(source_dir, target, &conversion, &context)?;
+    Ok(CecInstalledConversion {
+        conversion,
+        install,
+    })
+}
+
+fn install_cec_transaction(
+    source_dir: &Path,
+    target: &Path,
+    conversion: &CecConversion,
+    context: &CecInstallContext,
+) -> Result<CecInstallResult, ConversionError> {
+    let parent = context.parent.as_path();
+    let manifest_path = parent.join(".cec.mh3g-install.json");
+    let previous = context.previous.as_deref();
+    let previous_sha256 = context.previous_sha256.clone();
     let backup = previous_sha256
         .as_deref()
         .map(|hash| parent.join(format!(".cec.mh3g-backup-{hash}")));
@@ -675,7 +931,7 @@ pub fn install_cec(
     let mut target_installed = false;
     let mut manifest_created = false;
     let result = (|| {
-        if let (Some(path), Some(bytes)) = (&backup, previous.as_deref()) {
+        if let (Some(path), Some(bytes)) = (&backup, previous) {
             match fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_file() => {
                     let existing = io_at_path(fs::read(path), "reading existing CEC backup", path)?;
@@ -731,7 +987,7 @@ pub fn install_cec(
             }
 
             let restore_result = if target_installed {
-                if let Some(previous) = previous.as_deref() {
+                if let Some(previous) = previous {
                     atomic_replace(target, previous)
                 } else {
                     remove_if_regular_file(target)
@@ -799,6 +1055,13 @@ fn validate_cec_manifest_hash(value: &str, label: &str) -> Result<(), Conversion
 /// Roll back a prior `install_cec` transaction after verifying the installed
 /// hash and the hash-addressed backup.
 pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
+    rollback_cec_with(manifest_path, &PlatformProcessProbe::default())
+}
+
+pub fn rollback_cec_with(
+    manifest_path: &Path,
+    probe: &dyn ProcessProbe,
+) -> Result<(), ConversionError> {
     if manifest_path.file_name().and_then(|name| name.to_str()) != Some(".cec.mh3g-install.json") {
         return Err(ConversionError::InvalidSave(format!(
             "CEC rollback manifest has an unexpected name: {}",
@@ -811,6 +1074,13 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
             manifest_path.display()
         ))
     })?;
+    if !parent.is_dir() {
+        return Err(ConversionError::InvalidSave(format!(
+            "CEC rollback manifest parent is not a directory: {}",
+            parent.display()
+        )));
+    }
+    let _install_lock = CecInstallLock::acquire(parent)?;
     let manifest_metadata = io_at_path(
         fs::symlink_metadata(manifest_path),
         "reading CEC rollback manifest metadata",
@@ -857,7 +1127,7 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
             "CEC rollback target cannot be a symlink".to_owned(),
         ));
     }
-    if let Some(name) = MacOsProcessProbe.matching_process()? {
+    if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
             "emulator process is running: {name}"
         )));
@@ -1014,6 +1284,37 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    struct Running;
+
+    impl ProcessProbe for Running {
+        fn matching_process(&self) -> Result<Option<String>, ConversionError> {
+            Ok(Some("Cemu.exe".to_owned()))
+        }
+    }
+
+    struct Stopped;
+
+    impl ProcessProbe for Stopped {
+        fn matching_process(&self) -> Result<Option<String>, ConversionError> {
+            Ok(None)
+        }
+    }
+
+    fn received_message_with_record(record: &[u8]) -> Vec<u8> {
+        assert_eq!(record.len(), CEMU_RECORD_SLOT_SIZE);
+        let body_size = CEC_SOURCE_RECORD_PREFIX_SIZE + CEMU_RECORD_SLOT_SIZE;
+        let header_size = MESSAGE_HEADER_SIZE;
+        let mut message = vec![0_u8; header_size + body_size];
+        let message_size = message.len() as u32;
+        message[0..2].copy_from_slice(&0x6060_u16.to_le_bytes());
+        message[4..8].copy_from_slice(&message_size.to_le_bytes());
+        message[8..12].copy_from_slice(&(header_size as u32).to_le_bytes());
+        message[12..16].copy_from_slice(&(body_size as u32).to_le_bytes());
+        message[16..20].copy_from_slice(&MH3G_TITLE_ID.to_le_bytes());
+        message[header_size + CEC_SOURCE_RECORD_PREFIX_SIZE..].copy_from_slice(record);
+        message
+    }
+
     #[cfg(windows)]
     #[test]
     fn directory_sync_does_not_open_windows_directories_as_files() {
@@ -1033,6 +1334,49 @@ mod tests {
             CEMU_RECORD_SLOT_SIZE,
             CEC_GUILD_CARD_SLOT_COUNT * GUILD_CARD_SLOT_SIZE
         );
+    }
+
+    #[test]
+    fn cec_slot_assignment_is_stable_when_mailbox_filenames_are_swapped() {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("InBox___");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
+
+        let mut first_record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        first_record[0] = 0xA1;
+        let mut second_record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        second_record[0] = 0xB2;
+        let first_message = received_message_with_record(&first_record);
+        let second_message = received_message_with_record(&second_record);
+        fs::write(inbox.join("_A"), &first_message).unwrap();
+        fs::write(inbox.join("_B"), &second_message).unwrap();
+
+        let target = empty_cemu_cec().unwrap();
+        let before = convert_cec_records(temp.path(), &target, None).unwrap();
+
+        fs::write(inbox.join("_A"), second_message).unwrap();
+        fs::write(inbox.join("_B"), first_message).unwrap();
+        let after = convert_cec_records(temp.path(), &target, None).unwrap();
+
+        assert_eq!(
+            before.source_record_set_sha256,
+            after.source_record_set_sha256
+        );
+        assert_eq!(before.slots, after.slots);
+        assert_eq!(
+            before
+                .records
+                .iter()
+                .map(|record| &record.sha256)
+                .collect::<Vec<_>>(),
+            after
+                .records
+                .iter()
+                .map(|record| &record.sha256)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(before.bytes, after.bytes);
     }
 
     #[test]
@@ -1160,13 +1504,14 @@ mod tests {
             bytes: planned,
             records: Vec::new(),
             slots: Vec::new(),
+            source_record_set_sha256: source_record_set_sha256(&[]),
         };
 
         let mut changed = initial;
         changed[CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET] = 0x5A;
         fs::write(&target, changed).unwrap();
 
-        let error = install_cec(temp.path(), &target, &conversion).unwrap_err();
+        let error = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap_err();
         assert!(
             matches!(error, ConversionError::UnsafeInstall(message) if message.contains("changed"))
         );
@@ -1182,7 +1527,86 @@ mod tests {
             bytes,
             records: Vec::new(),
             slots: Vec::new(),
+            source_record_set_sha256: source_record_set_sha256(&[]),
         }
+    }
+
+    #[test]
+    fn cec_install_refuses_a_running_emulator_before_changing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+
+        let error = install_cec_with(temp.path(), &target, &conversion, &Running).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("Cemu.exe"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert!(!temp.path().join(".cec.mh3g-install.json").exists());
+    }
+
+    #[test]
+    fn cec_install_refuses_a_held_target_lock_before_reading_or_replacing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let lock = temp.path().join(".cec.mh3g-install.lock");
+        fs::write(&lock, b"held by another installer").unwrap();
+
+        let error = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("already locked"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert_eq!(fs::read(&lock).unwrap(), b"held by another installer");
+        assert!(!temp.path().join(".cec.mh3g-install.json").exists());
+    }
+
+    #[test]
+    fn cec_rollback_refuses_a_running_emulator_before_changing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let installed = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap();
+        let current = fs::read(&target).unwrap();
+
+        let error = rollback_cec_with(&installed.manifest, &Running).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("Cemu.exe"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), current);
+        assert!(installed.manifest.exists());
+    }
+
+    #[test]
+    fn cec_rollback_refuses_a_held_target_lock_before_reading_or_replacing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let installed = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap();
+        let current = fs::read(&target).unwrap();
+        let lock = temp.path().join(".cec.mh3g-install.lock");
+        fs::write(&lock, b"held by another rollback").unwrap();
+
+        let error = rollback_cec_with(&installed.manifest, &Stopped).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("already locked"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), current);
+        assert_eq!(fs::read(&lock).unwrap(), b"held by another rollback");
+        assert!(installed.manifest.exists());
     }
 
     #[cfg(unix)]
@@ -1202,7 +1626,7 @@ mod tests {
         let manifest = temp.path().join(".cec.mh3g-install.json");
         symlink(temp.path().join("missing-manifest-target"), &manifest).unwrap();
 
-        install_cec(temp.path(), &target, &conversion).unwrap_err();
+        install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap_err();
 
         assert_eq!(fs::read(&target).unwrap(), previous);
         assert!(
@@ -1231,7 +1655,7 @@ mod tests {
         fs::write(&linked_backup, &previous).unwrap();
         symlink(&linked_backup, &backup).unwrap();
 
-        install_cec(temp.path(), &target, &conversion).unwrap_err();
+        install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap_err();
 
         assert_eq!(fs::read(&target).unwrap(), previous);
         assert!(
@@ -1250,13 +1674,13 @@ mod tests {
         let previous = empty_cemu_cec().unwrap();
         fs::write(&target, &previous).unwrap();
         let conversion = planned_cec_conversion(&previous, 0xA5);
-        let installed = install_cec(temp.path(), &target, &conversion).unwrap();
+        let installed = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap();
         let backup = installed.backup.unwrap();
 
         fs::write(&target, &previous).unwrap();
         fs::remove_file(&backup).unwrap();
 
-        rollback_cec(&installed.manifest).unwrap();
+        rollback_cec_with(&installed.manifest, &Stopped).unwrap();
 
         assert_eq!(fs::read(&target).unwrap(), previous);
         assert!(!backup.exists());
@@ -1269,11 +1693,11 @@ mod tests {
         let target = temp.path().join("cec");
         let empty = empty_cemu_cec().unwrap();
         let conversion = planned_cec_conversion(&empty, 0xA5);
-        let installed = install_cec(temp.path(), &target, &conversion).unwrap();
+        let installed = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap();
 
         fs::remove_file(&target).unwrap();
 
-        rollback_cec(&installed.manifest).unwrap();
+        rollback_cec_with(&installed.manifest, &Stopped).unwrap();
 
         assert!(!target.exists());
         assert!(!installed.manifest.exists());

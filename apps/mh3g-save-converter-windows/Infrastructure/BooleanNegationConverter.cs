@@ -1,0 +1,16 @@
+using Microsoft.UI.Xaml.Data;
+
+namespace MHToolkit.MH3GSaveConverter.Windows.Infrastructure;
+
+public sealed class BooleanNegationConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        return value is bool boolean && !boolean;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language)
+    {
+        return value is bool boolean && !boolean;
+    }
+}

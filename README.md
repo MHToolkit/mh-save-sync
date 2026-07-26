@@ -26,6 +26,38 @@ not convert Cemu back to 3DS. It preserves bytes outside documented conversion
 ranges, but preserved bytes are not proof that every in-game field has the same
 meaning on both platforms.
 
+### Native macOS workbench (development)
+
+`apps/mh3g-save-converter-macos` is a separate foreground SwiftUI app, not the
+existing MH Save Sync menu-bar client. It uses the bundled
+`mh3g-save-convert` executable through an argv array and its JSON reports; it
+does not implement byte conversion, backup, manifest, process checks, or
+rollback itself. The window appears in the Dock and Cmd-Tab, starts in the
+four-stage workbench, follows the system language by default, and can switch
+between Simplified Chinese and English in Settings.
+
+The app accepts only explicitly selected `user1`, `user2`, `user3`, `system`,
+ExtData, and CEC paths. It does not discover an MLC root, scan a directory, or
+accept archive files. A core write remains disabled until its current Dry Run
+fingerprint matches the selected source SHA-256, target SHA-256, and component
+scope. CEC is a separate collapsed experimental page and is never needed for
+the normal guild-card/offline-partner group.
+
+On an arm64 macOS development host, build and exercise only synthetic fixtures:
+
+```bash
+bash scripts/build-mh3g-save-converter-macos-app.sh
+bash scripts/mh3g-save-converter-macos-smoke.sh
+bash scripts/package-mh3g-save-converter-macos.sh
+```
+
+The smoke test creates a temporary zero-content fixture and always verifies
+inspect, dry-run, bundled diagnostics, and source-hash preservation. When no
+emulator is running, it also verifies transactional write and manifest-bound
+rollback. When Nemessix, Azahar, or Cemu is already running, it instead proves
+the CLI refuses the synthetic write and leaves the temporary target absent. It
+never launches Cemu or opens a real MLC.
+
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
 > archives directly, and it does **not** search an arbitrary save directory for
 > a plausible file. Fully extract an archive to a normal local directory, then
@@ -33,7 +65,7 @@ meaning on both platforms.
 > program from a QQ/browser archive preview. Quote every path that contains a
 > space.
 
-Before any `--write`, `rollback`, or `rollback-cec`, fully quit Nemessix,
+Before any `--write`, `rollback`, `rollback-extras`, or `rollback-cec`, fully quit Nemessix,
 Azahar, and Cemu and wait for their processes to stop. `inspect`,
 `inspect-progress`, `inspect-events`, `inspect-cec`, and every `--dry-run` are
 read-only.
@@ -48,7 +80,7 @@ child. CEC is a system NAND mailbox, not SD-card ExtData.
 | --- | --- | --- | --- | --- |
 | Core slot | One explicit `user1`, `user2`, or `user3` file under `title/00040000/00048100/data/00000001/` | The title directory, all slots, ExtData, a ZIP | Yes: choose one slot | Character, story/progress, farm, fleet, local offline-hunter data; writes only the named same-number Cemu `user#` target |
 | Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Shared system data; writes only the named Cemu `system` target |
-| Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Generates converted `card*` and `quest*` files in a new staging directory |
+| Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Converts all eight files into a new staging directory; a separate guarded `install-extras` transaction can install complete `guild-cards`, `quests`, or both into an initialized Cemu target |
 | StreetPass / Hunter Search CEC | The exact `CEC/00048100/` directory containing `InBox___` | SD-card ExtData, the `InBox___` child alone, a ZIP | Optional and experimental | Reads received raw StreetPass records and can write only Cemu `cec` |
 
 For Nemessix, replace `<ID0>` and `<ID1>` with the two 32-hexadecimal
@@ -120,6 +152,21 @@ an arbitrary renamed file. With no `--write`, conversion remains a dry-run;
 pass `--dry-run` explicitly in scripts to make that intention visible. `--write`
 and `--dry-run` conflict.
 
+For GUI and automation clients, `convert` and `convert-system` also expose
+optional write preconditions: `--expected-source-sha256` and
+`--expected-target-sha256`. Each flag is accepted only together with `--write`.
+Take their values only from `hashes.source` and `hashes.target_before` in the
+JSON emitted by the **same** immediately preceding Dry Run for the same source
+and output paths. This makes the write fail closed if either file changed; the
+target hash is rechecked after the per-slot installation lock is acquired.
+Do not reuse an older report or calculate replacement values separately.
+
+`hashes.target_before` is present only when the target file already exists. If
+it is absent, do not invent a sentinel hash or pass
+`--expected-target-sha256`: a supplied target expectation intentionally rejects
+a missing target. A first install may still use the source expectation alone,
+according to the caller's policy.
+
 ### Complete command reference
 
 All commands below use the `CLI` array above. Replace it with a packaged binary
@@ -171,7 +218,7 @@ It writes nothing:
 #### `convert` — convert one character slot
 
 ```text
-mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` and `<OUTPUT>` must have the same `user#` basename. Read-only use:
@@ -186,6 +233,27 @@ With all emulators stopped, install atomically:
 "${CLI[@]}" convert "$SOURCE" --output "$TARGET" --write
 ```
 
+For a GUI or automation write to an existing target, preserve one Dry Run JSON
+document and pass its hashes as argv values. This Bash example needs `jq`; it
+does not use `eval` or reconstruct a shell command from JSON:
+
+```bash
+set -euo pipefail
+
+DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$DRY_RUN_JSON")
+TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$SOURCE_SHA256" \
+  --expected-target-sha256 "$TARGET_SHA256" \
+  --write
+```
+
+`jq -e` stops this guarded path if the target was absent or the report did not
+contain both hashes. The two `--expected-...` flags must not be supplied to a
+Dry Run or without `--write`.
+
 If a target existed, `--write` creates
 `.user2.mh3g-backup-<previous-sha256>` beside it, plus
 `.user2.mh3g-install.json`; repeated installs may create
@@ -195,7 +263,7 @@ Cemu validation succeeds.
 #### `convert-system` — convert shared system data
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 Use explicit `system` files only; it never reads a `user#` or ExtData:
@@ -206,7 +274,21 @@ Use explicit `system` files only; it never reads a `user#` or ExtData:
 ```
 
 The same transactional backup/manifest pattern applies, using `.system...`
-names. `--write` and `--dry-run` conflict.
+names. `--write` and `--dry-run` conflict. The same optional guarded-write
+flow applies; use values from that `convert-system` Dry Run, not from a slot
+conversion:
+
+```bash
+SYSTEM_TARGET="$CEMU_DIR/system"
+SYSTEM_DRY_RUN_JSON=$("${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" --dry-run)
+SYSTEM_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$SYSTEM_DRY_RUN_JSON")
+SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" \
+  --expected-source-sha256 "$SYSTEM_SOURCE_SHA256" \
+  --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
+  --write
+```
 
 #### `convert-extras` — stage shared ExtData
 
@@ -230,8 +312,42 @@ EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras"
 receive the recovered cross-platform field mapping before the wrapper is
 written. `--reset-guild-cards` is an explicit destructive recovery switch: it
 generates empty native-Cemu `card*` files and discards local/received card data.
-Do not use it for normal migration. Back up a Cemu destination before manually
-installing generated files.
+Do not use it for normal migration. Do not manually copy individual generated
+files into Cemu: use the guarded complete-group installer below.
+
+#### `install-extras` — transactionally install staged ExtData groups
+
+```text
+mh3g-save-convert install-extras [--dry-run | --write] \
+  --staging-dir <STAGING-DIR> --target-dir <INITIALIZED-CEMU-SAVE-DIR> \
+  --groups <guild-cards,quests>
+```
+
+This is intentionally separate from `convert-extras`. `--staging-dir` must
+contain all eight generated files, while `--groups` chooses only whole groups:
+`guild-cards` means `card1`, `card2`, `card3`, and `cardbox`; `quests` means
+`quest1` through `quest4`. The target must be an initialized MH3G Cemu save
+directory containing the selected named components. A write creates a
+manifest-bound recovery transaction and retains the previous target bytes; it
+never installs one `card#` or `quest#` file by itself.
+
+Run the installation Dry Run immediately before writing, and bind both reported
+set hashes to the write:
+
+```bash
+EXTRAS_INSTALL_DRY_RUN_JSON=$("${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests --dry-run)
+EXTRAS_STAGING_SHA256=$(jq -er '.staging_set_sha256' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+EXTRAS_TARGET_SHA256=$(jq -er '.target_set_sha256_before' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+
+"${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests \
+  --expected-staging-set-sha256 "$EXTRAS_STAGING_SHA256" \
+  --expected-target-set-sha256 "$EXTRAS_TARGET_SHA256" \
+  --write
+```
 
 #### `inspect-cec` — read StreetPass/Hunter Search mailbox
 
@@ -251,8 +367,13 @@ one `user#` only to locate its guild-card anchor. The command writes nothing:
 #### `convert-cec` — experimental received-message import
 
 ```text
-mh3g-save-convert convert-cec [--dry-run | --write --experimental] \
-  [--slot <SLOT>] --source-dir <CEC-DIR> --target <CEMU-CEC>
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --dry-run
+
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --write --experimental \
+  --expected-source-record-set-sha256 <SHA-256> \
+  --expected-target-sha256 <SHA-256>
 ```
 
 CEC is not the main save and not the durable guild-card store. `InBox___/_*`
@@ -272,19 +393,32 @@ not a blanket runtime guarantee for every Wii U UI. It writes no `user#`,
 default; `--slot <SLOT>` chooses the first candidate slot and never overwrites
 an existing non-empty record.
 
+The CEC Dry Run reports an order-independent `source_record_set_sha256` and a
+`target_sha256_before` (the canonical empty Cemu container if `cec` does not
+yet exist). A write requires both values and rechecks them after acquiring the
+CEC target lock:
+
 ```bash
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 --write --experimental
+CEC_DRY_RUN_JSON=$("${CLI[@]}" convert-cec \
+  --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run)
+CEC_SOURCE_RECORD_SET_SHA256=$(jq -er '.source_record_set_sha256' <<<"$CEC_DRY_RUN_JSON")
+CEC_TARGET_SHA256=$(jq -er '.target_sha256_before' <<<"$CEC_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 \
+  --expected-source-record-set-sha256 "$CEC_SOURCE_RECORD_SET_SHA256" \
+  --expected-target-sha256 "$CEC_TARGET_SHA256" \
+  --write --experimental
 ```
 
 The source 3DS wrapper and observed 8-byte message prefix are not copied. A
 successful CEC write creates `.cec.mh3g-backup-<previous-sha256>` when needed
 and `.cec.mh3g-install.json` beside the target.
 
-#### `rollback` and `rollback-cec` — restore only a known transaction
+#### `rollback`, `rollback-extras`, and `rollback-cec` — restore only a known transaction
 
 ```text
 mh3g-save-convert rollback --manifest <MANIFEST>
+mh3g-save-convert rollback-extras --manifest <EXTRAS-MANIFEST>
 mh3g-save-convert rollback-cec --manifest <MANIFEST>
 ```
 
@@ -293,11 +427,14 @@ a save directory, backup file, or archive. With all emulators stopped:
 
 ```bash
 "${CLI[@]}" rollback --manifest "$CEMU_DIR/.user2.mh3g-install.json"
+"${CLI[@]}" rollback-extras --manifest "$EXTRAS_MANIFEST"
 "${CLI[@]}" rollback-cec --manifest "$CEMU_DIR/.cec.mh3g-install.json"
 ```
 
-Rollback restores or removes only the manifest-bound target and clears that
-transaction's controlled artifacts. It never changes the 3DS source.
+Rollback restores only the manifest-bound core target, ExtData group, or CEC
+target. It never changes the 3DS source. Preserve the `manifest` path emitted
+by each successful write; `install-extras` emits its manifest in the write JSON
+because it is not a fixed file name.
 
 ### Runtime evidence and packages
 

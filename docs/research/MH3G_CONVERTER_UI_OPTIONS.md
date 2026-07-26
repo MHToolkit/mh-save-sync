@@ -28,13 +28,14 @@ present these missing Windows and multi-file transaction capabilities as if
 the current CLI already supplied them.
 
 The wider repository has already accepted native SwiftUI/AppKit and
-Kotlin/Compose shells over shared Rust logic in ADR 0001. The converter crate is
-currently a Rust library plus CLI, but it does not yet expose a stable UniFFI or
-C ABI designed for a UI.
+Kotlin/Compose shells over shared Rust logic in ADR 0001. That remains the
+cloud synchronization client's `save-client` and UniFFI Kotlin/Swift bridge
+decision. The converter crate is currently a Rust library plus CLI, but it does
+not yet expose a stable UniFFI or C ABI designed for a converter UI.
 
 ## Options
 
-### Option A: Tauri 2 for Windows and macOS, Compose for Android
+### Option A: Tauri 2 for Windows and macOS, Compose for Android (historical comparison)
 
 Use one small Tauri 2 desktop application that invokes typed Rust converter
 library functions directly. Keep Android as a native Compose application using
@@ -54,35 +55,38 @@ Costs:
 - Android cannot safely reuse desktop path selection; SAF permissions and
   document-tree access remain native concerns.
 
-This is the recommended route for a converter-specific desktop app. ADR 0001's
-WebView rejection applies to the full background synchronization client, whose
-key stores, watchers, and lifecycle are platform-owned. A local foreground
-converter has a smaller boundary. This exception should be recorded in a new
-ADR before implementation.
+This was the earlier recommended route for a converter-specific desktop app.
+It is retained here as historical comparison only. ADR 0014 rejects the
+WebView/Tauri exception: do not implement this route.
 
-### Option B: native SwiftUI, WinUI 3, and Compose shells
+### Option B: native SwiftUI and WinUI 3 shells (accepted)
 
-Keep every UI native: SwiftUI on macOS, WinUI 3 on Windows, and Compose on
-Android. Expose one coarse Rust API through UniFFI where supported and a narrow
-C ABI for WinUI.
+Keep the desktop UIs native: a standalone SwiftUI `WindowGroup` application on
+macOS and a standalone C#/.NET 8 WinUI 3 application on Windows. Each packages
+`mh3g-save-convert`, launches it through a strict argv array, and consumes its
+machine-readable JSON. Android is deferred.
+
+The converter UI defaults to the system language. Its settings provide a
+persisted locale override between Simplified Chinese and English.
 
 Advantages:
 
 - Best platform-native file pickers, accessibility, window behavior, and
   signing integration.
-- Matches ADR 0001 without an exception.
-- Android and macOS can extend their existing application shells.
+- Respects ADR 0001's native-shell/WebView boundary while leaving its cloud-sync
+  `save-client` UniFFI Kotlin/Swift bridge unchanged.
+- Avoids Vue, WebView, Tauri, and Electron in the converter UI.
+- Keeps converter, transaction, backup, and rollback logic in one bundled CLI.
 
 Costs:
 
-- Three presentation implementations and two bridge mechanisms.
-- WinUI packaging and the Rust-to-.NET boundary add the largest new maintenance
-  surface.
+- Two desktop presentation implementations and two native packaging paths.
+- WinUI packaging adds the largest new maintenance surface.
 - Slower route to a Windows UI, which is the platform with the immediate CLI
   usability problem.
 
-Choose this only if native desktop integration is more important than delivery
-speed and shared UI behavior.
+This is the accepted route. It must not begin desktop Write support until the
+backend safety prerequisites below are implemented.
 
 ### Option C: Flutter for all three platforms
 
@@ -104,21 +108,29 @@ This is not recommended for the current repository.
 
 ## Recommended delivery sequence
 
-1. Stabilize a UI-facing Rust facade. It must return typed inspection,
-   conversion-plan, write, and rollback results. Reports must contain exact
-   source and target paths, profiles, hashes, files to be modified, backup paths,
-   manifest paths, and structured error codes. This facade must add two
-   capabilities before a desktop UI can install every documented component:
-   native Windows emulator-process detection, and a transactional batch
-   installer for selected staged `card*`/`quest*` files.
-2. Build the Windows and macOS desktop converter with Tauri 2. Keep it separate
-   from the background save-sync application and record that scope in an ADR.
-3. Add Windows signing/MSIX or signed installer work and macOS Developer ID,
+1. Stabilize a JSON CLI contract for inspection, conversion planning, write,
+   and rollback. Its reports must contain exact source and target paths,
+   profiles, hashes, files to be modified, backup paths, manifest paths, and
+   structured error codes. The desktop shells launch only the bundled
+   `mh3g-save-convert` through strict argv arrays and consume this JSON; they do
+   not use a converter Rust UI bridge or reimplement backend operations. This
+   converter-only contract does not supersede ADR 0001's cloud-sync UniFFI
+   Kotlin/Swift bridge.
+2. Implement backend prerequisites before exposing Write: native Windows
+   fail-closed emulator-process detection, a backend-issued dry-run hash
+   authorization, and transactional ExtData batches. `card1`/`card2`/`card3`/
+   `cardbox` are one indivisible guild-card install and rollback group;
+   `quest1` through `quest4` are one indivisible quest install and rollback
+   group. CEC is disabled by default and remains experimental.
+3. Build independent macOS SwiftUI `WindowGroup` and Windows C#/.NET 8 WinUI 3
+   converter applications. Do not use Vue, WebView, Tauri, or Electron.
+4. Add Windows signing/MSIX or signed installer work and macOS Developer ID,
    hardened runtime, and notarization. An unsigned development ZIP remains a
    testing artifact, not the final distribution format.
-4. Add Android only after the desktop workflow is stable. Android should export
-   a converted directory or ZIP chosen through SAF; it should not pretend it can
-   directly install into a desktop Cemu MLC path.
+5. Add Android only after the desktop workflow is stable and device connectivity
+   is proven. Android should export a converted directory or ZIP chosen through
+   SAF; it should not pretend it can directly install into a desktop Cemu MLC
+   path. MCP is not part of version 0.1.
 
 ## Required user workflow
 
@@ -126,21 +138,26 @@ The first screen is the actual conversion workbench, not a landing page.
 
 1. Select the source slot file and matching target slot file.
 2. Show the detected Japanese profiles, slot number, sizes, and SHA-256 values.
-3. Present optional component groups independently: shared `system`, guild
-   cards/offline partner details, downloaded quests, and experimental CEC.
+3. Present optional component groups independently: shared `system`, the
+   indivisible guild-card group, the indivisible downloaded-quest group, and
+   disabled-by-default experimental CEC.
 4. Run a mandatory dry-run and show the exact file write set. A component not
-   selected must not appear in that set.
+   selected must not appear in that set. Write remains disabled until the
+   backend issues a dry-run hash authorization bound to the reviewed source,
+   target, staged output, and selection.
 5. Require a platform-backed emulator-stopped gate before enabling Write. On
    macOS the facade may reuse the existing process probe. On Windows it must
    detect the supported Cemu/Cemu_release, Azahar, and Nemessix processes and
    fail closed when process state cannot be established; an instructional
    checkbox is not a process guard.
-6. For selected `card1`, `card2`, `card3`, `cardbox`, or `quest1` through
-   `quest4`, first convert into a fresh staging directory, then use a new batch
-   transaction to snapshot every selected destination, verify staged hashes,
-   install the complete selected set, and restore the complete pre-write set if
-   any file fails. Do not copy these files directly from the staging directory
-   and call that a successful transaction.
+6. For the guild-card group (`card1`, `card2`, `card3`, and `cardbox`) or the
+   quest group (`quest1` through `quest4`), first convert the complete group
+   into a fresh staging directory, then use a batch transaction to snapshot
+   every destination, verify staged hashes, install the complete group, and
+   restore the complete pre-write group if any file fails. The UI must not
+   select, install, or roll back only one member of either group. Do not copy
+   these files directly from the staging directory and call that a successful
+   transaction.
 7. After Write, show every backup and manifest path with a Roll Back action.
    The batch manifest must bind every selected destination to its before/after
    hash and backup or previously-absent state, so rollback cannot restore only
@@ -162,7 +179,11 @@ any write.
 - Desktop builds need an automated `--help` or facade smoke test on the target
   OS plus archive extraction and launch verification.
 - UI tests must prove that deselected component groups do not reach the write
-  plan and that Write remains disabled until dry-run succeeds.
+  plan, neither ExtData group can be partially selected, and Write remains
+  disabled until dry-run hash authorization succeeds.
+- Localization acceptance must include complete Simplified Chinese and English
+  resources, tests for the system-language default, and a persisted settings
+  locale override.
 - Windows tests must start a supported emulator-named process and prove that
   writes and rollback fail closed before touching any target.
 - Batch-install tests must inject a failure after at least one selected

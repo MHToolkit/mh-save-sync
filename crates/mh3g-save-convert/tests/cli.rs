@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde_json::Value;
 use sha2::Digest;
@@ -9,12 +14,17 @@ use mh3g_save_convert::profile::build_jp_cemu_header;
 #[cfg(target_os = "macos")]
 use std::{
     os::unix::fs::PermissionsExt,
-    process::{Child, Stdio},
+    process::{Child, Output, Stdio},
     sync::Mutex,
 };
 
+#[cfg(not(target_os = "macos"))]
+use std::process::Output;
+
 const THREE_DS_SIZE: usize = 0x8A00;
 const CEMU_SIZE: usize = 0x8A24;
+const THREE_DS_SYSTEM_SIZE: usize = 0x3000;
+const CEMU_SYSTEM_SIZE: usize = 0x3024;
 const CEMU_CEC_PAYLOAD_SIZE: usize = 0x835FC;
 #[cfg(target_os = "macos")]
 static PROCESS_GUARD: Mutex<()> = Mutex::new(());
@@ -31,6 +41,16 @@ fn slot_fixture(temp: &TempDir, slot: &str) -> PathBuf {
     let directory = temp.path().join("3ds");
     fs::create_dir_all(&directory).unwrap();
     write_source(directory.join(slot))
+}
+
+fn system_fixture(temp: &TempDir) -> PathBuf {
+    let directory = temp.path().join("3ds");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("system");
+    let mut bytes = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+    bytes[..4].copy_from_slice(&[0x2B, 0, 0, 0]);
+    fs::write(&path, bytes).unwrap();
+    path
 }
 
 fn target_slot(temp: &TempDir, slot: &str) -> PathBuf {
@@ -57,6 +77,39 @@ fn extras_fixture(temp: &TempDir) -> PathBuf {
         fs::write(source_dir.join(component), bytes).unwrap();
     }
     source_dir
+}
+
+fn staged_extras_fixture(temp: &TempDir) -> PathBuf {
+    let source_dir = extras_fixture(temp);
+    let staging_dir = temp.path().join("staged-extras");
+    let report = run_json(&[
+        "convert-extras".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--output-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--write".into(),
+    ]);
+    assert_eq!(report["status"], "written");
+    staging_dir
+}
+
+fn initialized_extra_target(temp: &TempDir, staging_dir: &Path) -> PathBuf {
+    let target_dir = temp.path().join("cemu-extras");
+    fs::create_dir_all(&target_dir).unwrap();
+    for component in [
+        "card1", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ] {
+        fs::copy(staging_dir.join(component), target_dir.join(component)).unwrap();
+    }
+
+    // Keep a valid Cemu header while ensuring the target set is observably
+    // different from the staged set before installation.
+    let card1 = target_dir.join("card1");
+    let mut bytes = fs::read(&card1).unwrap();
+    bytes[0x28] = 0xA5;
+    fs::write(card1, bytes).unwrap();
+    target_dir
 }
 
 fn write_source(path: PathBuf) -> PathBuf {
@@ -166,6 +219,24 @@ fn run_json_with_stopped_emulators(args: &[String]) -> Value {
     run_json(args)
 }
 
+#[cfg(target_os = "macos")]
+fn run_output_with_stopped_emulators(args: &[String]) -> Output {
+    let directory = tempfile::tempdir().unwrap();
+    let pgrep = directory.path().join("pgrep");
+    fs::write(&pgrep, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&pgrep, fs::Permissions::from_mode(0o755)).unwrap();
+    binary()
+        .env("PATH", directory.path())
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_output_with_stopped_emulators(args: &[String]) -> Output {
+    binary().args(args).output().unwrap()
+}
+
 fn keys(value: &Value) -> BTreeSet<String> {
     value.as_object().unwrap().keys().cloned().collect()
 }
@@ -252,6 +323,11 @@ fn convert_cec_dry_run_plans_the_first_empty_cemu_slot_without_writing() {
     assert_eq!(value["status"], "dry-run");
     assert_eq!(value["imported_messages"], 1);
     assert_eq!(value["slots"][0], 0);
+    assert_eq!(
+        value["source_record_set_sha256"].as_str().unwrap().len(),
+        64
+    );
+    assert_eq!(value["target_sha256_before"].as_str().unwrap().len(), 64);
     assert!(value["backup"].is_null());
     assert_eq!(fs::read(&target).unwrap(), before);
 }
@@ -304,6 +380,39 @@ fn convert_cec_write_requires_experimental_acknowledgement() {
 }
 
 #[test]
+fn convert_cec_write_requires_dry_run_hash_preconditions() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let before = fs::read(&target).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--expected-source-record-set-sha256")
+    );
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
 fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
@@ -313,6 +422,18 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
     let before = fs::read(&target).unwrap();
     let before_hash = sha2::Sha256::digest(&before);
     let before_hash = hex::encode(before_hash);
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let expected_source_record_set = dry_run["source_record_set_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let expected_target = dry_run["target_sha256_before"].as_str().unwrap().to_owned();
 
     let value = run_json_with_stopped_emulators(&[
         "convert-cec".into(),
@@ -322,6 +443,10 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
         target.to_string_lossy().into_owned(),
         "--write".into(),
         "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        expected_source_record_set,
+        "--expected-target-sha256".into(),
+        expected_target,
     ]);
 
     assert_eq!(value["status"], "written");
@@ -347,6 +472,181 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
 }
 
 #[test]
+fn convert_cec_write_rejects_a_stale_expected_source_record_set_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let before = fs::read(&target).unwrap();
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+
+    let message = source.join("InBox___").join("_CEC-TEST");
+    let mut changed_message = fs::read(&message).unwrap();
+    changed_message[0xD80 + 8] ^= 0x01;
+    fs::write(&message, changed_message).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("source record set SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_cec_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let mut changed_target = fs::read(&target).unwrap();
+    changed_target[40 + 0x1FC] = 0x5A;
+    fs::write(&target, &changed_target).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), changed_target);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_cec_write_binds_a_missing_target_to_the_empty_cemu_container_hash() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = temp.path().join("cemu").join("cec");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let value = run_json_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(value["status"], "written");
+    assert_eq!(
+        value["target_sha256_before"],
+        dry_run["target_sha256_before"]
+    );
+    assert!(target.is_file());
+}
+
+#[test]
+fn convert_cec_expected_hash_arguments_require_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+
+    for flag in [
+        "--expected-source-record-set-sha256",
+        "--expected-target-sha256",
+    ] {
+        let output = binary()
+            .args([
+                "convert-cec",
+                "--source-dir",
+                &source.to_string_lossy(),
+                "--target",
+                &target.to_string_lossy(),
+                flag,
+                &"0".repeat(64),
+            ])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2), "flag: {flag}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--write"),
+            "flag: {flag}"
+        );
+    }
+}
+
+#[test]
 fn convert_defaults_to_dry_run_and_creates_no_files() {
     let temp = tempfile::tempdir().unwrap();
     let source = slot_fixture(&temp, "user2");
@@ -368,6 +668,173 @@ fn convert_defaults_to_dry_run_and_creates_no_files() {
 }
 
 #[test]
+fn convert_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+
+    for (command, source, target) in [
+        (
+            "convert",
+            slot_fixture(&temp, "user2"),
+            target_slot(&temp, "user2"),
+        ),
+        (
+            "convert-system",
+            system_fixture(&temp),
+            target_slot(&temp, "system"),
+        ),
+    ] {
+        let output = run_output_with_stopped_emulators(&[
+            command.to_owned(),
+            source.to_string_lossy().into_owned(),
+            "--output".to_owned(),
+            target.to_string_lossy().into_owned(),
+            "--expected-target-sha256".to_owned(),
+            "0".repeat(64),
+            "--write".to_owned(),
+        ]);
+
+        assert_eq!(output.status.code(), Some(1), "command: {command}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("target is missing but an expected dry-run SHA-256 was supplied"),
+            "command: {command}"
+        );
+        assert!(!target.exists(), "command: {command}");
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn convert_write_rejects_a_stale_expected_source_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("source SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_dry_run_reports_the_existing_target_hash() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let previous = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let report = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+
+    assert_eq!(report["status"], "dry-run");
+    assert_eq!(
+        report["hashes"]["target_before"],
+        hex::encode(sha2::Sha256::digest(previous))
+    );
+}
+
+#[test]
+fn convert_system_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = target_slot(&temp, "system");
+    let previous = vec![0xA5; CEMU_SYSTEM_SIZE];
+    fs::write(&target, &previous).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".into(),
+        "0".repeat(64),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), previous);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".system.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
 fn write_then_rollback_restores_previous_slot() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
@@ -377,11 +844,23 @@ fn write_then_rollback_restores_previous_slot() {
     let previous = vec![0xA5; CEMU_SIZE];
     fs::write(&target, &previous).unwrap();
 
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+
     let converted = run_json_with_stopped_emulators(&[
         "convert".into(),
         source.to_string_lossy().into_owned(),
         "--output".into(),
         target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-sha256".into(),
+        dry_run["hashes"]["target_before"].as_str().unwrap().into(),
         "--write".into(),
     ]);
     assert_eq!(converted["status"], "written");
@@ -403,6 +882,130 @@ fn write_then_rollback_restores_previous_slot() {
 }
 
 #[test]
+fn install_extras_dry_run_reports_one_complete_group_without_writing() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let staging_dir = staged_extras_fixture(&temp);
+    let target_dir = initialized_extra_target(&temp, &staging_dir);
+    let card1_before = fs::read(target_dir.join("card1")).unwrap();
+
+    let report = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--dry-run".into(),
+    ]);
+
+    assert_eq!(report["operation"], "install-extras");
+    assert_eq!(report["status"], "dry-run");
+    assert_eq!(report["groups"][0], "guild-cards");
+    assert_eq!(report["groups"].as_array().unwrap().len(), 1);
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(entries.iter().all(|entry| entry["group"] == "guild-cards"));
+    let manifest = PathBuf::from(report["manifest"].as_str().unwrap());
+    // v5 reserves an append-only per-transaction directory during planning.
+    // Dry-run reports the exact journal location it would use, but creates
+    // neither the directory nor the journal.
+    let transaction_dir = manifest.parent().unwrap();
+    assert_eq!(manifest.file_name().unwrap(), ".mh3g-extra-recovery.json");
+    assert_eq!(
+        transaction_dir.parent().unwrap(),
+        target_dir.canonicalize().unwrap()
+    );
+    assert!(
+        transaction_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".mh3g-extra-transaction-")
+    );
+    assert!(!manifest.exists());
+    assert!(!transaction_dir.exists());
+    assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
+}
+
+#[test]
+fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let staging_dir = staged_extras_fixture(&temp);
+    let target_dir = initialized_extra_target(&temp, &staging_dir);
+    let card1_before = fs::read(target_dir.join("card1")).unwrap();
+
+    let dry_run = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--dry-run".into(),
+    ]);
+    let expected_staging = dry_run["staging_set_sha256"].as_str().unwrap();
+    let expected_target = dry_run["target_set_sha256_before"].as_str().unwrap();
+
+    let written = run_json_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--expected-staging-set-sha256".into(),
+        expected_staging.into(),
+        "--expected-target-set-sha256".into(),
+        expected_target.into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(written["operation"], "install-extras");
+    assert_eq!(written["status"], "written");
+    assert_eq!(written["groups"][0], "guild-cards");
+    assert_eq!(written["entries"].as_array().unwrap().len(), 4);
+    let manifest = PathBuf::from(written["manifest"].as_str().unwrap());
+    assert!(manifest.exists());
+    assert_eq!(
+        fs::read(target_dir.join("card1")).unwrap(),
+        fs::read(staging_dir.join("card1")).unwrap()
+    );
+
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-extras".into(),
+        "--manifest".into(),
+        manifest.to_string_lossy().into_owned(),
+    ]);
+
+    assert_eq!(rolled_back["operation"], "rollback-extras");
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert_eq!(rolled_back["groups"][0], "guild-cards");
+    assert_eq!(rolled_back["entries"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        PathBuf::from(rolled_back["manifest"].as_str().unwrap()),
+        manifest
+    );
+    assert!(manifest.exists());
+    let transaction_dir = manifest.parent().unwrap();
+    assert!(transaction_dir.is_dir());
+    assert!(fs::read_dir(transaction_dir).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("mh3g-extra-backup-")
+    }));
+    assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
+}
+
+#[test]
 fn dry_run_and_write_are_mutually_exclusive() {
     let temp = tempfile::tempdir().unwrap();
     let source = slot_fixture(&temp, "user2");
@@ -420,6 +1023,49 @@ fn dry_run_and_write_are_mutually_exclusive() {
         .unwrap();
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn expected_hash_arguments_require_write() {
+    let temp = tempfile::tempdir().unwrap();
+
+    for (command, source, target) in [
+        (
+            "convert",
+            slot_fixture(&temp, "user2"),
+            target_slot(&temp, "user2"),
+        ),
+        (
+            "convert-system",
+            system_fixture(&temp),
+            target_slot(&temp, "system"),
+        ),
+    ] {
+        for flag in ["--expected-source-sha256", "--expected-target-sha256"] {
+            let output = binary()
+                .args([
+                    command,
+                    &source.to_string_lossy(),
+                    "--output",
+                    &target.to_string_lossy(),
+                    flag,
+                    &"0".repeat(64),
+                ])
+                .output()
+                .unwrap();
+
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "command: {command}; flag: {flag}"
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("--write"),
+                "command: {command}; flag: {flag}"
+            );
+            assert!(!target.exists(), "command: {command}; flag: {flag}");
+        }
+    }
 }
 
 #[test]
@@ -529,6 +1175,8 @@ fn cec_commands_identify_the_actual_failed_path() {
 
 #[test]
 fn rollback_commands_identify_the_manifest_path() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     for (command, manifest_name, operation) in [
         (
@@ -543,10 +1191,11 @@ fn rollback_commands_identify_the_manifest_path() {
         ),
     ] {
         let manifest = temp.path().join(manifest_name);
-        let output = binary()
-            .args([command, "--manifest", manifest.to_str().unwrap()])
-            .output()
-            .unwrap();
+        let output = run_output_with_stopped_emulators(&[
+            command.to_owned(),
+            "--manifest".to_owned(),
+            manifest.to_string_lossy().into_owned(),
+        ]);
         assert_eq!(output.status.code(), Some(1), "command: {command}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

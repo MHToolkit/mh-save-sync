@@ -1,10 +1,17 @@
 $ErrorActionPreference = "Stop"
 
-$executable = Join-Path $PSScriptRoot "mh3g-save-convert.exe"
-if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "Converter executable is missing: $executable"
+$bundledSidecar = Join-Path $PSScriptRoot "tools/mh3g-save-convert.exe"
+$legacyExecutable = Join-Path $PSScriptRoot "mh3g-save-convert.exe"
+if (Test-Path -LiteralPath $bundledSidecar -PathType Leaf) {
+    $executable = $bundledSidecar
+} elseif (Test-Path -LiteralPath $legacyExecutable -PathType Leaf) {
+    # Keep existing CLI-only archives usable while the native WinUI package
+    # resolves the canonical tools sidecar above.
+    $executable = $legacyExecutable
+} else {
+    throw "Converter executable is missing: $bundledSidecar"
 }
-$checksumFile = Join-Path $PSScriptRoot "mh3g-save-convert.exe.sha256"
+$checksumFile = "$($executable).sha256"
 if (-not (Test-Path -LiteralPath $checksumFile -PathType Leaf)) {
     throw "Converter checksum is missing: $checksumFile"
 }

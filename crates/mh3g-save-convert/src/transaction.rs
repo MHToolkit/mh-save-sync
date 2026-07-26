@@ -6,9 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -16,21 +13,23 @@ use crate::{
     ConversionError,
     converter::convert_source_to_cemu,
     io_at_path,
+    process_probe::{PlatformProcessProbe, ProcessProbe},
     profile::{SaveProfile, inspect_bytes, validate_save_component_path},
 };
 
 pub const INSTALL_MANIFEST_VERSION: u32 = 1;
-#[cfg(any(target_os = "macos", test))]
-const GUARDED_PROCESS_NAMES: [&str; 8] = [
-    "Nemessix",
-    "nemessix",
-    "Azahar",
-    "azahar",
-    "Cemu",
-    "cemu",
-    "Cemu_release",
-    "cemu_release",
-];
+
+/// Optional SHA-256 values captured by a preceding Dry Run.
+///
+/// The source hash is checked against the exact source bytes selected for the
+/// conversion. The target hash is checked only after the per-slot lock has
+/// been acquired, so another writer cannot replace the target between the
+/// check and installation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InstallExpectations<'a> {
+    pub source_sha256: Option<&'a str>,
+    pub target_sha256: Option<&'a str>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallManifest {
@@ -49,10 +48,6 @@ struct ExistingInstallManifest {
     history_path: PathBuf,
 }
 
-pub trait ProcessProbe {
-    fn matching_process(&self) -> Result<Option<String>, ConversionError>;
-}
-
 pub trait InstallValidator {
     fn validate(&self, bytes: &[u8]) -> Result<(), ConversionError>;
 }
@@ -61,54 +56,11 @@ pub trait ManifestPublisher {
     fn publish(&self, path: &Path, manifest: &InstallManifest) -> Result<(), ConversionError>;
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MacOsProcessProbe;
-
-impl ProcessProbe for MacOsProcessProbe {
-    fn matching_process(&self) -> Result<Option<String>, ConversionError> {
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(None)
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            for name in GUARDED_PROCESS_NAMES {
-                let status = io_at_path(
-                    Command::new("pgrep")
-                        .args(["-x", name])
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status(),
-                    "running emulator process probe",
-                    Path::new("pgrep"),
-                )?;
-                match status.code() {
-                    Some(0) => return Ok(Some(name.to_owned())),
-                    Some(1) => {}
-                    Some(code) => {
-                        return Err(ConversionError::IoAtPath {
-                            operation: "running emulator process probe",
-                            path: PathBuf::from("pgrep"),
-                            source: std::io::Error::other(format!(
-                                "pgrep -x {name} exited with status {code}"
-                            )),
-                        });
-                    }
-                    None => {
-                        return Err(ConversionError::IoAtPath {
-                            operation: "running emulator process probe",
-                            path: PathBuf::from("pgrep"),
-                            source: std::io::Error::other(format!(
-                                "pgrep -x {name} terminated by signal"
-                            )),
-                        });
-                    }
-                }
-            }
-            Ok(None)
-        }
-    }
+struct InstallBackend<'a> {
+    expectations: InstallExpectations<'a>,
+    probe: &'a dyn ProcessProbe,
+    validator: &'a dyn InstallValidator,
+    publisher: &'a dyn ManifestPublisher,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -185,20 +137,48 @@ pub fn manifest_path_for_target(target: impl AsRef<Path>) -> Result<PathBuf, Con
     manifest_path_for_normalized_target(&target)
 }
 
+/// Returns the digest of a regular existing save component without writing it.
+/// A missing target is represented as `None`; callers that want a write
+/// precondition must reject that case rather than assigning a synthetic hash.
+pub fn existing_target_sha256(target: impl AsRef<Path>) -> Result<Option<String>, ConversionError> {
+    let target = normalize_path(target.as_ref())?;
+    validate_save_component_path(&target)?;
+    Ok(read_existing_target(&target)?.as_deref().map(sha256_hex))
+}
+
 pub fn install(
     source: &[u8],
     installed: &[u8],
     target: impl AsRef<Path>,
     manifest_path: impl AsRef<Path>,
 ) -> Result<InstallManifest, ConversionError> {
-    install_with_publisher(
+    install_with_expectations(
         source,
         installed,
         target,
         manifest_path,
-        &MacOsProcessProbe,
-        &CemuSaveValidator,
-        &JsonManifestPublisher,
+        InstallExpectations::default(),
+    )
+}
+
+pub fn install_with_expectations(
+    source: &[u8],
+    installed: &[u8],
+    target: impl AsRef<Path>,
+    manifest_path: impl AsRef<Path>,
+    expectations: InstallExpectations<'_>,
+) -> Result<InstallManifest, ConversionError> {
+    install_with_backend(
+        source,
+        installed,
+        target,
+        manifest_path,
+        InstallBackend {
+            expectations,
+            probe: &PlatformProcessProbe::default(),
+            validator: &CemuSaveValidator,
+            publisher: &JsonManifestPublisher,
+        },
     )
 }
 
@@ -210,14 +190,17 @@ pub fn install_with(
     probe: &dyn ProcessProbe,
     validator: &dyn InstallValidator,
 ) -> Result<InstallManifest, ConversionError> {
-    install_with_publisher(
+    install_with_backend(
         source,
         installed,
         target,
         manifest_path,
-        probe,
-        validator,
-        &JsonManifestPublisher,
+        InstallBackend {
+            expectations: InstallExpectations::default(),
+            probe,
+            validator,
+            publisher: &JsonManifestPublisher,
+        },
     )
 }
 
@@ -230,12 +213,40 @@ pub fn install_with_publisher(
     validator: &dyn InstallValidator,
     publisher: &dyn ManifestPublisher,
 ) -> Result<InstallManifest, ConversionError> {
+    install_with_backend(
+        source,
+        installed,
+        target,
+        manifest_path,
+        InstallBackend {
+            expectations: InstallExpectations::default(),
+            probe,
+            validator,
+            publisher,
+        },
+    )
+}
+
+fn install_with_backend(
+    source: &[u8],
+    installed: &[u8],
+    target: impl AsRef<Path>,
+    manifest_path: impl AsRef<Path>,
+    backend: InstallBackend<'_>,
+) -> Result<InstallManifest, ConversionError> {
+    validate_install_expectations(backend.expectations)?;
+    let source_sha256 = sha256_hex(source);
+    ensure_expected_hash(
+        backend.expectations.source_sha256,
+        Some(source_sha256.as_str()),
+        "source",
+    )?;
     let (target, manifest_path) = normalize_bound_paths(target.as_ref(), manifest_path.as_ref())?;
     let _slot_lock = SlotInstallLock::acquire(&target)?;
     let (target, manifest_path) = validate_install_paths(&target, &manifest_path)?;
     let existing_manifest = existing_manifest_for_reinstall(&target, &manifest_path)?;
 
-    if let Some(name) = probe.matching_process()? {
+    if let Some(name) = backend.probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
             "emulator process is running: {name}"
         )));
@@ -252,13 +263,14 @@ pub fn install_with_publisher(
         ));
     }
 
-    let source_sha256 = sha256_hex(source);
     let installed_sha256 = sha256_hex(installed);
-    let previous = match fs::read(&target) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return io_at_path(Err(error), "reading existing target save", &target),
-    };
+    let previous = read_existing_target(&target)?;
+    let observed_target_sha256 = previous.as_deref().map(sha256_hex);
+    ensure_expected_hash(
+        backend.expectations.target_sha256,
+        observed_target_sha256.as_deref(),
+        "target",
+    )?;
     let target_previously_existed = previous.is_some();
     let previous_sha256 = previous.as_deref().map(sha256_hex);
     let backup = previous_sha256
@@ -292,7 +304,7 @@ pub fn install_with_publisher(
                 "staged save bytes do not match the requested installation".to_owned(),
             ));
         }
-        validator.validate(&staged)?;
+        backend.validator.validate(&staged)?;
         io_at_path(
             fs::rename(&temporary, &target),
             "installing staged converted save",
@@ -311,7 +323,7 @@ pub fn install_with_publisher(
             target_previously_existed,
         };
         manifest_publish_attempted = true;
-        publisher.publish(&manifest_path, &manifest)?;
+        backend.publisher.publish(&manifest_path, &manifest)?;
         sync_directory(parent_dir(&manifest_path))?;
         Ok(manifest)
     })();
@@ -375,7 +387,7 @@ pub fn install_with_publisher(
 }
 
 pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> {
-    rollback_with(manifest_path, &MacOsProcessProbe)
+    rollback_with(manifest_path, &PlatformProcessProbe::default())
 }
 
 pub fn rollback_with(
@@ -732,6 +744,24 @@ fn validate_transaction_paths(
     Ok((target, manifest_path))
 }
 
+fn read_existing_target(target: &Path) -> Result<Option<Vec<u8>>, ConversionError> {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return io_at_path(Err(error), "reading existing target metadata", target),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(ConversionError::InvalidSave(
+            "save target must be a regular non-symlink file".to_owned(),
+        ));
+    }
+    Ok(Some(io_at_path(
+        fs::read(target),
+        "reading existing target save",
+        target,
+    )?))
+}
+
 fn normalize_bound_paths(
     target: &Path,
     manifest_path: &Path,
@@ -809,6 +839,43 @@ fn validate_manifest_hash(value: &str, label: &str) -> Result<(), ConversionErro
         Err(ConversionError::InvalidSave(format!(
             "manifest {label} hash is not a SHA-256 hex digest"
         )))
+    }
+}
+
+fn validate_install_expectations(
+    expectations: InstallExpectations<'_>,
+) -> Result<(), ConversionError> {
+    for (label, value) in [
+        ("source", expectations.source_sha256),
+        ("target", expectations.target_sha256),
+    ] {
+        if let Some(value) = value
+            && !(value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(ConversionError::InvalidSave(format!(
+                "expected {label} SHA-256 is not a SHA-256 hex digest"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_expected_hash(
+    expected: Option<&str>,
+    observed: Option<&str>,
+    label: &str,
+) -> Result<(), ConversionError> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match observed {
+        Some(observed) if expected.eq_ignore_ascii_case(observed) => Ok(()),
+        Some(_) => Err(ConversionError::UnsafeInstall(format!(
+            "{label} SHA-256 does not match the expected dry-run value"
+        ))),
+        None => Err(ConversionError::UnsafeInstall(format!(
+            "{label} is missing but an expected dry-run SHA-256 was supplied"
+        ))),
     }
 }
 
@@ -1247,6 +1314,40 @@ mod tests {
     }
 
     #[test]
+    fn expected_target_hash_is_not_checked_before_the_slot_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let (target, manifest_path) = paths(&temp);
+        let previous = b"existing target remains untouched";
+        fs::write(&target, previous).unwrap();
+        let lock = manifest_path
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.lock");
+        fs::write(&lock, b"held by another installer").unwrap();
+        let stale_target_sha256 = "0".repeat(64);
+
+        let error = super::install_with_expectations(
+            &source(),
+            &converted(),
+            &target,
+            &manifest_path,
+            super::InstallExpectations {
+                source_sha256: None,
+                target_sha256: Some(&stale_target_sha256),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConversionError::UnsafeInstall(message) if message.contains("already locked")
+        ));
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert_eq!(fs::read(&lock).unwrap(), b"held by another installer");
+        assert!(!manifest_path.exists());
+    }
+
+    #[test]
     fn validation_failure_preserves_an_existing_target_and_leaves_no_transaction_artifacts() {
         let temp = tempfile::tempdir().unwrap();
         let (target, manifest_path) = paths(&temp);
@@ -1294,7 +1395,7 @@ mod tests {
     #[test]
     fn process_guard_uses_the_complete_exact_executable_name_list() {
         assert_eq!(
-            super::GUARDED_PROCESS_NAMES,
+            crate::process_probe::GUARDED_PROCESS_NAMES,
             [
                 "Nemessix",
                 "nemessix",

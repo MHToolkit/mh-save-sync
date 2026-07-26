@@ -8,16 +8,26 @@ use std::{
 use clap::{Parser, Subcommand};
 use mh3g_save_convert::{
     ConversionError,
-    cec::{convert_cec_records, empty_cemu_cec, inspect_cec, install_cec, rollback_cec},
+    cec::{
+        CecInstallExpectations, convert_cec_records, empty_cemu_cec, inspect_cec,
+        install_cec_from_source_with_expectations, rollback_cec,
+    },
     converter::{
         EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
         reset_guild_card_component_to_cemu_named,
     },
     events::event_snapshot,
+    extras_transaction::{
+        ExtraGroup, ExtraInstallEntry, ExtraInstallManifest, dry_run_extra_groups,
+        install_extra_groups, rollback_extra_groups,
+    },
     io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
-    transaction::{install, manifest_path_for_target, rollback, sha256_hex},
+    transaction::{
+        InstallExpectations, existing_target_sha256, install_with_expectations,
+        manifest_path_for_target, rollback, sha256_hex,
+    },
 };
 use serde::Serialize;
 
@@ -75,6 +85,13 @@ enum Command {
         /// empty slots. Existing non-empty slots are never overwritten.
         #[arg(long)]
         slot: Option<usize>,
+        /// Require the complete received-record-set SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_record_set_sha256: Option<String>,
+        /// Require the Cemu `cec` SHA-256 observed during the preceding Dry Run.
+        /// A missing target is represented by the canonical empty Cemu container.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run", requires = "experimental")]
@@ -94,6 +111,12 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Require the source SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_sha256: Option<String>,
+        /// Require the target SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -104,6 +127,12 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Require the source SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_sha256: Option<String>,
+        /// Require the target SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -125,6 +154,33 @@ enum Command {
         #[arg(long)]
         reset_guild_cards: bool,
     },
+    /// Install one or more complete staged ExtData groups into an initialized Cemu target.
+    InstallExtras {
+        /// Directory containing all staged Cemu card*/quest* outputs.
+        #[arg(long)]
+        staging_dir: PathBuf,
+        /// Initialized Cemu MH3G save directory containing the selected component groups.
+        #[arg(long)]
+        target_dir: PathBuf,
+        /// Complete ExtData group(s) to install, for example guild-cards,quests.
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 1.., required = true)]
+        groups: Vec<ExtraGroup>,
+        /// Require the staged group fingerprint observed during dry-run.
+        #[arg(long)]
+        expected_staging_set_sha256: Option<String>,
+        /// Require the target group fingerprint observed during dry-run.
+        #[arg(long)]
+        expected_target_set_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Roll back a complete ExtData transaction from its retained recovery journal.
+    RollbackExtras {
+        #[arg(long)]
+        manifest: PathBuf,
+    },
     /// Restore a save slot from a prior installation manifest.
     Rollback {
         #[arg(long)]
@@ -141,6 +197,28 @@ struct Report {
     backup: Option<PathBuf>,
     manifest: Option<PathBuf>,
     status: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct HashPreconditions {
+    source_sha256: Option<String>,
+    target_sha256: Option<String>,
+}
+
+#[derive(Debug)]
+struct CecConversionOptions {
+    expected_source_record_set_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
+    dry_run: bool,
+    write: bool,
+    experimental: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComponentConversionProfile {
+    validate_path: fn(&Path) -> Result<(), ConversionError>,
+    source: SaveProfile,
+    output: SaveProfile,
 }
 
 #[derive(Debug, Serialize)]
@@ -229,11 +307,35 @@ struct ExtrasReport {
 }
 
 #[derive(Debug, Serialize)]
+struct ExtraInstallCliReport {
+    operation: &'static str,
+    status: &'static str,
+    groups: Vec<ExtraGroup>,
+    entries: Vec<ExtraInstallEntry>,
+    manifest: PathBuf,
+    staging_dir: PathBuf,
+    target_dir: PathBuf,
+    staging_set_sha256: String,
+    target_set_sha256_before: String,
+    backup_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExtraRollbackCliReport {
+    operation: &'static str,
+    status: &'static str,
+    groups: Vec<ExtraGroup>,
+    entries: Vec<ExtraInstallEntry>,
+    manifest: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
 struct CecConversionReport {
     source_dir: PathBuf,
     target: PathBuf,
     imported_messages: usize,
     source_record_sha256: Vec<String>,
+    source_record_set_sha256: String,
     slots: Vec<usize>,
     target_sha256_before: String,
     target_sha256_after: String,
@@ -285,6 +387,8 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             source_dir,
             target,
             slot,
+            expected_source_record_set_sha256,
+            expected_target_sha256,
             dry_run,
             write,
             experimental,
@@ -294,9 +398,13 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 source_dir,
                 target,
                 slot,
-                dry_run,
-                write,
-                experimental,
+                CecConversionOptions {
+                    expected_source_record_set_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                    experimental,
+                },
             )?)?
         ),
         Command::RollbackCec { manifest } => {
@@ -325,28 +433,71 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 reset_guild_cards,
             )?)?
         ),
+        Command::InstallExtras {
+            staging_dir,
+            target_dir,
+            groups,
+            expected_staging_set_sha256,
+            expected_target_set_sha256,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&install_extras(
+                staging_dir,
+                target_dir,
+                groups,
+                expected_staging_set_sha256,
+                expected_target_set_sha256,
+                dry_run,
+                write,
+            )?)?
+        ),
+        Command::RollbackExtras { manifest } => {
+            println!("{}", serde_json::to_string(&rollback_extras(manifest)?)?)
+        }
         command => {
             let report = match command {
                 Command::Inspect { source } => inspect(source)?,
                 Command::Convert {
                     source,
                     output,
+                    expected_source_sha256,
+                    expected_target_sha256,
                     dry_run,
                     write,
-                } => convert(source, output, dry_run, write)?,
+                } => convert(
+                    source,
+                    output,
+                    expected_source_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                )?,
                 Command::ConvertSystem {
                     source,
                     output,
+                    expected_source_sha256,
+                    expected_target_sha256,
                     dry_run,
                     write,
-                } => convert_system(source, output, dry_run, write)?,
+                } => convert_system(
+                    source,
+                    output,
+                    expected_source_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                )?,
                 Command::Rollback { manifest } => rollback_save(manifest)?,
                 Command::InspectProgress { .. }
                 | Command::InspectEvents { .. }
                 | Command::InspectCec { .. }
                 | Command::ConvertCec { .. }
                 | Command::RollbackCec { .. }
-                | Command::ConvertExtras { .. } => unreachable!(),
+                | Command::ConvertExtras { .. }
+                | Command::InstallExtras { .. }
+                | Command::RollbackExtras { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
         }
@@ -358,48 +509,75 @@ fn convert_cec(
     source_dir: PathBuf,
     target: PathBuf,
     slot: Option<usize>,
-    dry_run: bool,
-    write: bool,
-    experimental: bool,
+    options: CecConversionOptions,
 ) -> Result<CecConversionReport, ConversionError> {
-    debug_assert!(!(dry_run && write));
-    if write && !experimental {
+    debug_assert!(!(options.dry_run && options.write));
+    if options.write && !options.experimental {
         return Err(ConversionError::UnsafeInstall(
             "raw CEC import requires --experimental acknowledgement".to_owned(),
         ));
     }
-    let target_bytes = match fs::read(&target) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
-        Err(error) => {
-            return io_at_path(Err(error), "reading Cemu CEC target", &target);
-        }
+    if options.write && options.expected_source_record_set_sha256.is_none() {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC write requires --expected-source-record-set-sha256 from the preceding Dry Run"
+                .to_owned(),
+        ));
+    }
+    if options.write && options.expected_target_sha256.is_none() {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC write requires --expected-target-sha256 from the preceding Dry Run".to_owned(),
+        ));
+    }
+
+    let (conversion, backup, manifest, status) = if options.write {
+        let installed = install_cec_from_source_with_expectations(
+            &source_dir,
+            &target,
+            slot,
+            CecInstallExpectations {
+                source_record_set_sha256: options.expected_source_record_set_sha256.as_deref(),
+                target_sha256: options.expected_target_sha256.as_deref(),
+            },
+        )?;
+        (
+            installed.conversion,
+            installed.install.backup,
+            Some(installed.install.manifest),
+            "written",
+        )
+    } else {
+        let target_bytes = match fs::read(&target) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
+            Err(error) => {
+                return io_at_path(Err(error), "reading Cemu CEC target", &target);
+            }
+        };
+        (
+            convert_cec_records(&source_dir, &target_bytes, slot)?,
+            None,
+            None,
+            "dry-run",
+        )
     };
-    let conversion = convert_cec_records(&source_dir, &target_bytes, slot)?;
     let source_record_sha256 = conversion
         .records
         .iter()
         .map(|record| record.sha256.clone())
         .collect::<Vec<_>>();
-    let mut report = CecConversionReport {
+    Ok(CecConversionReport {
         source_dir: source_dir.clone(),
         target: target.clone(),
         imported_messages: conversion.records.len(),
         source_record_sha256,
+        source_record_set_sha256: conversion.source_record_set_sha256,
         slots: conversion.slots.clone(),
         target_sha256_before: conversion.before_sha256.clone(),
         target_sha256_after: conversion.after_sha256.clone(),
-        backup: None,
-        manifest: None,
-        status: "dry-run",
-    };
-    if write {
-        let installed = install_cec(&source_dir, &target, &conversion)?;
-        report.backup = installed.backup;
-        report.manifest = Some(installed.manifest);
-        report.status = "written";
-    }
-    Ok(report)
+        backup,
+        manifest,
+        status,
+    })
 }
 
 fn inspect_progress(
@@ -570,49 +748,64 @@ fn inspect(source: PathBuf) -> Result<Report, ConversionError> {
 fn convert(
     source: PathBuf,
     output: PathBuf,
+    expected_source_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
     convert_component(
         source,
         output,
+        HashPreconditions {
+            source_sha256: expected_source_sha256,
+            target_sha256: expected_target_sha256,
+        },
         dry_run,
         write,
-        validate_slot_path,
-        SaveProfile::JpThreeDs,
-        SaveProfile::JpCemu,
+        ComponentConversionProfile {
+            validate_path: validate_slot_path,
+            source: SaveProfile::JpThreeDs,
+            output: SaveProfile::JpCemu,
+        },
     )
 }
 
 fn convert_system(
     source: PathBuf,
     output: PathBuf,
+    expected_source_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
     convert_component(
         source,
         output,
+        HashPreconditions {
+            source_sha256: expected_source_sha256,
+            target_sha256: expected_target_sha256,
+        },
         dry_run,
         write,
-        validate_system_path,
-        SaveProfile::JpThreeDsSystem,
-        SaveProfile::JpCemuSystem,
+        ComponentConversionProfile {
+            validate_path: validate_system_path,
+            source: SaveProfile::JpThreeDsSystem,
+            output: SaveProfile::JpCemuSystem,
+        },
     )
 }
 
 fn convert_component(
     source: PathBuf,
     output: PathBuf,
+    expectations: HashPreconditions,
     dry_run: bool,
     write: bool,
-    validate_path: fn(&Path) -> Result<(), ConversionError>,
-    expected_source_profile: SaveProfile,
-    expected_output_profile: SaveProfile,
+    profile: ComponentConversionProfile,
 ) -> Result<Report, ConversionError> {
     debug_assert!(!(dry_run && write));
-    validate_path(&source)?;
-    validate_path(&output)?;
+    (profile.validate_path)(&source)?;
+    (profile.validate_path)(&output)?;
     if source.file_name() != output.file_name() {
         return Err(ConversionError::InvalidSave(format!(
             "source and output save component names must match: {} != {}",
@@ -629,7 +822,7 @@ fn convert_component(
 
     let source_bytes = read_file(&source, "reading source save")?;
     let source_inspection = inspect_bytes(&source_bytes)?;
-    if source_inspection.profile != expected_source_profile {
+    if source_inspection.profile != profile.source {
         return Err(ConversionError::InvalidSave(format!(
             "unexpected source profile: {:?}",
             source_inspection.profile
@@ -641,15 +834,27 @@ fn convert_component(
         .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
     let converted = convert_source_to_cemu(&source_bytes, filename)?;
     let converted_inspection = inspect_bytes(&converted)?;
-    debug_assert_eq!(converted_inspection.profile, expected_output_profile);
+    debug_assert_eq!(converted_inspection.profile, profile.output);
+    // A Dry Run establishes the target fingerprint up front. A real write
+    // must instead let the installer read it under the per-slot lock.
+    let target_sha256_before = if write {
+        None
+    } else {
+        existing_target_sha256(&output)?
+    };
+
+    let mut hashes = BTreeMap::from([
+        ("source".to_owned(), source_inspection.sha256),
+        ("output".to_owned(), converted_inspection.sha256),
+    ]);
+    if let Some(target_sha256_before) = target_sha256_before {
+        hashes.insert("target_before".to_owned(), target_sha256_before);
+    }
 
     let mut report = Report {
         profile: Some(converted_inspection.profile),
         size: Some(converted_inspection.size),
-        hashes: BTreeMap::from([
-            ("source".to_owned(), source_inspection.sha256),
-            ("output".to_owned(), converted_inspection.sha256),
-        ]),
+        hashes,
         output: Some(output.clone()),
         backup: None,
         manifest: None,
@@ -658,7 +863,21 @@ fn convert_component(
 
     if write {
         let manifest_path = manifest_path_for_target(&output)?;
-        let manifest = install(&source_bytes, &converted, &output, &manifest_path)?;
+        let manifest = install_with_expectations(
+            &source_bytes,
+            &converted,
+            &output,
+            &manifest_path,
+            InstallExpectations {
+                source_sha256: expectations.source_sha256.as_deref(),
+                target_sha256: expectations.target_sha256.as_deref(),
+            },
+        )?;
+        if let Some(target_sha256_before) = manifest.previous_sha256.as_ref() {
+            report
+                .hashes
+                .insert("target_before".to_owned(), target_sha256_before.clone());
+        }
         report.backup = manifest.backup;
         report.manifest = Some(manifest_path);
         report.status = "written";
@@ -767,6 +986,65 @@ fn convert_extras(
     })
 }
 
+fn install_extras(
+    staging_dir: PathBuf,
+    target_dir: PathBuf,
+    groups: Vec<ExtraGroup>,
+    expected_staging_set_sha256: Option<String>,
+    expected_target_set_sha256: Option<String>,
+    dry_run: bool,
+    write: bool,
+) -> Result<ExtraInstallCliReport, ConversionError> {
+    debug_assert!(!(dry_run && write));
+    let report = if write {
+        install_extra_groups(
+            &staging_dir,
+            &target_dir,
+            &groups,
+            expected_staging_set_sha256.as_deref(),
+            expected_target_set_sha256.as_deref(),
+        )?
+    } else {
+        dry_run_extra_groups(
+            &staging_dir,
+            &target_dir,
+            &groups,
+            expected_staging_set_sha256.as_deref(),
+            expected_target_set_sha256.as_deref(),
+        )?
+    };
+    let backup_paths = report
+        .entries
+        .iter()
+        .filter_map(|entry| entry.backup.clone())
+        .collect();
+    Ok(ExtraInstallCliReport {
+        operation: "install-extras",
+        status: if write { "written" } else { "dry-run" },
+        groups: report.groups,
+        entries: report.entries,
+        manifest: report.manifest_path,
+        staging_dir: report.staging_dir,
+        target_dir: report.target_dir,
+        staging_set_sha256: report.staging_set_sha256,
+        target_set_sha256_before: report.target_set_sha256,
+        backup_paths,
+    })
+}
+
+fn rollback_extras(manifest: PathBuf) -> Result<ExtraRollbackCliReport, ConversionError> {
+    let manifest_bytes = read_file(&manifest, "reading ExtData rollback manifest")?;
+    let recorded: ExtraInstallManifest = serde_json::from_slice(&manifest_bytes)?;
+    rollback_extra_groups(&manifest)?;
+    Ok(ExtraRollbackCliReport {
+        operation: "rollback-extras",
+        status: "rolled-back",
+        groups: recorded.groups,
+        entries: recorded.entries,
+        manifest,
+    })
+}
+
 fn rollback_save(manifest: PathBuf) -> Result<Report, ConversionError> {
     rollback(&manifest)?;
     Ok(Report {
@@ -866,7 +1144,7 @@ mod tests {
         bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         fs::write(&source, bytes).unwrap();
 
-        let report = convert_system(source, output.clone(), false, false).unwrap();
+        let report = convert_system(source, output.clone(), None, None, false, false).unwrap();
 
         assert_eq!(report.profile, Some(SaveProfile::JpCemuSystem));
         assert_eq!(report.status, "dry-run");

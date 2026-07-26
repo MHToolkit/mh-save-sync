@@ -6,8 +6,10 @@ use std::{
 pub mod cec;
 pub mod converter;
 pub mod events;
+pub mod extras_transaction;
 #[allow(clippy::large_const_arrays)]
 pub mod meow_transform_table;
+pub mod process_probe;
 pub mod profile;
 pub mod progress;
 pub mod transaction;
