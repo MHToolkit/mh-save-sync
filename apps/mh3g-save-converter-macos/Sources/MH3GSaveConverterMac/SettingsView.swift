@@ -32,7 +32,10 @@ struct SettingsView: View {
                             .font(.caption.monospaced())
                             .textSelection(.enabled)
                     }
-                    LabeledContent(ConverterCopy.text("Settings.WorkflowState", language: language), value: workflow.state.rawValue)
+                    LabeledContent(
+                        ConverterCopy.text("Settings.WorkflowState", language: language),
+                        value: ConverterCopy.text(workflow.state.localizationKey, language: language)
+                    )
                 }
             }
             .formStyle(.grouped)

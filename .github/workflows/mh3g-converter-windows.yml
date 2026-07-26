@@ -10,8 +10,10 @@ on:
       - crates/mh3g-save-convert/**
       - README.md
       - README.zh-CN.md
+      - apps/mh3g-save-converter-windows/**
       - packaging/mh3g-save-convert/**
       - scripts/mh3g-windows-launcher.ps1
+      - scripts/verify-mh3g-save-converter-windows-source.py
       - .github/workflows/mh3g-converter-windows.yml
   push:
     branches: [main]
@@ -21,8 +23,10 @@ on:
       - crates/mh3g-save-convert/**
       - README.md
       - README.zh-CN.md
+      - apps/mh3g-save-converter-windows/**
       - packaging/mh3g-save-convert/**
       - scripts/mh3g-windows-launcher.ps1
+      - scripts/verify-mh3g-save-converter-windows-source.py
       - .github/workflows/mh3g-converter-windows.yml
 
 permissions:
@@ -42,15 +46,44 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 8
         continue-on-error: true
+      - name: Verify WinUI source contract
+        run: python scripts/verify-mh3g-save-converter-windows-source.py
       - name: Test the converter on Windows x64
         run: cargo test --locked -p mh3g-save-convert
       - name: Build release executable
         run: cargo build --locked --release -p mh3g-save-convert --bin mh3g-save-convert
       - name: Run release executable smoke check
         run: .\target\release\mh3g-save-convert.exe --help
+      - name: Publish native WinUI x64 application with bundled sidecar
+        shell: pwsh
+        run: |
+          $stage = "artifacts/mh3g-save-convert-windows-x64"
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:Platform=x64 `
+            -p:WindowsAppSDKSelfContained=true `
+            -o $stage
+          if ($LASTEXITCODE -ne 0) {
+            throw "WinUI publish failed with exit code $LASTEXITCODE"
+          }
+          New-Item -ItemType Directory -Force "$stage/tools" | Out-Null
+          Copy-Item "target/release/mh3g-save-convert.exe" "$stage/tools/mh3g-save-convert.exe"
+          $sidecarHash = (Get-FileHash -Algorithm SHA256 "$stage/tools/mh3g-save-convert.exe").Hash.ToLowerInvariant()
+          "$sidecarHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$stage/tools/mh3g-save-convert.exe.sha256"
+          "$sidecarHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "artifacts/mh3g-save-convert.exe.sha256"
+          Copy-Item "scripts/mh3g-windows-launcher.ps1" "$stage/Run-Converter.ps1"
+          Copy-Item "apps/mh3g-save-converter-windows/README.md" "$stage/README-Windows-UI.md"
+          Copy-Item "apps/mh3g-save-converter-windows/README.zh-CN.md" "$stage/README-Windows-UI.zh-CN.md"
+          Copy-Item "packaging/mh3g-save-convert/README-Windows.txt" "$stage/README-Windows.txt"
       - name: Package and self-verify archive
         shell: pwsh
         run: |
@@ -58,49 +91,58 @@ jobs:
           $archive = "artifacts/mh3g-save-convert-windows-x64.zip"
           $checksum = "artifacts/mh3g-save-convert-windows-x64.zip.sha256"
           $exeChecksum = "artifacts/mh3g-save-convert.exe.sha256"
-          Remove-Item $stage, $archive, $checksum, $exeChecksum -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $stage | Out-Null
-          Copy-Item "target/release/mh3g-save-convert.exe" "$stage/mh3g-save-convert.exe"
-          Copy-Item "scripts/mh3g-windows-launcher.ps1" "$stage/Run-Converter.ps1"
-          $exeHash = (Get-FileHash -Algorithm SHA256 "$stage/mh3g-save-convert.exe").Hash.ToLowerInvariant()
-          "$exeHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$stage/mh3g-save-convert.exe.sha256"
-          Copy-Item "$stage/mh3g-save-convert.exe.sha256" $exeChecksum
-          Copy-Item "packaging/mh3g-save-convert/README-Windows.txt" "$stage/README-Windows.txt"
+          Remove-Item $archive, $checksum -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$stage/MH3GSaveConverter.exe" -PathType Leaf)) {
+            throw "published WinUI executable is missing"
+          }
+          if (-not (Test-Path "$stage/tools/mh3g-save-convert.exe" -PathType Leaf)) {
+            throw "published Rust sidecar is missing"
+          }
           Compress-Archive -Path $stage -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           "$hash  mh3g-save-convert-windows-x64.zip" | Set-Content -NoNewline -Encoding ascii $checksum
           $verifyDir = Join-Path $env:RUNNER_TEMP "mh3g-save-convert-windows-x64-verify"
           Expand-Archive -Path $archive -DestinationPath $verifyDir -Force
-          if (-not (Test-Path "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe")) {
-            throw "packaged executable is missing"
+          $packagedApp = "$verifyDir/mh3g-save-convert-windows-x64/MH3GSaveConverter.exe"
+          $packagedSidecar = "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe"
+          $packagedSidecarChecksum = "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe.sha256"
+          if (-not (Test-Path "$verifyDir/mh3g-save-convert-windows-x64/MH3GSaveConverter.exe" -PathType Leaf)) {
+            throw "GUI executable is missing"
+          }
+          if (-not (Test-Path "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe" -PathType Leaf)) {
+            throw "GUI sidecar is missing"
           }
           $launcher = "$verifyDir/mh3g-save-convert-windows-x64/Run-Converter.ps1"
-          $packagedExe = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe"
-          $packagedExeChecksum = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe.sha256"
           $packagedReadme = "$verifyDir/mh3g-save-convert-windows-x64/README-Windows.txt"
           if (-not (Test-Path $launcher)) {
             throw "packaged launcher is missing"
           }
-          if (-not (Test-Path $packagedExeChecksum)) {
-            throw "packaged executable checksum is missing"
+          if (-not (Test-Path $packagedSidecarChecksum)) {
+            throw "packaged sidecar checksum is missing"
           }
           if (-not (Test-Path $packagedReadme)) {
             throw "packaged bilingual README is missing"
           }
-          $expectedExeHash = ((Get-Content -LiteralPath $packagedExeChecksum -Raw).Trim() -split '\s+')[0]
-          $actualExeHash = (Get-FileHash -Algorithm SHA256 $packagedExe).Hash.ToLowerInvariant()
-          if ($actualExeHash -ne $expectedExeHash -or $actualExeHash -ne $exeHash) {
-            throw "packaged executable checksum verification failed"
+          $expectedSidecarHash = ((Get-Content -LiteralPath $packagedSidecarChecksum -Raw).Trim() -split '\s+')[0]
+          $actualSidecarHash = (Get-FileHash -Algorithm SHA256 $packagedSidecar).Hash.ToLowerInvariant()
+          if ($actualSidecarHash -ne $expectedSidecarHash) {
+            throw "packaged sidecar checksum verification failed"
           }
-          Set-Content -Path "${packagedExe}:Zone.Identifier" -Encoding ascii -Value "[ZoneTransfer]`r`nZoneId=3"
-          if (-not (Get-Item -LiteralPath $packagedExe -Stream Zone.Identifier -ErrorAction SilentlyContinue)) {
+          # This is intentionally a layout-only GUI smoke: never launch the
+          # foreground WinUI process in CI.  The launcher below exercises only
+          # the bundled Rust sidecar against synthetic bytes.
+          if ((Get-Item -LiteralPath $packagedApp).Length -le 0) {
+            throw "packaged GUI executable is empty"
+          }
+          Set-Content -Path "${packagedSidecar}:Zone.Identifier" -Encoding ascii -Value "[ZoneTransfer]`r`nZoneId=3"
+          if (-not (Get-Item -LiteralPath $packagedSidecar -Stream Zone.Identifier -ErrorAction SilentlyContinue)) {
             throw "failed to attach Mark-of-the-Web test stream"
           }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher --help
           if ($LASTEXITCODE -ne 0) {
             throw "packaged launcher smoke check failed with exit code $LASTEXITCODE"
           }
-          if (Get-Item -LiteralPath $packagedExe -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+          if (Get-Item -LiteralPath $packagedSidecar -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
             throw "packaged launcher did not remove Mark-of-the-Web"
           }
           $smokeRoot = Join-Path $env:RUNNER_TEMP "mh3g-converter-write-smoke"

@@ -7,7 +7,25 @@
     "Navigation.History" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "History" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转换历史" } } } },
     "Navigation.Input" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Input & Inspect" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "输入与检查" } } } },
     "Navigation.Settings" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "设置" } } } },
-    "Navigation.WriteRollback" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Write & Rollback" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "写入与回滚" } } } }
+    "Navigation.WriteRollback" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Write & Rollback" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "写入与回滚" } } } },
+    "Status.Authorized" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run authorized" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run 已授权" } } } },
+    "Status.Failed" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Operation failed" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "操作失败" } } } },
+    "Status.NotReady" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Not ready" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未准备" } } } },
+    "Status.Running" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Working…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在执行…" } } } },
+    "Status.Succeeded" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Operation complete" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "操作完成" } } } },
+    "Write.SourceSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Source SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "源文件 SHA-256" } } } },
+    "Write.StagingSetSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Staging set SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "暂存集合 SHA-256" } } } },
+    "Write.TargetSetSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Target set SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "目标集合 SHA-256" } } } },
+    "Write.TargetSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Target SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "目标文件 SHA-256" } } } },
+    "WorkflowState.ComponentSelection" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Inspection complete" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已完成检查" } } } },
+    "WorkflowState.DryRun" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run complete" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run 已完成" } } } },
+    "WorkflowState.Failure" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Operation failed" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "操作失败" } } } },
+    "WorkflowState.Input" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Awaiting save selection" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "等待选择存档" } } } },
+    "WorkflowState.Success" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Operation complete" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "操作完成" } } } },
+    "WorkflowState.Writing" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Operation in progress" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在执行" } } } },
+    "CEC.SourceRecords" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Source records" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "源记录" } } } },
+    "CEC.SourceRecordSetSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Source record set SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "源记录集合 SHA-256" } } } },
+    "CEC.TargetSHA256" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Target CEC SHA-256" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "目标 CEC SHA-256" } } } }
   },
   "version" : "1.0"
 }

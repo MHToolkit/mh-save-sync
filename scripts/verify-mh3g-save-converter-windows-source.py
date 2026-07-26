@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "apps" / "mh3g-save-converter-windows"
+WINDOWS_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-windows.yml"
 
 
 def require(condition: bool, message: str) -> None:
@@ -25,7 +26,49 @@ def read(relative: str) -> str:
     return (APP / relative).read_text(encoding="utf-8")
 
 
+def public_method_body(source: str, method: str) -> str:
+    """Return one public async ViewModel method without scanning later methods."""
+    marker = f"public async Task {method}()"
+    start = source.index(marker)
+    next_public = source.find("\n    public async Task ", start + len(marker))
+    next_private = source.find("\n    private ", start + len(marker))
+    endings = [index for index in (next_public, next_private) if index != -1]
+    end = min(endings) if endings else len(source)
+    return source[start:end]
+
+
+def verify_release_workflow() -> None:
+    """Keep the shipped WinUI application and its Rust sidecar inseparable."""
+    workflow = WINDOWS_WORKFLOW.read_text(encoding="utf-8")
+
+    for expected in (
+        "- apps/mh3g-save-converter-windows/**",
+        "- scripts/verify-mh3g-save-converter-windows-source.py",
+        "actions/setup-dotnet@v5",
+        "python scripts/verify-mh3g-save-converter-windows-source.py",
+        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
+        "-p:Platform=x64",
+        "-p:WindowsAppSDKSelfContained=true",
+        '$stage = "artifacts/mh3g-save-convert-windows-x64"',
+        'Copy-Item "target/release/mh3g-save-convert.exe" "$stage/tools/mh3g-save-convert.exe"',
+        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/MH3GSaveConverter.exe"',
+        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe"',
+        "GUI executable is missing",
+        "GUI sidecar is missing",
+    ):
+        require(expected in workflow, f"Windows release workflow is missing {expected}")
+
+    for forbidden in (
+        "& $packagedApp",
+        "Start-Process $packagedApp",
+        'Start-Process "$packagedApp"',
+    ):
+        require(forbidden not in workflow, "release workflow must not launch the WinUI GUI during smoke verification")
+
+
 def main() -> int:
+    verify_release_workflow()
+
     for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
         element_tree.parse(APP / relative)
 
@@ -53,6 +96,12 @@ def main() -> int:
     require("startInfo.Arguments" not in bridge, "CLI bridge must not build a command-string argument list")
     require("cmd.exe" not in bridge and "powershell" not in bridge.lower(), "CLI bridge must not invoke a shell")
 
+    launcher = (ROOT / "scripts" / "mh3g-windows-launcher.ps1").read_text(encoding="utf-8")
+    require(
+        'Join-Path $PSScriptRoot "tools/mh3g-save-convert.exe"' in launcher,
+        "packaged launcher must resolve the WinUI tools sidecar first",
+    )
+
     workflow = read("ViewModels/MainViewModel.cs")
     for expected in (
         '"convert", SourcePath, "--output", TargetPath, "--dry-run"',
@@ -61,6 +110,7 @@ def main() -> int:
         '"--write", "--experimental"',
         "_coreAuthorization",
         "_cecAuthorization",
+        'Path.Combine(AppContext.BaseDirectory, "tools", "mh3g-save-convert.exe")',
     ):
         require(expected in workflow, f"workflow is missing {expected}")
 
@@ -68,6 +118,7 @@ def main() -> int:
         "public async Task WriteCoreAsync()", 1
     )[0]
     for expected in (
+        "_coreAuthorization = null;",
         'var reportSourceHash = result.TryGetHash("source");',
         'var reportTargetHash = result.TryGetHash("target_before");',
         "!source.Exists || !target.Exists",
@@ -93,10 +144,165 @@ def main() -> int:
     )[0]
     require('"convert-cec --dry-run verification"' in cec_write, "CEC write must retain its planner recheck")
     require("--expected-source-sha256" not in cec_write, "CEC must not use core slot hash arguments")
-    require("--expected-target-sha256" not in cec_write, "CEC must not use core slot hash arguments")
+    for expected in (
+        '"--expected-source-record-set-sha256", authorization.SourceRecordSetSha256',
+        '"--expected-target-sha256", authorization.TargetSha256Before',
+    ):
+        require(expected in cec_write, f"CEC write is missing Dry Run hash binding {expected}")
+
+    cec_dry_run = workflow.split("public async Task RunCecDryRunAsync()", 1)[1].split(
+        "public async Task WriteCecAsync()", 1
+    )[0]
+    require("_cecAuthorization = null;" in cec_dry_run, "CEC Dry Run must clear stale authorization before planning")
+    require(
+        'result.TryGetString("source_record_set_sha256")' in cec_dry_run,
+        "CEC Dry Run must require the aggregate source record-set hash",
+    )
+    require(
+        "Stage = WorkflowStage.DryRunAuthorized;" in cec_dry_run,
+        "CEC Dry Run must update the visible workflow stage",
+    )
+
+    cec_inspect = workflow.split("public async Task InspectCecAsync()", 1)[1].split(
+        "public async Task RunCecDryRunAsync()", 1
+    )[0]
+    require(
+        "Stage = WorkflowStage.Inspected;" in cec_inspect,
+        "CEC inspection must update the visible workflow stage",
+    )
+    for expected in (
+        "Stage = WorkflowStage.Writing;",
+        "Stage = WorkflowStage.Written;",
+    ):
+        require(expected in cec_write, f"CEC write must update its visible workflow stage {expected}")
+
+    cec_rollback = workflow.split("public async Task RollbackCecAsync()", 1)[1].split(
+        "private async Task RunOperationAsync", 1
+    )[0]
+    for expected in (
+        "Stage = WorkflowStage.Writing;",
+        "Stage = WorkflowStage.RolledBack;",
+    ):
+        require(expected in cec_rollback, f"CEC rollback must update its visible workflow stage {expected}")
+
+    for expected in (
+        "public async Task RunSystemDryRunAsync()",
+        "public async Task WriteSystemAsync()",
+        "public async Task RollbackSystemAsync()",
+        "public async Task RunExtrasStageDryRunAsync()",
+        "public async Task StageExtrasAsync()",
+        "public async Task RunExtrasInstallDryRunAsync()",
+        "public async Task InstallExtrasAsync()",
+        "public async Task RollbackExtrasAsync()",
+        "--expected-staging-set-sha256",
+        "--expected-target-set-sha256",
+        "_systemAuthorization",
+        "_extrasStageAuthorization",
+        "_extrasInstallAuthorization",
+    ):
+        require(expected in workflow, f"Windows optional transaction workflow is missing {expected}")
+    for expected in (
+        "private enum AuthorizationDomain",
+        "private void ClearWriteAuthorization(AuthorizationDomain domain)",
+        "ClearWriteAuthorization(failureDomain);",
+        "AuthorizationDomain.Core",
+        "AuthorizationDomain.System",
+        "AuthorizationDomain.Extras",
+        "AuthorizationDomain.Cec",
+    ):
+        require(expected in workflow, f"Windows workflow is missing isolated authorization handling {expected}")
+    require(
+        "ClearWriteAuthorizations();" not in workflow,
+        "a failed operation must not revoke unrelated authorization domains",
+    )
+
+    # Every failed CLI operation must revoke only the authorization which
+    # supplied that operation's guarded write. This keeps the other domains
+    # fail-closed without forcing users to repeat unrelated Dry Runs.
+    for method, domain in {
+        "InspectCoreAsync": "Core",
+        "InspectProgressAsync": "Core",
+        "InspectEventsAsync": "Core",
+        "RunCoreDryRunAsync": "Core",
+        "WriteCoreAsync": "Core",
+        "RollbackCoreAsync": "Core",
+        "RunSystemDryRunAsync": "System",
+        "WriteSystemAsync": "System",
+        "RollbackSystemAsync": "System",
+        "RunExtrasStageDryRunAsync": "Extras",
+        "StageExtrasAsync": "Extras",
+        "RunExtrasInstallDryRunAsync": "Extras",
+        "InstallExtrasAsync": "Extras",
+        "RollbackExtrasAsync": "Extras",
+        "InspectCecAsync": "Cec",
+        "RunCecDryRunAsync": "Cec",
+        "WriteCecAsync": "Cec",
+        "RollbackCecAsync": "Cec",
+    }.items():
+        body = public_method_body(workflow, method)
+        require("await RunOperationAsync(" in body, f"{method} must run through the guarded operation wrapper")
+        require(
+            f"}}, AuthorizationDomain.{domain});" in body,
+            f"{method} must revoke only the {domain} authorization on failure",
+        )
+
+    clear_authorization = workflow.split("private void ClearWriteAuthorization", 1)[1].split(
+        "private void RaiseCoreActionAvailability", 1
+    )[0]
+    core_case = clear_authorization.split("case AuthorizationDomain.Core:", 1)[1].split(
+        "case AuthorizationDomain.System:", 1
+    )[0]
+    system_case = clear_authorization.split("case AuthorizationDomain.System:", 1)[1].split(
+        "case AuthorizationDomain.Extras:", 1
+    )[0]
+    extras_case = clear_authorization.split("case AuthorizationDomain.Extras:", 1)[1].split(
+        "case AuthorizationDomain.Cec:", 1
+    )[0]
+    cec_case = clear_authorization.split("case AuthorizationDomain.Cec:", 1)[1].split("default:", 1)[0]
+    for case, expected, forbidden in (
+        (core_case, "_coreAuthorization = null;", ("_systemAuthorization", "_extras", "_cecAuthorization")),
+        (system_case, "_systemAuthorization = null;", ("_coreAuthorization", "_extras", "_cecAuthorization")),
+        (extras_case, "_extrasStageAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_cecAuthorization")),
+        (cec_case, "_cecAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_extras")),
+    ):
+        require(expected in case, f"authorization clearing case is missing {expected}")
+        for forbidden_name in forbidden:
+            require(
+                forbidden_name not in case,
+                f"authorization clearing case must not revoke unrelated {forbidden_name}",
+            )
+
+    window = read("MainWindow.xaml")
+    for expected in (
+        "SystemDryRun_Click",
+        "WriteSystem_Click",
+        "ExtrasStageDryRun_Click",
+        "InstallExtras_Click",
+        "GuildCardsCheckBox",
+        "QuestsCheckBox",
+    ):
+        require(expected in window, f"WinUI optional transaction controls are missing {expected}")
+
+    code_behind = read("MainWindow.xaml.cs")
+    for expected in (
+        "ChooseSystemSource_Click",
+        "ChooseExtrasSource_Click",
+        "SystemDryRun_Click",
+        "InstallExtras_Click",
+    ):
+        require(expected in code_behind, f"WinUI optional transaction handler is missing {expected}")
 
     copy = read("Infrastructure/ConverterCopy.cs")
-    for expected in ("Simplified Chinese", "简体中文", "Experimental CEC", "实验性 CEC"):
+    for expected in (
+        "Simplified Chinese",
+        "简体中文",
+        "Experimental CEC",
+        "实验性 CEC",
+        "Shared system",
+        "共享 system",
+        "Optional ExtData",
+        "可选 ExtData",
+    ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")
 

@@ -19,9 +19,9 @@ not mix files copied at different times.
 | --- | --- | --- | --- |
 | Character, village/quest/event state, farm, hunting fleet, player data, and the slot-local offline-hunter cache | Exactly one loose `user1`, `user2`, or `user3` file | `convert <user#> --output <same user#>` | That same Cemu `user#` file only |
 | Shared system data | Loose `system` file | `convert-system system --output system` | Cemu `system` only |
-| Received/local guild-card data and the card side of offline-hall partners | The complete 3DS extdata `user` directory containing all eight files listed below | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>` | Only generated files under the staging directory; current CLI has no overwrite/backup installer for these files |
-| Downloaded or created quests | The same complete 3DS extdata `user` directory | `convert-extras` | Generated `quest1` through `quest4` in the staging directory |
-| StreetPass/Hunter Search cache | Optional 3DS CEC mailbox root with `InBox___/BoxInfo_____` and received message files | `convert-cec --experimental` | Cemu `cec` only, plus its transaction artifacts |
+| Received/local guild-card data and the card side of offline-hall partners | The complete 3DS extdata `user` directory containing all eight files listed below | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>`, then `install-extras --staging-dir <staging> --target-dir <Cemu save dir> --groups guild-cards` | Converted files in staging only until an explicit complete-group transaction installs `card1`, `card2`, `card3`, and `cardbox`, with a manifest and retained prior bytes |
+| Downloaded or created quests | The same complete 3DS extdata `user` directory | `convert-extras`, then `install-extras ... --groups quests` | Converted `quest1` through `quest4` in staging only until an explicit complete-group transaction installs them |
+| StreetPass/Hunter Search cache | Optional 3DS CEC mailbox root with `InBox___/BoxInfo_____` and received message files | `convert-cec --dry-run`, then `convert-cec --write --experimental --expected-source-record-set-sha256 ... --expected-target-sha256 ...` | Cemu `cec` only, plus its transaction artifacts |
 
 Typical locations are shown in the main README, but they are examples, not
 hardcoded paths.  The logical source groups are:
@@ -106,10 +106,11 @@ installation will use only a subset:
 | `quest4` | `0x29000` | `quest4` | `0x29024` | Downloaded/created quests |
 
 `convert-extras` reads all eight originals and generates all eight outputs.
-It currently has no `--components` or per-file mode.  A future UI may let the
-user select which generated files to install, but it must still collect the
-complete extdata directory for the current converter and make that selected
-installation explicit.
+It has no `--components` or per-file conversion mode.  The separate
+`install-extras` command can install one or both **complete** groups from a
+validated staging directory into an initialized Cemu target.  It still must
+collect the complete ExtData directory for conversion and may never install a
+single `card#` or `quest#` file.
 
 `card1`, `card2`, `card3`, and `cardbox` are the supported guild-card group.
 The three `card#` files share a full received-card layout; `cardbox` has its
@@ -124,6 +125,26 @@ the guild-card dependency.
 creates empty Cemu `card1`, `card2`, `card3`, and `cardbox` files and discards
 the source guild-card data; the quest outputs remain normally converted.
 
+### Installing Staged ExtData
+
+`install-extras` is the only supported overwrite path for staged ExtData:
+
+```text
+mh3g-save-convert install-extras [--dry-run | --write] \
+  --staging-dir <staging dir> --target-dir <initialized Cemu save dir> \
+  --groups <guild-cards,quests>
+```
+
+The staging directory must contain all eight converted files. `guild-cards`
+always means `card1`, `card2`, `card3`, and `cardbox`; `quests` always means
+`quest1` through `quest4`. The target must already be an initialized MH3G Cemu
+save directory containing the selected component names. A Dry Run reports both
+the staging-set and target-set SHA-256 values. Supply those exact values to the
+immediate `--write` with `--expected-staging-set-sha256` and
+`--expected-target-set-sha256`; the write rechecks them while it holds its
+directory lock. It creates a manifest-bound recovery transaction and preserves
+the previous target bytes before replacing any selected component.
+
 ### Optional StreetPass/CEC
 
 CEC is neither part of `user#` nor part of `card*`, and it is not required for
@@ -132,13 +153,17 @@ cache import:
 
 | 3DS input | Cemu output | Write condition |
 | --- | --- | --- |
-| CEC root's non-empty received MH3G records in `InBox___/_*` | `cec` | `convert-cec --write --experimental` |
+| CEC root's non-empty received MH3G records in `InBox___/_*` | `cec` | `convert-cec --write --experimental` plus the `source_record_set_sha256` and `target_sha256_before` from its immediate Dry Run |
 
 `convert-cec` requires `InBox___/BoxInfo_____`; it deliberately ignores
 `OutBox__` records because those describe the source hunter's outgoing
-transmission.  If the Cemu `cec` file is absent, the tool plans an empty Cemu
-container in memory and creates it only with `--write`.  It does not write a
-card file or a `user#` file.
+transmission. It reports an order-independent `source_record_set_sha256` and a
+`target_sha256_before`. A write requires both values as
+`--expected-source-record-set-sha256` and `--expected-target-sha256`; the
+target value represents the canonical empty Cemu container if `cec` is absent.
+The write obtains the target lock, re-reads both inputs, verifies both values,
+and only then creates the cache. It does not write a card file or a `user#`
+file.
 
 `inspect-cec` is broader and read-only: it reports both `InBox___` and
 `OutBox__`, and can optionally read a `user#` only to locate a card anchor.
@@ -176,9 +201,12 @@ record import remains explicitly experimental.
 | `convert <user#> --output <same user#>` | Source slot; existing target and prior transaction records only when installing | Nothing | Named target slot plus core transaction artifacts below |
 | `convert-system system --output system` | Source `system`; existing target and prior transaction records only when installing | Nothing | Named `system` plus the same transaction artifact pattern |
 | `convert-extras --source-dir ... --output-dir ...` | All eight extdata files | Nothing, and no output directory is created | Only the eight generated files under `output-dir` |
+| `install-extras --staging-dir ... --target-dir ... --groups ...` | Complete staged ExtData set and selected initialized target group(s) | Nothing | Only the selected complete Cemu group(s), plus one manifest-bound ExtData recovery transaction below |
 | `inspect-cec --source-dir ... [--target cec] [--source-slot user#]` | CEC `InBox___` and `OutBox__`; optional `cec` and optional user slot | Nothing | N/A |
-| `convert-cec --source-dir ... --target cec` | Received `InBox___` records and the existing `cec`, if any | Nothing | `cec` plus CEC transaction artifacts; requires `--experimental` |
-| `rollback` / `rollback-cec` | Their controlled manifest, target, and backup | N/A | Restores or removes only the manifest-bound target and removes its transaction artifacts |
+| `convert-cec --source-dir ... --target cec` | Received `InBox___` records and the existing `cec`, if any | Nothing | `cec` plus CEC transaction artifacts; requires `--experimental` and both expected Dry Run hashes |
+| `rollback` | Its controlled core/system manifest, target, and backup | N/A | Restores or removes only the manifest-bound core/system target and removes its transaction artifacts |
+| `rollback-extras` | Its controlled ExtData transaction manifest, selected target group(s), and retained prior bytes | N/A | Restores only the manifest-bound complete group(s) |
+| `rollback-cec` | Its controlled CEC manifest, target, and backup | N/A | Restores or removes only the manifest-bound CEC target and removes its transaction artifacts |
 
 For `convert` and `convert-system`, a successful write uses a same-directory
 temporary file and atomic rename.  When an old target exists, it creates a
@@ -191,11 +219,17 @@ hash-addressed backup.  The persistent managed files are:
 ```
 
 The short-lived `.<user#|system>.mh3g-install.lock` and temporary file are
-removed after the transaction.  `convert-extras` deliberately has no target
+removed after the transaction. `convert-extras` deliberately has no target
 backup, manifest, or overwrite path: it refuses `--write` if any of its eight
-named output files already exists.  Use a fresh staging directory, compare the
-reported hashes, and separately snapshot the chosen Cemu files before a UI or
-operator installs selected staged components.
+named staging outputs already exists. Use a fresh staging directory and
+compare the reported hashes.
+
+`install-extras` provides the controlled install step. It writes a unique
+hidden `.mh3g-extra-transaction-.../` directory below the target containing
+the returned `.mh3g-extra-recovery.json` manifest and retained prior component
+bytes. Its `.mh3g-extra-install.lock` is short-lived. `rollback-extras` accepts
+only that returned manifest and restores the complete group(s) named by it; it
+does not accept individual component paths.
 
 For experimental CEC, the equivalent persistent names are:
 
@@ -215,6 +249,9 @@ particular:
 - Converting `system` does not modify any `user#`, `card*`, `quest*`, or `cec`.
 - `convert-extras` does not modify any source file, user slot, `system`, or
   `cec`; it writes only its explicit staging outputs.
+- `install-extras` does not modify source files, any `user#`, `system`, `cec`,
+  or a non-selected ExtData group; it changes only the selected complete target
+  group(s) and their controlled transaction artifacts.
 - `convert-cec` does not modify `user#`, `system`, `card*`, or `quest*`.
 - `phrase1`, `phrase2`, and `phrase3` are not enumerated by any converter
   command and are not read or written by the MH3G conversion implementation.

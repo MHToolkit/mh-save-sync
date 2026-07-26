@@ -31,11 +31,34 @@ source_before="$(shasum -a 256 "$source" | awk '{print $1}')"
 "$cli" inspect "$source" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "inspected"'
 "$cli" convert "$source" --output "$target" --dry-run | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "dry-run"'
 [[ ! -e "$target" ]]
-"$cli" convert "$source" --output "$target" --write | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "written"'
-manifest="$(dirname "$target")/.user2.mh3g-install.json"
-[[ -f "$manifest" ]]
-"$cli" rollback --manifest "$manifest" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "rolled-back"'
-[[ ! -e "$target" ]]
+write_stdout="$fixture/write.stdout"
+write_stderr="$fixture/write.stderr"
+if "$cli" convert "$source" --output "$target" --write >"$write_stdout" 2>"$write_stderr"; then
+  python3 - "$write_stdout" <<'PY'
+import json
+import pathlib
+import sys
+
+assert json.loads(pathlib.Path(sys.argv[1]).read_text())["status"] == "written"
+PY
+  manifest="$(dirname "$target")/.user2.mh3g-install.json"
+  [[ -f "$manifest" ]]
+  "$cli" rollback --manifest "$manifest" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "rolled-back"'
+  [[ ! -e "$target" ]]
+else
+  write_status=$?
+  if grep -Fq 'unsafe install refused: emulator process is running:' "$write_stderr"; then
+    [[ ! -e "$target" ]] || {
+      echo "emulator safety guard failed: synthetic target was created" >&2
+      exit 1
+    }
+    printf 'macOS app synthetic write/rollback skipped: emulator safety guard verified\n'
+  else
+    cat "$write_stderr" >&2
+    [[ ! -s "$write_stdout" ]] || cat "$write_stdout" >&2
+    exit "$write_status"
+  fi
+fi
 [[ "$(shasum -a 256 "$source" | awk '{print $1}')" == "$source_before" ]]
 
 "$ui" --diagnostics | python3 -c '

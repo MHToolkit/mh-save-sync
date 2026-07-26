@@ -43,6 +43,27 @@ public sealed record CecDryRunAuthorization(
     string TargetSha256Before,
     DateTimeOffset CompletedAt);
 
+public sealed record SystemDryRunAuthorization(
+    FileFingerprint Source,
+    FileFingerprint Target,
+    string SourceReportHash,
+    DateTimeOffset CompletedAt);
+
+public sealed record ExtrasStageDryRunAuthorization(
+    string SourceDirectory,
+    string StagingDirectory,
+    string Groups,
+    string ComponentFingerprint,
+    DateTimeOffset CompletedAt);
+
+public sealed record ExtrasInstallDryRunAuthorization(
+    string StagingDirectory,
+    string TargetDirectory,
+    string Groups,
+    string StagingSetSha256,
+    string TargetSetSha256,
+    DateTimeOffset CompletedAt);
+
 public sealed record OperationHistoryItem(
     DateTimeOffset Timestamp,
     string Operation,
@@ -113,5 +134,36 @@ public sealed class CliExecutionResult
             .Where(value => value.ValueKind == JsonValueKind.String)
             .Select(value => value.GetString())
             .Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    public string? TryGetExtrasComponentFingerprint()
+    {
+        if (!Report.HasValue || Report.Value.ValueKind != JsonValueKind.Object
+            || !Report.Value.TryGetProperty("components", out var components)
+            || components.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var values = new List<string>();
+        foreach (var item in components.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("component", out var component)
+                || !item.TryGetProperty("source_sha256", out var source)
+                || !item.TryGetProperty("output_sha256", out var output)
+                || component.ValueKind != JsonValueKind.String
+                || source.ValueKind != JsonValueKind.String
+                || output.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            values.Add($"{component.GetString()}|{source.GetString()}|{output.GetString()}");
+        }
+
+        return values.Count == 0
+            ? null
+            : string.Join("\n", values.OrderBy(value => value, StringComparer.Ordinal));
     }
 }

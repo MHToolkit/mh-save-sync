@@ -51,10 +51,12 @@ bash scripts/mh3g-save-converter-macos-smoke.sh
 bash scripts/package-mh3g-save-converter-macos.sh
 ```
 
-The smoke test creates a temporary zero-content fixture, verifies inspect,
-dry-run, transactional write, manifest-bound rollback, and source hash
-preservation, then removes the temporary directory. It never launches Cemu or
-opens a real MLC.
+The smoke test creates a temporary zero-content fixture and always verifies
+inspect, dry-run, bundled diagnostics, and source-hash preservation. When no
+emulator is running, it also verifies transactional write and manifest-bound
+rollback. When Nemessix, Azahar, or Cemu is already running, it instead proves
+the CLI refuses the synthetic write and leaves the temporary target absent. It
+never launches Cemu or opens a real MLC.
 
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
 > archives directly, and it does **not** search an arbitrary save directory for
@@ -63,7 +65,7 @@ opens a real MLC.
 > program from a QQ/browser archive preview. Quote every path that contains a
 > space.
 
-Before any `--write`, `rollback`, or `rollback-cec`, fully quit Nemessix,
+Before any `--write`, `rollback`, `rollback-extras`, or `rollback-cec`, fully quit Nemessix,
 Azahar, and Cemu and wait for their processes to stop. `inspect`,
 `inspect-progress`, `inspect-events`, `inspect-cec`, and every `--dry-run` are
 read-only.
@@ -78,7 +80,7 @@ child. CEC is a system NAND mailbox, not SD-card ExtData.
 | --- | --- | --- | --- | --- |
 | Core slot | One explicit `user1`, `user2`, or `user3` file under `title/00040000/00048100/data/00000001/` | The title directory, all slots, ExtData, a ZIP | Yes: choose one slot | Character, story/progress, farm, fleet, local offline-hunter data; writes only the named same-number Cemu `user#` target |
 | Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Shared system data; writes only the named Cemu `system` target |
-| Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Generates converted `card*` and `quest*` files in a new staging directory |
+| Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Converts all eight files into a new staging directory; a separate guarded `install-extras` transaction can install complete `guild-cards`, `quests`, or both into an initialized Cemu target |
 | StreetPass / Hunter Search CEC | The exact `CEC/00048100/` directory containing `InBox___` | SD-card ExtData, the `InBox___` child alone, a ZIP | Optional and experimental | Reads received raw StreetPass records and can write only Cemu `cec` |
 
 For Nemessix, replace `<ID0>` and `<ID1>` with the two 32-hexadecimal
@@ -310,8 +312,42 @@ EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras"
 receive the recovered cross-platform field mapping before the wrapper is
 written. `--reset-guild-cards` is an explicit destructive recovery switch: it
 generates empty native-Cemu `card*` files and discards local/received card data.
-Do not use it for normal migration. Back up a Cemu destination before manually
-installing generated files.
+Do not use it for normal migration. Do not manually copy individual generated
+files into Cemu: use the guarded complete-group installer below.
+
+#### `install-extras` — transactionally install staged ExtData groups
+
+```text
+mh3g-save-convert install-extras [--dry-run | --write] \
+  --staging-dir <STAGING-DIR> --target-dir <INITIALIZED-CEMU-SAVE-DIR> \
+  --groups <guild-cards,quests>
+```
+
+This is intentionally separate from `convert-extras`. `--staging-dir` must
+contain all eight generated files, while `--groups` chooses only whole groups:
+`guild-cards` means `card1`, `card2`, `card3`, and `cardbox`; `quests` means
+`quest1` through `quest4`. The target must be an initialized MH3G Cemu save
+directory containing the selected named components. A write creates a
+manifest-bound recovery transaction and retains the previous target bytes; it
+never installs one `card#` or `quest#` file by itself.
+
+Run the installation Dry Run immediately before writing, and bind both reported
+set hashes to the write:
+
+```bash
+EXTRAS_INSTALL_DRY_RUN_JSON=$("${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests --dry-run)
+EXTRAS_STAGING_SHA256=$(jq -er '.staging_set_sha256' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+EXTRAS_TARGET_SHA256=$(jq -er '.target_set_sha256_before' <<<"$EXTRAS_INSTALL_DRY_RUN_JSON")
+
+"${CLI[@]}" install-extras \
+  --staging-dir "$EXTRAS_OUTPUT" --target-dir "$CEMU_DIR" \
+  --groups guild-cards,quests \
+  --expected-staging-set-sha256 "$EXTRAS_STAGING_SHA256" \
+  --expected-target-set-sha256 "$EXTRAS_TARGET_SHA256" \
+  --write
+```
 
 #### `inspect-cec` — read StreetPass/Hunter Search mailbox
 
@@ -331,8 +367,13 @@ one `user#` only to locate its guild-card anchor. The command writes nothing:
 #### `convert-cec` — experimental received-message import
 
 ```text
-mh3g-save-convert convert-cec [--dry-run | --write --experimental] \
-  [--slot <SLOT>] --source-dir <CEC-DIR> --target <CEMU-CEC>
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --dry-run
+
+mh3g-save-convert convert-cec --source-dir <CEC-DIR> --target <CEMU-CEC> \
+  [--slot <SLOT>] --write --experimental \
+  --expected-source-record-set-sha256 <SHA-256> \
+  --expected-target-sha256 <SHA-256>
 ```
 
 CEC is not the main save and not the durable guild-card store. `InBox___/_*`
@@ -352,19 +393,32 @@ not a blanket runtime guarantee for every Wii U UI. It writes no `user#`,
 default; `--slot <SLOT>` chooses the first candidate slot and never overwrites
 an existing non-empty record.
 
+The CEC Dry Run reports an order-independent `source_record_set_sha256` and a
+`target_sha256_before` (the canonical empty Cemu container if `cec` does not
+yet exist). A write requires both values and rechecks them after acquiring the
+CEC target lock:
+
 ```bash
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run
-"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 --write --experimental
+CEC_DRY_RUN_JSON=$("${CLI[@]}" convert-cec \
+  --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run)
+CEC_SOURCE_RECORD_SET_SHA256=$(jq -er '.source_record_set_sha256' <<<"$CEC_DRY_RUN_JSON")
+CEC_TARGET_SHA256=$(jq -er '.target_sha256_before' <<<"$CEC_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 \
+  --expected-source-record-set-sha256 "$CEC_SOURCE_RECORD_SET_SHA256" \
+  --expected-target-sha256 "$CEC_TARGET_SHA256" \
+  --write --experimental
 ```
 
 The source 3DS wrapper and observed 8-byte message prefix are not copied. A
 successful CEC write creates `.cec.mh3g-backup-<previous-sha256>` when needed
 and `.cec.mh3g-install.json` beside the target.
 
-#### `rollback` and `rollback-cec` — restore only a known transaction
+#### `rollback`, `rollback-extras`, and `rollback-cec` — restore only a known transaction
 
 ```text
 mh3g-save-convert rollback --manifest <MANIFEST>
+mh3g-save-convert rollback-extras --manifest <EXTRAS-MANIFEST>
 mh3g-save-convert rollback-cec --manifest <MANIFEST>
 ```
 
@@ -373,11 +427,14 @@ a save directory, backup file, or archive. With all emulators stopped:
 
 ```bash
 "${CLI[@]}" rollback --manifest "$CEMU_DIR/.user2.mh3g-install.json"
+"${CLI[@]}" rollback-extras --manifest "$EXTRAS_MANIFEST"
 "${CLI[@]}" rollback-cec --manifest "$CEMU_DIR/.cec.mh3g-install.json"
 ```
 
-Rollback restores or removes only the manifest-bound target and clears that
-transaction's controlled artifacts. It never changes the 3DS source.
+Rollback restores only the manifest-bound core target, ExtData group, or CEC
+target. It never changes the 3DS source. Preserve the `manifest` path emitted
+by each successful write; `install-extras` emits its manifest in the write JSON
+because it is not a fixed file name.
 
 ### Runtime evidence and packages
 

@@ -94,6 +94,76 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ChooseSystemSource_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            SystemSourceBox.Text = path;
+            ViewModel.SystemSourcePath = path;
+        }
+    }
+
+    private async void ChooseSystemTarget_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            SystemTargetBox.Text = path;
+            ViewModel.SystemTargetPath = path;
+        }
+    }
+
+    private async void ChooseSystemRollbackManifest_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync(".json");
+        if (path is not null)
+        {
+            SystemRollbackManifestBox.Text = path;
+            ViewModel.SystemRollbackManifestPath = path;
+        }
+    }
+
+    private async void ChooseExtrasSource_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasSourceBox.Text = path;
+            ViewModel.ExtrasSourceDirectory = path;
+        }
+    }
+
+    private async void ChooseExtrasStaging_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasStagingBox.Text = path;
+            ViewModel.ExtrasStagingDirectory = path;
+        }
+    }
+
+    private async void ChooseExtrasTarget_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasTargetBox.Text = path;
+            ViewModel.ExtrasTargetDirectory = path;
+        }
+    }
+
+    private async void ChooseExtrasRollbackManifest_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync(".json");
+        if (path is not null)
+        {
+            ExtrasRollbackManifestBox.Text = path;
+            ViewModel.ExtrasRollbackManifestPath = path;
+        }
+    }
+
     private async void ChooseCecDirectory_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFolderAsync();
@@ -148,10 +218,41 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void SystemPath_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender == SystemSourceBox)
+        {
+            ViewModel.SystemSourcePath = SystemSourceBox.Text;
+        }
+        else if (sender == SystemTargetBox)
+        {
+            ViewModel.SystemTargetPath = SystemTargetBox.Text;
+        }
+    }
+
+    private void ExtrasPath_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender == ExtrasSourceBox)
+        {
+            ViewModel.ExtrasSourceDirectory = ExtrasSourceBox.Text;
+        }
+        else if (sender == ExtrasStagingBox)
+        {
+            ViewModel.ExtrasStagingDirectory = ExtrasStagingBox.Text;
+        }
+        else if (sender == ExtrasTargetBox)
+        {
+            ViewModel.ExtrasTargetDirectory = ExtrasTargetBox.Text;
+        }
+    }
+
     private async void Inspect_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectCoreAsync);
     private async void InspectProgress_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectProgressAsync);
     private async void InspectEvents_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectEventsAsync);
     private async void DryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunCoreDryRunAsync);
+    private async void SystemDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunSystemDryRunAsync);
+    private async void ExtrasStageDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasStageDryRunAsync);
+    private async void ExtrasInstallDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasInstallDryRunAsync);
     private async void InspectCec_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectCecAsync);
     private async void CecDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunCecDryRunAsync);
 
@@ -168,6 +269,43 @@ public sealed partial class MainWindow : Window
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackCoreAsync);
+        }
+    }
+
+    private async void WriteSystem_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
+        {
+            await RunSafelyAsync(ViewModel.WriteSystemAsync);
+        }
+    }
+
+    private async void RollbackSystem_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
+        {
+            await RunSafelyAsync(ViewModel.RollbackSystemAsync);
+        }
+    }
+
+    private async void StageExtras_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSafelyAsync(ViewModel.StageExtrasAsync);
+    }
+
+    private async void InstallExtras_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
+        {
+            await RunSafelyAsync(ViewModel.InstallExtrasAsync);
+        }
+    }
+
+    private async void RollbackExtras_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
+        {
+            await RunSafelyAsync(ViewModel.RollbackExtrasAsync);
         }
     }
 
@@ -191,6 +329,12 @@ public sealed partial class MainWindow : Window
     {
         ViewModel.IsCecEnabled = CecToggle.IsOn;
         CecControls.Visibility = CecToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void SystemToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        ViewModel.IsSystemEnabled = SystemToggle.IsOn;
+        SystemControls.Visibility = SystemToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async Task<string?> PickFileAsync(params string[] extensions)

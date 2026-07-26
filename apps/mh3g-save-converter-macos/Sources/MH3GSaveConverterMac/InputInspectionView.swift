@@ -68,6 +68,7 @@ struct InputInspectionView: View {
                 }
             }
             .formStyle(.grouped)
+            .disabled(workflow.activeOperation != nil)
         }
         .onAppear {
             source = workflow.input?.source

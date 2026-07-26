@@ -77,6 +77,7 @@ struct ComponentSelectionView: View {
                 }
             }
             .formStyle(.grouped)
+            .disabled(workflow.activeOperation != nil)
         }
     }
 

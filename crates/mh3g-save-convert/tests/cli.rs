@@ -323,6 +323,11 @@ fn convert_cec_dry_run_plans_the_first_empty_cemu_slot_without_writing() {
     assert_eq!(value["status"], "dry-run");
     assert_eq!(value["imported_messages"], 1);
     assert_eq!(value["slots"][0], 0);
+    assert_eq!(
+        value["source_record_set_sha256"].as_str().unwrap().len(),
+        64
+    );
+    assert_eq!(value["target_sha256_before"].as_str().unwrap().len(), 64);
     assert!(value["backup"].is_null());
     assert_eq!(fs::read(&target).unwrap(), before);
 }
@@ -375,6 +380,39 @@ fn convert_cec_write_requires_experimental_acknowledgement() {
 }
 
 #[test]
+fn convert_cec_write_requires_dry_run_hash_preconditions() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let before = fs::read(&target).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--expected-source-record-set-sha256")
+    );
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
 fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
@@ -384,6 +422,18 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
     let before = fs::read(&target).unwrap();
     let before_hash = sha2::Sha256::digest(&before);
     let before_hash = hex::encode(before_hash);
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let expected_source_record_set = dry_run["source_record_set_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let expected_target = dry_run["target_sha256_before"].as_str().unwrap().to_owned();
 
     let value = run_json_with_stopped_emulators(&[
         "convert-cec".into(),
@@ -393,6 +443,10 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
         target.to_string_lossy().into_owned(),
         "--write".into(),
         "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        expected_source_record_set,
+        "--expected-target-sha256".into(),
+        expected_target,
     ]);
 
     assert_eq!(value["status"], "written");
@@ -415,6 +469,181 @@ fn convert_cec_write_keeps_a_hash_addressed_backup_and_manifest() {
     assert_eq!(fs::read(&target).unwrap(), before);
     assert!(!backup.exists());
     assert!(!manifest.exists());
+}
+
+#[test]
+fn convert_cec_write_rejects_a_stale_expected_source_record_set_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let before = fs::read(&target).unwrap();
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+
+    let message = source.join("InBox___").join("_CEC-TEST");
+    let mut changed_message = fs::read(&message).unwrap();
+    changed_message[0xD80 + 8] ^= 0x01;
+    fs::write(&message, changed_message).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("source record set SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_cec_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let mut changed_target = fs::read(&target).unwrap();
+    changed_target[40 + 0x1FC] = 0x5A;
+    fs::write(&target, &changed_target).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target SHA-256 does not match the expected dry-run value")
+    );
+    assert_eq!(fs::read(&target).unwrap(), changed_target);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".cec.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
+fn convert_cec_write_binds_a_missing_target_to_the_empty_cemu_container_hash() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = temp.path().join("cemu").join("cec");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+    let dry_run = run_json(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+    ]);
+    let value = run_json_with_stopped_emulators(&[
+        "convert-cec".into(),
+        "--source-dir".into(),
+        source.to_string_lossy().into_owned(),
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry_run["source_record_set_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        "--expected-target-sha256".into(),
+        dry_run["target_sha256_before"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert_eq!(value["status"], "written");
+    assert_eq!(
+        value["target_sha256_before"],
+        dry_run["target_sha256_before"]
+    );
+    assert!(target.is_file());
+}
+
+#[test]
+fn convert_cec_expected_hash_arguments_require_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = cemu_cec_fixture(&temp);
+
+    for flag in [
+        "--expected-source-record-set-sha256",
+        "--expected-target-sha256",
+    ] {
+        let output = binary()
+            .args([
+                "convert-cec",
+                "--source-dir",
+                &source.to_string_lossy(),
+                "--target",
+                &target.to_string_lossy(),
+                flag,
+                &"0".repeat(64),
+            ])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2), "flag: {flag}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--write"),
+            "flag: {flag}"
+        );
+    }
 }
 
 #[test]
@@ -471,6 +700,45 @@ fn convert_write_rejects_a_stale_expected_target_hash_without_replacing_target()
             .join(".user2.mh3g-install.json")
             .exists()
     );
+}
+
+#[test]
+fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+
+    for (command, source, target) in [
+        (
+            "convert",
+            slot_fixture(&temp, "user2"),
+            target_slot(&temp, "user2"),
+        ),
+        (
+            "convert-system",
+            system_fixture(&temp),
+            target_slot(&temp, "system"),
+        ),
+    ] {
+        let output = run_output_with_stopped_emulators(&[
+            command.to_owned(),
+            source.to_string_lossy().into_owned(),
+            "--output".to_owned(),
+            target.to_string_lossy().into_owned(),
+            "--expected-target-sha256".to_owned(),
+            "0".repeat(64),
+            "--write".to_owned(),
+        ]);
+
+        assert_eq!(output.status.code(), Some(1), "command: {command}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("target is missing but an expected dry-run SHA-256 was supplied"),
+            "command: {command}"
+        );
+        assert!(!target.exists(), "command: {command}");
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
+    }
 }
 
 #[test]
@@ -758,6 +1026,49 @@ fn dry_run_and_write_are_mutually_exclusive() {
 }
 
 #[test]
+fn expected_hash_arguments_require_write() {
+    let temp = tempfile::tempdir().unwrap();
+
+    for (command, source, target) in [
+        (
+            "convert",
+            slot_fixture(&temp, "user2"),
+            target_slot(&temp, "user2"),
+        ),
+        (
+            "convert-system",
+            system_fixture(&temp),
+            target_slot(&temp, "system"),
+        ),
+    ] {
+        for flag in ["--expected-source-sha256", "--expected-target-sha256"] {
+            let output = binary()
+                .args([
+                    command,
+                    &source.to_string_lossy(),
+                    "--output",
+                    &target.to_string_lossy(),
+                    flag,
+                    &"0".repeat(64),
+                ])
+                .output()
+                .unwrap();
+
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "command: {command}; flag: {flag}"
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("--write"),
+                "command: {command}; flag: {flag}"
+            );
+            assert!(!target.exists(), "command: {command}; flag: {flag}");
+        }
+    }
+}
+
+#[test]
 fn invalid_paths_fail_with_one_concise_error_line() {
     let output = binary()
         .args(["inspect", "/does/not/exist"])
@@ -864,6 +1175,8 @@ fn cec_commands_identify_the_actual_failed_path() {
 
 #[test]
 fn rollback_commands_identify_the_manifest_path() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     for (command, manifest_name, operation) in [
         (
@@ -878,10 +1191,11 @@ fn rollback_commands_identify_the_manifest_path() {
         ),
     ] {
         let manifest = temp.path().join(manifest_name);
-        let output = binary()
-            .args([command, "--manifest", manifest.to_str().unwrap()])
-            .output()
-            .unwrap();
+        let output = run_output_with_stopped_emulators(&[
+            command.to_owned(),
+            "--manifest".to_owned(),
+            manifest.to_string_lossy().into_owned(),
+        ]);
         assert_eq!(output.status.code(), Some(1), "command: {command}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

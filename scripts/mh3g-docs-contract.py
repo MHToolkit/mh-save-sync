@@ -25,8 +25,10 @@ COMMANDS = (
     "convert",
     "convert-system",
     "convert-extras",
+    "install-extras",
     "convert-cec",
     "rollback",
+    "rollback-extras",
     "rollback-cec",
 )
 EXTDATA_SUFFIX = "extdata/00000000/00000481/user/"
@@ -39,6 +41,10 @@ DIRECT_ZIP_CLAIMS = (
     "直接支持 ZIP",
     "支持直接读取 ZIP",
     "可直接读取 ZIP",
+)
+STALE_EXTDATA_INSTALL_CLAIMS = (
+    "current CLI has no overwrite/backup installer for these files",
+    "当前 CLI 不负责覆盖安装或备份这些文件",
 )
 
 
@@ -107,6 +113,23 @@ def main() -> int:
             "[English](MH3G_3DS_TO_CEMU_FILE_CONTRACT.md)",
             "English contract link",
         )
+
+    for relative_path, content in contract_docs.items():
+        if content is None:
+            continue
+        for command in ("convert-extras", "install-extras", "rollback-extras"):
+            require_contains(
+                failures,
+                relative_path,
+                content,
+                f"`{command}`",
+                "ExtData transaction command reference",
+            )
+        for claim in STALE_EXTDATA_INSTALL_CLAIMS:
+            if claim in content:
+                failures.append(
+                    f"{relative_path}: stale ExtData installer claim: {claim}"
+                )
 
     for relative_path, content in root_docs.items():
         if content is None:

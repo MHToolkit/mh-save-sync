@@ -14,9 +14,9 @@ CLI 会检查文件名、字节大小和存档头。它不会根据父目录推�
 | --- | --- | --- | --- |
 | 角色、村/任务/事件状态、农场、狩猎船、玩家数据以及槽位内离线猎人缓存 | 一个明确的散装 `user1`、`user2` 或 `user3` 文件 | `convert <user#> --output <same user#>` | 只会改变同一个 Cemu `user#` 文件 |
 | 共享系统数据 | 散装 `system` 文件 | `convert-system system --output system` | 只会改变 Cemu `system` |
-| 已收到/本地公会名片数据以及离线集会所伙伴对应的名片部分 | 包含下列全部八个文件的完整 3DS ExtData `user` 目录 | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>` | 只生成暂存目录内的文件；当前 CLI 不负责覆盖安装或备份这些文件 |
-| 下载或创建的任务 | 同一完整 3DS ExtData `user` 目录 | `convert-extras` | 暂存目录中生成的 `quest1` 到 `quest4` |
-| 擦身通信/猎人搜索缓存 | 可选的 3DS CEC 邮箱根目录，其中包含 `InBox___/BoxInfo_____` 和收到的消息文件 | `convert-cec --experimental` | 只改变 Cemu `cec` 及其事务文件 |
+| 已收到/本地公会名片数据以及离线集会所伙伴对应的名片部分 | 包含下列全部八个文件的完整 3DS ExtData `user` 目录 | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>`，随后执行 `install-extras --staging-dir <staging> --target-dir <Cemu save dir> --groups guild-cards` | 先只生成暂存文件；明确执行完整组件组事务后才安装 `card1`、`card2`、`card3`、`cardbox`，并保留 manifest 与原目标字节 |
+| 下载或创建的任务 | 同一完整 3DS ExtData `user` 目录 | `convert-extras`，随后执行 `install-extras ... --groups quests` | 先只在暂存目录中生成 `quest1` 到 `quest4`；明确执行完整组件组事务后才安装 |
+| 擦身通信/猎人搜索缓存 | 可选的 3DS CEC 邮箱根目录，其中包含 `InBox___/BoxInfo_____` 和收到的消息文件 | 先执行 `convert-cec --dry-run`，随后执行 `convert-cec --write --experimental --expected-source-record-set-sha256 ... --expected-target-sha256 ...` | 只改变 Cemu `cec` 及其事务文件 |
 
 主 README 中给出的常见位置只是示例，不是硬编码路径。逻辑源数据组如下：
 
@@ -79,7 +79,7 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 | `quest3` | `0x29000` | `quest3` | `0x29024` | 下载/创建任务 |
 | `quest4` | `0x29000` | `quest4` | `0x29024` | 下载/创建任务 |
 
-`convert-extras` 会读取全部八个原始文件，并生成全部八个输出。当前没有 `--components` 或单文件模式。未来 UI 可以让用户选择安装哪些已生成文件，但在当前转换器下仍必须收集完整 ExtData 目录，并显式执行所选安装。
+`convert-extras` 会读取全部八个原始文件，并生成全部八个输出。它没有 `--components` 或单文件转换模式。独立的 `install-extras` 可以把经过校验的暂存目录中的一个或两个**完整**组件组安装到已初始化的 Cemu 目标；转换时仍必须收集完整 ExtData 目录，且绝不能单独安装某一个 `card#` 或 `quest#` 文件。
 
 `card1`、`card2`、`card3` 和 `cardbox` 构成支持的公会名片组。三个 `card#` 文件共享完整的已接收名片布局；`cardbox` 使用自己的紧凑布局和转换表。不能把其中任何文件从 3DS 原样复制到 Cemu。
 
@@ -87,15 +87,27 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 
 `--reset-guild-cards` 不是正常转换。显式传入时，它会创建空白 Cemu `card1`、`card2`、`card3` 和 `cardbox`，丢弃源公会名片数据；任务输出仍按正常方式转换。
 
+### 安装暂存 ExtData
+
+`install-extras` 是唯一支持的暂存 ExtData 覆盖安装路径：
+
+```text
+mh3g-save-convert install-extras [--dry-run | --write] \
+  --staging-dir <暂存目录> --target-dir <已初始化的-Cemu-存档目录> \
+  --groups <guild-cards,quests>
+```
+
+暂存目录必须包含全部八个已转换文件。`guild-cards` 始终表示 `card1`、`card2`、`card3` 和 `cardbox`；`quests` 始终表示 `quest1` 到 `quest4`。目标必须是已经初始化的 MH3G Cemu 存档目录，并且包含所选组件的同名文件。Dry Run 会报告暂存组件集与目标组件集的 SHA-256。紧接着的 `--write` 必须通过 `--expected-staging-set-sha256` 与 `--expected-target-set-sha256` 提交这些精确值；写入持有目录锁时会重新检查。它会创建绑定 manifest 的恢复事务，并在替换任何所选组件前保留旧目标字节。
+
 ### 可选的擦身通信/CEC
 
 CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙伴流程不依赖它。它是独立的实验性缓存导入：
 
 | 3DS 输入 | Cemu 输出 | 写入条件 |
 | --- | --- | --- |
-| CEC 根目录中 `InBox___/_*` 下收到的非空 MH3G 记录 | `cec` | `convert-cec --write --experimental` |
+| CEC 根目录中 `InBox___/_*` 下收到的非空 MH3G 记录 | `cec` | `convert-cec --write --experimental`，并携带紧接着的 Dry Run 中 `source_record_set_sha256` 和 `target_sha256_before` |
 
-`convert-cec` 要求存在 `InBox___/BoxInfo_____`；它会故意忽略 `OutBox__` 记录，因为这些记录描述源猎人自己发出的广播。如果 Cemu `cec` 不存在，工具只会在内存中计划空 Cemu 容器，并且仅在传入 `--write` 时创建文件。它不会写入名片文件或 `user#` 文件。
+`convert-cec` 要求存在 `InBox___/BoxInfo_____`；它会故意忽略 `OutBox__` 记录，因为这些记录描述源猎人自己发出的广播。它会报告与顺序无关的 `source_record_set_sha256` 和 `target_sha256_before`。写入必须把两项值作为 `--expected-source-record-set-sha256` 和 `--expected-target-sha256` 传回；`cec` 不存在时，目标值表示规范的空 Cemu 容器。写入会取得目标锁、重新读取两边输入并检查两项值后才创建缓存。它不会写入名片文件或 `user#` 文件。
 
 `inspect-cec` 的只读检查范围更广：它会报告 `InBox___` 和 `OutBox__`，还可以选择读取一个 `user#`，用途仅是定位名片 anchor。
 
@@ -123,9 +135,12 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 | `convert <user#> --output <same user#>` | 源槽位；只有安装时才读取已有目标和旧事务记录 | 无 | 指定目标槽位及下述核心事务文件 |
 | `convert-system system --output system` | 源 `system`；只有安装时才读取已有目标和旧事务记录 | 无 | 指定 `system` 及相同模式的事务文件 |
 | `convert-extras --source-dir ... --output-dir ...` | 全部八个 ExtData 文件 | 无，也不会创建输出目录 | 只写入 `output-dir` 下生成的八个文件 |
+| `install-extras --staging-dir ... --target-dir ... --groups ...` | 完整暂存 ExtData 集合及被选中、已初始化的目标组件组 | 无 | 只改变被选中的完整 Cemu 组件组，以及下文一个绑定 manifest 的 ExtData 恢复事务 |
 | `inspect-cec --source-dir ... [--target cec] [--source-slot user#]` | CEC `InBox___` 和 `OutBox__`；可选 `cec` 和可选用户槽位 | 无 | 不适用 |
-| `convert-cec --source-dir ... --target cec` | 收到的 `InBox___` 记录以及已有 `cec`（如存在） | 无 | `cec` 和 CEC 事务文件；要求 `--experimental` |
-| `rollback` / `rollback-cec` | 受控 manifest、目标和备份 | 不适用 | 只恢复或删除 manifest 绑定目标，并清理其事务文件 |
+| `convert-cec --source-dir ... --target cec` | 收到的 `InBox___` 记录以及已有 `cec`（如存在） | 无 | `cec` 和 CEC 事务文件；要求 `--experimental` 与两项预期 Dry Run 哈希 |
+| `rollback` | 受控核心/system manifest、目标和备份 | 不适用 | 只恢复或删除 manifest 绑定的核心/system 目标，并清理其事务文件 |
+| `rollback-extras` | 受控 ExtData 事务 manifest、被选中目标组件组和保留的旧字节 | 不适用 | 只恢复 manifest 绑定的完整组件组 |
+| `rollback-cec` | 受控 CEC manifest、目标和备份 | 不适用 | 只恢复或删除 manifest 绑定的 CEC 目标，并清理其事务文件 |
 
 `convert` 和 `convert-system` 成功写入时会使用同目录临时文件和原子 rename。旧目标存在时会创建按哈希寻址的备份。持久受控文件为：
 
@@ -135,7 +150,9 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 .<user#|system>.mh3g-install-history-<sha256>.json # 重复安装时可能出现
 ```
 
-短暂存在的 `.<user#|system>.mh3g-install.lock` 和临时文件会在事务结束后删除。`convert-extras` 故意不提供目标备份、manifest 或覆盖路径：如果八个同名输出中的任何一个已经存在，`--write` 会拒绝执行。应使用新暂存目录，对比报告的哈希，并在 UI 或操作者安装选中暂存组件前，单独为选中的 Cemu 文件创建快照。
+短暂存在的 `.<user#|system>.mh3g-install.lock` 和临时文件会在事务结束后删除。`convert-extras` 故意不提供目标备份、manifest 或覆盖路径：如果八个同名暂存输出中的任何一个已经存在，`--write` 会拒绝执行。应使用新暂存目录，并对比报告的哈希。
+
+`install-extras` 提供受控安装步骤。它会在目标下创建唯一隐藏的 `.mh3g-extra-transaction-.../` 目录，目录内包含返回的 `.mh3g-extra-recovery.json` manifest 和保留的旧组件字节；`.mh3g-extra-install.lock` 只短暂存在。`rollback-extras` 只接受这个返回的 manifest，并恢复其中记录的完整组件组；不接受单个组件路径。
 
 实验性 CEC 对应的持久文件名为：
 
@@ -151,6 +168,7 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 - 转换 `user2` 不会修改 `user1`、`user3`、`system`、`card1`、`card2`、`card3`、`cardbox`、`quest1` 到 `quest4` 或 `cec`。
 - 转换 `system` 不会修改任何 `user#`、`card*`、`quest*` 或 `cec`。
 - `convert-extras` 不会修改任何源文件、用户槽位、`system` 或 `cec`；它只写入明确的暂存输出。
+- `install-extras` 不会修改源文件、任何 `user#`、`system`、`cec` 或未被选中的 ExtData 组件组；只会改变选中的完整目标组件组及其受控事务文件。
 - `convert-cec` 不会修改 `user#`、`system`、`card*` 或 `quest*`。
 - 任何转换器命令都没有枚举 `phrase1`、`phrase2` 或 `phrase3`，MH3G 转换实现不会读取或写入它们。
 - 从该 CLI 的视角看，3DS 源存档文件始终只读。

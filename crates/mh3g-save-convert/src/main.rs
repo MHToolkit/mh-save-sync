@@ -8,7 +8,10 @@ use std::{
 use clap::{Parser, Subcommand};
 use mh3g_save_convert::{
     ConversionError,
-    cec::{convert_cec_records, empty_cemu_cec, inspect_cec, install_cec, rollback_cec},
+    cec::{
+        CecInstallExpectations, convert_cec_records, empty_cemu_cec, inspect_cec,
+        install_cec_from_source_with_expectations, rollback_cec,
+    },
     converter::{
         EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
         reset_guild_card_component_to_cemu_named,
@@ -82,6 +85,13 @@ enum Command {
         /// empty slots. Existing non-empty slots are never overwritten.
         #[arg(long)]
         slot: Option<usize>,
+        /// Require the complete received-record-set SHA-256 observed during the preceding Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_record_set_sha256: Option<String>,
+        /// Require the Cemu `cec` SHA-256 observed during the preceding Dry Run.
+        /// A missing target is represented by the canonical empty Cemu container.
+        #[arg(long, requires = "write")]
+        expected_target_sha256: Option<String>,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run", requires = "experimental")]
@@ -193,6 +203,15 @@ struct Report {
 struct HashPreconditions {
     source_sha256: Option<String>,
     target_sha256: Option<String>,
+}
+
+#[derive(Debug)]
+struct CecConversionOptions {
+    expected_source_record_set_sha256: Option<String>,
+    expected_target_sha256: Option<String>,
+    dry_run: bool,
+    write: bool,
+    experimental: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -316,6 +335,7 @@ struct CecConversionReport {
     target: PathBuf,
     imported_messages: usize,
     source_record_sha256: Vec<String>,
+    source_record_set_sha256: String,
     slots: Vec<usize>,
     target_sha256_before: String,
     target_sha256_after: String,
@@ -367,6 +387,8 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             source_dir,
             target,
             slot,
+            expected_source_record_set_sha256,
+            expected_target_sha256,
             dry_run,
             write,
             experimental,
@@ -376,9 +398,13 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 source_dir,
                 target,
                 slot,
-                dry_run,
-                write,
-                experimental,
+                CecConversionOptions {
+                    expected_source_record_set_sha256,
+                    expected_target_sha256,
+                    dry_run,
+                    write,
+                    experimental,
+                },
             )?)?
         ),
         Command::RollbackCec { manifest } => {
@@ -483,48 +509,75 @@ fn convert_cec(
     source_dir: PathBuf,
     target: PathBuf,
     slot: Option<usize>,
-    dry_run: bool,
-    write: bool,
-    experimental: bool,
+    options: CecConversionOptions,
 ) -> Result<CecConversionReport, ConversionError> {
-    debug_assert!(!(dry_run && write));
-    if write && !experimental {
+    debug_assert!(!(options.dry_run && options.write));
+    if options.write && !options.experimental {
         return Err(ConversionError::UnsafeInstall(
             "raw CEC import requires --experimental acknowledgement".to_owned(),
         ));
     }
-    let target_bytes = match fs::read(&target) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
-        Err(error) => {
-            return io_at_path(Err(error), "reading Cemu CEC target", &target);
-        }
+    if options.write && options.expected_source_record_set_sha256.is_none() {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC write requires --expected-source-record-set-sha256 from the preceding Dry Run"
+                .to_owned(),
+        ));
+    }
+    if options.write && options.expected_target_sha256.is_none() {
+        return Err(ConversionError::UnsafeInstall(
+            "CEC write requires --expected-target-sha256 from the preceding Dry Run".to_owned(),
+        ));
+    }
+
+    let (conversion, backup, manifest, status) = if options.write {
+        let installed = install_cec_from_source_with_expectations(
+            &source_dir,
+            &target,
+            slot,
+            CecInstallExpectations {
+                source_record_set_sha256: options.expected_source_record_set_sha256.as_deref(),
+                target_sha256: options.expected_target_sha256.as_deref(),
+            },
+        )?;
+        (
+            installed.conversion,
+            installed.install.backup,
+            Some(installed.install.manifest),
+            "written",
+        )
+    } else {
+        let target_bytes = match fs::read(&target) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
+            Err(error) => {
+                return io_at_path(Err(error), "reading Cemu CEC target", &target);
+            }
+        };
+        (
+            convert_cec_records(&source_dir, &target_bytes, slot)?,
+            None,
+            None,
+            "dry-run",
+        )
     };
-    let conversion = convert_cec_records(&source_dir, &target_bytes, slot)?;
     let source_record_sha256 = conversion
         .records
         .iter()
         .map(|record| record.sha256.clone())
         .collect::<Vec<_>>();
-    let mut report = CecConversionReport {
+    Ok(CecConversionReport {
         source_dir: source_dir.clone(),
         target: target.clone(),
         imported_messages: conversion.records.len(),
         source_record_sha256,
+        source_record_set_sha256: conversion.source_record_set_sha256,
         slots: conversion.slots.clone(),
         target_sha256_before: conversion.before_sha256.clone(),
         target_sha256_after: conversion.after_sha256.clone(),
-        backup: None,
-        manifest: None,
-        status: "dry-run",
-    };
-    if write {
-        let installed = install_cec(&source_dir, &target, &conversion)?;
-        report.backup = installed.backup;
-        report.manifest = Some(installed.manifest);
-        report.status = "written";
-    }
-    Ok(report)
+        backup,
+        manifest,
+        status,
+    })
 }
 
 fn inspect_progress(

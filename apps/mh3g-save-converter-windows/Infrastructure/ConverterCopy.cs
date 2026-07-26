@@ -106,6 +106,26 @@ public sealed class ConverterCopy : ObservableObject
     public string CecAcknowledgementRequired => Text(nameof(CecAcknowledgementRequired));
     public string CecPathsRequired => Text(nameof(CecPathsRequired));
     public string CecFingerprintMissing => Text(nameof(CecFingerprintMissing));
+    public string SystemPathsRequired => Text(nameof(SystemPathsRequired));
+    public string ExtrasPathsRequired => Text(nameof(ExtrasPathsRequired));
+    public string ExtrasFingerprintMissing => Text(nameof(ExtrasFingerprintMissing));
+    public string SharedSystem => Text(nameof(SharedSystem));
+    public string SystemSource => Text(nameof(SystemSource));
+    public string SystemTarget => Text(nameof(SystemTarget));
+    public string RunSystemDryRun => Text(nameof(RunSystemDryRun));
+    public string WriteSystem => Text(nameof(WriteSystem));
+    public string SystemManifest => Text(nameof(SystemManifest));
+    public string OptionalExtData => Text(nameof(OptionalExtData));
+    public string GuildCards => Text(nameof(GuildCards));
+    public string Quests => Text(nameof(Quests));
+    public string ExtDataSource => Text(nameof(ExtDataSource));
+    public string StagingDirectory => Text(nameof(StagingDirectory));
+    public string ExtDataTarget => Text(nameof(ExtDataTarget));
+    public string PreviewStaging => Text(nameof(PreviewStaging));
+    public string WriteStaging => Text(nameof(WriteStaging));
+    public string PreviewInstall => Text(nameof(PreviewInstall));
+    public string InstallExtData => Text(nameof(InstallExtData));
+    public string ExtDataManifest => Text(nameof(ExtDataManifest));
 
     private string Text(string key)
     {
@@ -158,7 +178,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(ManifestPath)] = "Transaction manifest",
         [nameof(RollbackFromManifest)] = "Rollback from manifest",
         [nameof(OptionalSectionTitle)] = "Optional data",
-        [nameof(OptionalSectionDescription)] = "Shared system and ExtData remain separate CLI transactions. CEC is isolated and disabled until you explicitly enable it.",
+        [nameof(OptionalSectionDescription)] = "Shared system and ExtData are separate, explicit transactions. CEC stays isolated and disabled until you enable it.",
         [nameof(ExperimentalCec)] = "Experimental CEC",
         [nameof(ExperimentalCecHint)] = "CEC is a separate StreetPass / Hunter Search cache. Guild-card and offline-partner migration do not require it.",
         [nameof(CecSourceDirectory)] = "3DS CEC mailbox directory",
@@ -168,7 +188,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CecAcknowledge)] = "I understand that CEC import remains experimental",
         [nameof(WriteCec)] = "Write experimental CEC",
         [nameof(RollbackCec)] = "Rollback CEC manifest",
-        [nameof(ExtDataNotice)] = "Guild cards, quests, and shared system have their own complete transaction groups. This first Windows shell leaves those CLI routes explicit rather than guessing an MLC directory.",
+        [nameof(ExtDataNotice)] = "Each optional transaction has its own Dry Run and manifest. The app never infers an MLC directory.",
         [nameof(ResultTitle)] = "Structured report",
         [nameof(ResultEmpty)] = "Run an inspection or Dry Run to see the CLI JSON report here.",
         [nameof(OperationHistory)] = "This session",
@@ -194,7 +214,27 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CecDisabled)] = "Enable Experimental CEC to use its isolated commands.",
         [nameof(CecAcknowledgementRequired)] = "Acknowledge the experimental CEC warning before its write command is available.",
         [nameof(CecPathsRequired)] = "Choose the exact CEC mailbox directory and Cemu cec target path.",
-        [nameof(CecFingerprintMissing)] = "CEC Dry Run did not provide the expected JSON fingerprints.",
+        [nameof(CecFingerprintMissing)] = "CEC Dry Run did not provide the aggregate record-set and target JSON fingerprints.",
+        [nameof(SystemPathsRequired)] = "Choose exact 3DS and Cemu system files before running this separate transaction.",
+        [nameof(ExtrasPathsRequired)] = "Choose at least one ExtData group plus explicit source, staging, and Cemu target directories.",
+        [nameof(ExtrasFingerprintMissing)] = "The ExtData Dry Run did not provide the expected component or set fingerprints.",
+        [nameof(SharedSystem)] = "Shared system",
+        [nameof(SystemSource)] = "3DS system file",
+        [nameof(SystemTarget)] = "Cemu system file",
+        [nameof(RunSystemDryRun)] = "Run system Dry Run",
+        [nameof(WriteSystem)] = "Write system",
+        [nameof(SystemManifest)] = "System manifest",
+        [nameof(OptionalExtData)] = "Optional ExtData",
+        [nameof(GuildCards)] = "Guild cards & offline partners",
+        [nameof(Quests)] = "Quests",
+        [nameof(ExtDataSource)] = "3DS ExtData user directory",
+        [nameof(StagingDirectory)] = "Staging directory",
+        [nameof(ExtDataTarget)] = "Cemu ExtData target directory",
+        [nameof(PreviewStaging)] = "Preview staging conversion",
+        [nameof(WriteStaging)] = "Write staging conversion",
+        [nameof(PreviewInstall)] = "Preview ExtData install",
+        [nameof(InstallExtData)] = "Install selected ExtData",
+        [nameof(ExtDataManifest)] = "ExtData manifest",
     };
 
     private static readonly IReadOnlyDictionary<string, string> Chinese = new Dictionary<string, string>
@@ -242,7 +282,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(ManifestPath)] = "事务 manifest",
         [nameof(RollbackFromManifest)] = "从 manifest 回滚",
         [nameof(OptionalSectionTitle)] = "可选数据",
-        [nameof(OptionalSectionDescription)] = "共享 system 和 ExtData 是独立的 CLI 事务。CEC 完全隔离，默认关闭。",
+        [nameof(OptionalSectionDescription)] = "共享 system 和 ExtData 是独立、明确的事务。CEC 完全隔离，默认关闭。",
         [nameof(ExperimentalCec)] = "实验性 CEC",
         [nameof(ExperimentalCecHint)] = "CEC 是独立的擦身通信 / 猎人搜索缓存。公会名片和离线伙伴迁移不依赖它。",
         [nameof(CecSourceDirectory)] = "3DS CEC 邮箱目录",
@@ -252,7 +292,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CecAcknowledge)] = "我了解 CEC 导入仍是实验性功能",
         [nameof(WriteCec)] = "写入实验性 CEC",
         [nameof(RollbackCec)] = "回滚 CEC manifest",
-        [nameof(ExtDataNotice)] = "公会名片、任务和共享 system 都有独立完整的事务组。这个首版 Windows 外壳保持它们的 CLI 路径明确，不会猜测 MLC 目录。",
+        [nameof(ExtDataNotice)] = "每个可选事务都有独立的 Dry Run 和 manifest。应用不会猜测 MLC 目录。",
         [nameof(ResultTitle)] = "结构化报告",
         [nameof(ResultEmpty)] = "运行检查或 Dry Run 后，会在这里显示 CLI JSON 报告。",
         [nameof(OperationHistory)] = "本次会话",
@@ -278,6 +318,26 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CecDisabled)] = "启用实验性 CEC 后才能使用它的独立命令。",
         [nameof(CecAcknowledgementRequired)] = "使用 CEC 写入命令前请确认实验性警告。",
         [nameof(CecPathsRequired)] = "请选择准确的 CEC 邮箱目录和 Cemu cec 目标路径。",
-        [nameof(CecFingerprintMissing)] = "CEC Dry Run 没有提供预期的 JSON 指纹。",
+        [nameof(CecFingerprintMissing)] = "CEC Dry Run 没有提供聚合记录集和目标 JSON 指纹。",
+        [nameof(SystemPathsRequired)] = "运行这个独立事务前，请选择准确的 3DS 和 Cemu system 文件。",
+        [nameof(ExtrasPathsRequired)] = "请至少选择一个 ExtData 组，以及准确的源目录、临时目录和 Cemu 目标目录。",
+        [nameof(ExtrasFingerprintMissing)] = "ExtData Dry Run 没有提供预期的组件或集合指纹。",
+        [nameof(SharedSystem)] = "共享 system",
+        [nameof(SystemSource)] = "3DS system 文件",
+        [nameof(SystemTarget)] = "Cemu system 文件",
+        [nameof(RunSystemDryRun)] = "运行 system Dry Run",
+        [nameof(WriteSystem)] = "写入 system",
+        [nameof(SystemManifest)] = "system manifest",
+        [nameof(OptionalExtData)] = "可选 ExtData",
+        [nameof(GuildCards)] = "公会名片与离线伙伴",
+        [nameof(Quests)] = "任务",
+        [nameof(ExtDataSource)] = "3DS ExtData user 目录",
+        [nameof(StagingDirectory)] = "临时转换目录",
+        [nameof(ExtDataTarget)] = "Cemu ExtData 目标目录",
+        [nameof(PreviewStaging)] = "预览临时转换",
+        [nameof(WriteStaging)] = "写入临时转换",
+        [nameof(PreviewInstall)] = "预览 ExtData 安装",
+        [nameof(InstallExtData)] = "安装所选 ExtData",
+        [nameof(ExtDataManifest)] = "ExtData manifest",
     };
 }

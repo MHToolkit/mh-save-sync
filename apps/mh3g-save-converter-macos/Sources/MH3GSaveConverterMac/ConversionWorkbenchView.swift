@@ -37,7 +37,7 @@ struct ConversionWorkbenchView: View {
                 }
             }
             ToolbarItem(placement: .automatic) {
-                StatusPill(state: workflow.state, language: language)
+                StatusPill(workflow: workflow, language: language)
             }
         }
         .onChange(of: selectedNavigation) { _, _ in
@@ -83,7 +83,7 @@ enum ConverterExecutableLocator {
 }
 
 private struct StatusPill: View {
-    let state: WorkflowState
+    let workflow: ConversionWorkflow
     let language: ConverterLanguage
 
     var body: some View {
@@ -91,30 +91,61 @@ private struct StatusPill: View {
             .labelStyle(.titleAndIcon)
             .font(.caption)
             .foregroundStyle(color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(.quaternary, in: Capsule())
             .accessibilityLabel(title)
     }
 
     private var title: String {
-        switch state {
-        case .writing: ConverterCopy.text("Status.Running", language: language)
-        case .failure: ConverterCopy.text("Status.Failed", language: language)
-        default: ConverterCopy.text("Status.Ready", language: language)
+        switch presentation {
+        case .notReady: ConverterCopy.text("Status.NotReady", language: language)
+        case .authorized: ConverterCopy.text("Status.Authorized", language: language)
+        case .running: ConverterCopy.text("Status.Running", language: language)
+        case .succeeded: ConverterCopy.text("Status.Succeeded", language: language)
+        case .failed: ConverterCopy.text("Status.Failed", language: language)
         }
     }
 
     private var image: String {
-        switch state {
-        case .writing: "arrow.triangle.2.circlepath"
-        case .failure: "exclamationmark.triangle.fill"
-        default: "checkmark.circle.fill"
+        switch presentation {
+        case .notReady: "circle.dotted"
+        case .authorized: "checkmark.shield.fill"
+        case .running: "arrow.triangle.2.circlepath"
+        case .succeeded: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
         }
     }
 
     private var color: Color {
-        switch state {
-        case .failure: .red
-        case .writing: .orange
-        default: .green
+        switch presentation {
+        case .notReady: .secondary
+        case .authorized: .blue
+        case .running: .orange
+        case .succeeded: .green
+        case .failed: .red
         }
+    }
+
+    private var presentation: Presentation {
+        if workflow.activeOperation != nil || workflow.state == .writing { return .running }
+        if workflow.state == .failure { return .failed }
+        if workflow.state == .success { return .succeeded }
+        if workflow.canWrite
+            || workflow.canWriteSystem
+            || workflow.canStageExtras
+            || workflow.canInstallExtras
+            || workflow.canWriteCEC {
+            return .authorized
+        }
+        return .notReady
+    }
+
+    private enum Presentation {
+        case notReady
+        case authorized
+        case running
+        case succeeded
+        case failed
     }
 }
