@@ -28,9 +28,10 @@ present these missing Windows and multi-file transaction capabilities as if
 the current CLI already supplied them.
 
 The wider repository has already accepted native SwiftUI/AppKit and
-Kotlin/Compose shells over shared Rust logic in ADR 0001. The converter crate is
-currently a Rust library plus CLI, but it does not yet expose a stable UniFFI or
-C ABI designed for a UI.
+Kotlin/Compose shells over shared Rust logic in ADR 0001. That remains the
+cloud synchronization client's `save-client` and UniFFI Kotlin/Swift bridge
+decision. The converter crate is currently a Rust library plus CLI, but it does
+not yet expose a stable UniFFI or C ABI designed for a converter UI.
 
 ## Options
 
@@ -65,11 +66,15 @@ macOS and a standalone C#/.NET 8 WinUI 3 application on Windows. Each packages
 `mh3g-save-convert`, launches it through a strict argv array, and consumes its
 machine-readable JSON. Android is deferred.
 
+The converter UI defaults to the system language. Its settings provide a
+persisted locale override between Simplified Chinese and English.
+
 Advantages:
 
 - Best platform-native file pickers, accessibility, window behavior, and
   signing integration.
-- Matches ADR 0001 without an exception.
+- Respects ADR 0001's native-shell/WebView boundary while leaving its cloud-sync
+  `save-client` UniFFI Kotlin/Swift bridge unchanged.
 - Avoids Vue, WebView, Tauri, and Electron in the converter UI.
 - Keeps converter, transaction, backup, and rollback logic in one bundled CLI.
 
@@ -108,7 +113,9 @@ This is not recommended for the current repository.
    profiles, hashes, files to be modified, backup paths, manifest paths, and
    structured error codes. The desktop shells launch only the bundled
    `mh3g-save-convert` through strict argv arrays and consume this JSON; they do
-   not use a Rust UI bridge or reimplement backend operations.
+   not use a converter Rust UI bridge or reimplement backend operations. This
+   converter-only contract does not supersede ADR 0001's cloud-sync UniFFI
+   Kotlin/Swift bridge.
 2. Implement backend prerequisites before exposing Write: native Windows
    fail-closed emulator-process detection, a backend-issued dry-run hash
    authorization, and transactional ExtData batches. `card1`/`card2`/`card3`/
@@ -174,6 +181,9 @@ any write.
 - UI tests must prove that deselected component groups do not reach the write
   plan, neither ExtData group can be partially selected, and Write remains
   disabled until dry-run hash authorization succeeds.
+- Localization acceptance must include complete Simplified Chinese and English
+  resources, tests for the system-language default, and a persisted settings
+  locale override.
 - Windows tests must start a supported emulator-named process and prove that
   writes and rollback fail closed before touching any target.
 - Batch-install tests must inject a failure after at least one selected

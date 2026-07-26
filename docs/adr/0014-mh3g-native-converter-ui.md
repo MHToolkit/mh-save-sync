@@ -45,9 +45,23 @@ transaction handling, backup creation, manifest construction, or rollback.
 Those behaviors remain in the bundled converter process; a UI may display its
 JSON plan and error results but may not substitute its own file operations.
 
+### Bridge scope
+
+This CLI-plus-JSON process boundary applies only to the bundled
+`mh3g-save-convert` foreground converter UI. It does not modify or supersede
+ADR 0001's cloud synchronization client decision: that client retains its
+shared Rust `save-client` core and its UniFFI Kotlin/Swift bridge (or the
+separately approved narrow C ABI fallback).
+
 Android is deferred until the desktop flow is stable and device connectivity is
 proven. Android's Storage Access Framework and delivery model need a separate
 decision. MCP is not part of version 0.1 and is not implemented by this ADR.
+
+### Language
+
+Both native applications default to the system language. Their settings must
+provide a persisted locale override for Simplified Chinese and English, so a
+user can switch between the two without changing the operating-system setting.
 
 ### Backend safety prerequisites
 
@@ -84,9 +98,10 @@ cost. It does not reduce the need for per-platform write safety or signing.
 
 ### Shared Rust UI bridge
 
-Direct UniFFI or C ABI calls would make the UI a second integration surface for
-transactional behavior. The CLI plus JSON contract is the single process
-boundary for phase1-alpha instead.
+Direct UniFFI or C ABI calls for this converter UI would make it a second
+integration surface for transactional behavior. The CLI plus JSON contract is
+the single process boundary for this converter in phase1-alpha; this does not
+reject ADR 0001's cloud synchronization client bridge.
 
 ## Security and data-integrity impact
 
@@ -118,4 +133,6 @@ and displays that result.
 Implementation acceptance additionally requires platform tests proving strict
 argv invocation and JSON consumption, Windows fail-closed process probing,
 dry-run hash authorization, and complete group rollback after an injected
-ExtData failure.
+ExtData failure. It also requires complete Simplified Chinese and English
+resources, plus tests proving the system-language default and the settings
+locale override.
