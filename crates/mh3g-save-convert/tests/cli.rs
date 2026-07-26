@@ -39,6 +39,26 @@ fn target_slot(temp: &TempDir, slot: &str) -> PathBuf {
     directory.join(slot)
 }
 
+fn extras_fixture(temp: &TempDir) -> PathBuf {
+    let source_dir = temp.path().join("3ds-extdata");
+    fs::create_dir_all(&source_dir).unwrap();
+    for (component, size) in [
+        ("card1", 0x58_000),
+        ("card2", 0x58_000),
+        ("card3", 0x58_000),
+        ("cardbox", 0x30_000),
+        ("quest1", 0x29_000),
+        ("quest2", 0x29_000),
+        ("quest3", 0x29_000),
+        ("quest4", 0x29_000),
+    ] {
+        let mut bytes = vec![0_u8; size];
+        bytes[..4].copy_from_slice(&[0x2B, 0, 0, 0]);
+        fs::write(source_dir.join(component), bytes).unwrap();
+    }
+    source_dir
+}
+
 fn write_source(path: PathBuf) -> PathBuf {
     let mut bytes = vec![0_u8; THREE_DS_SIZE];
     bytes[..4].copy_from_slice(&[0x2B, 0, 0, 0]);
@@ -411,6 +431,158 @@ fn invalid_paths_fail_with_one_concise_error_line() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stderr.split(|byte| *byte == b'\n').count(), 2);
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn inspect_read_failure_identifies_the_source_path_and_operation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("missing-user2");
+    let output = binary()
+        .args(["inspect", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("I/O error while reading source save"));
+    assert!(stderr.contains(source.to_str().unwrap()));
+}
+
+#[test]
+fn convert_write_failure_identifies_the_output_path_and_operation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let occupied_parent = temp.path().join("not-a-directory");
+    fs::write(&occupied_parent, b"not a directory").unwrap();
+    let output_path = occupied_parent.join("user2");
+    let output = binary()
+        .args([
+            "convert",
+            source.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+            "--write",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lock_path = occupied_parent.join(".user2.mh3g-install.lock");
+    assert!(stderr.contains("I/O error while creating save install lock"));
+    assert!(stderr.contains(lock_path.to_str().unwrap()));
+}
+
+#[test]
+fn progress_and_event_read_failures_identify_the_source_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("user2");
+
+    for command in ["inspect-progress", "inspect-events"] {
+        let output = binary()
+            .args([command, source.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "command: {command}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("I/O error while reading source save"),
+            "command: {command}; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains(source.to_str().unwrap()),
+            "command: {command}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn cec_commands_identify_the_actual_failed_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = cec_fixture(&temp);
+    let target = temp.path().join("cec");
+    fs::create_dir(&target).unwrap();
+
+    for command in ["inspect-cec", "convert-cec"] {
+        let output = binary()
+            .args([
+                command,
+                "--source-dir",
+                source.to_str().unwrap(),
+                "--target",
+                target.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "command: {command}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("I/O error while reading Cemu CEC target"),
+            "command: {command}; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains(target.to_str().unwrap()),
+            "command: {command}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn rollback_commands_identify_the_manifest_path() {
+    let temp = tempfile::tempdir().unwrap();
+    for (command, manifest_name, operation) in [
+        (
+            "rollback",
+            ".user2.mh3g-install.json",
+            "reading rollback manifest metadata",
+        ),
+        (
+            "rollback-cec",
+            ".cec.mh3g-install.json",
+            "reading CEC rollback manifest",
+        ),
+    ] {
+        let manifest = temp.path().join(manifest_name);
+        let output = binary()
+            .args([command, "--manifest", manifest.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "command: {command}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("I/O error while {operation}")),
+            "command: {command}; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains(manifest.to_str().unwrap()),
+            "command: {command}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn convert_extras_write_failure_identifies_the_output_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = extras_fixture(&temp);
+    let occupied_parent = temp.path().join("not-a-directory");
+    fs::write(&occupied_parent, b"not a directory").unwrap();
+    let output_dir = occupied_parent.join("extras");
+    let output = binary()
+        .args([
+            "convert-extras",
+            "--source-dir",
+            source.to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+            "--write",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("I/O error while creating extra-data output directory"));
+    assert!(stderr.contains(output_dir.to_str().unwrap()));
 }
 
 #[test]

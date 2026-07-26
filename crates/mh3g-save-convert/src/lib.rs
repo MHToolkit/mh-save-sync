@@ -1,3 +1,8 @@
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
+
 pub mod cec;
 pub mod converter;
 pub mod events;
@@ -15,10 +20,29 @@ pub enum ConversionError {
     InvalidSave(String),
     #[error("unsafe install refused: {0}")]
     UnsafeInstall(String),
+    #[error("I/O error while {operation} `{}`: {source}", path.display())]
+    IoAtPath {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+pub fn io_at_path<T>(
+    result: io::Result<T>,
+    operation: &'static str,
+    path: &Path,
+) -> Result<T, ConversionError> {
+    result.map_err(|source| ConversionError::IoAtPath {
+        operation,
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]

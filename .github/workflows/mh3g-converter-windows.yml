@@ -9,6 +9,7 @@ on:
       - Cargo.lock
       - crates/mh3g-save-convert/**
       - README.md
+      - scripts/mh3g-windows-launcher.ps1
       - .github/workflows/mh3g-converter-windows.yml
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - Cargo.lock
       - crates/mh3g-save-convert/**
       - README.md
+      - scripts/mh3g-windows-launcher.ps1
       - .github/workflows/mh3g-converter-windows.yml
 
 permissions:
@@ -51,17 +53,35 @@ jobs:
           $stage = "artifacts/mh3g-save-convert-windows-x64"
           $archive = "artifacts/mh3g-save-convert-windows-x64.zip"
           $checksum = "artifacts/mh3g-save-convert-windows-x64.zip.sha256"
+          $exeChecksum = "artifacts/mh3g-save-convert.exe.sha256"
+          Remove-Item $stage, $archive, $checksum, $exeChecksum -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item "target/release/mh3g-save-convert.exe" "$stage/mh3g-save-convert.exe"
+          Copy-Item "scripts/mh3g-windows-launcher.ps1" "$stage/Run-Converter.ps1"
+          $exeHash = (Get-FileHash -Algorithm SHA256 "$stage/mh3g-save-convert.exe").Hash.ToLowerInvariant()
+          "$exeHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$stage/mh3g-save-convert.exe.sha256"
+          Copy-Item "$stage/mh3g-save-convert.exe.sha256" $exeChecksum
           @'
           MH3G Japanese 3DS -> Wii U/Cemu save converter for Windows x64
 
           This package supports the Japanese MH3G profile only.
+          Extract the complete folder to a normal local directory first. Do not
+          run the EXE inside the ZIP or from a QQ/browser archive preview.
+
+          In PowerShell, verify that the converter starts:
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 --help
+
+          Run-Converter.ps1 verifies mh3g-save-convert.exe.sha256 before launch,
+          then removes Mark-of-the-Web from the hash-pinned executable.
+
           Start with a read-only check:
-            .\mh3g-save-convert.exe inspect <3DS-user1-user2-or-user3>
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 inspect <3DS-user1-user2-or-user3>
 
           Before any --write or rollback, fully exit Cemu, Azahar and Nemessix.
           Always run convert --dry-run before --write. The source save is never modified.
+          If Windows application control still blocks the unsigned EXE, an administrator
+          must allow this SHA-256-pinned artifact; the launcher does not bypass that policy.
+          If the CLI reports an I/O error, keep the complete operation and path from that line.
           See the repository README for the complete backup, dry-run and rollback procedure.
           '@ | Set-Content -NoNewline -Encoding utf8 "$stage/README-Windows.txt"
           Compress-Archive -Path $stage -DestinationPath $archive -Force
@@ -72,6 +92,67 @@ jobs:
           if (-not (Test-Path "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe")) {
             throw "packaged executable is missing"
           }
+          $launcher = "$verifyDir/mh3g-save-convert-windows-x64/Run-Converter.ps1"
+          $packagedExe = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe"
+          $packagedExeChecksum = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe.sha256"
+          if (-not (Test-Path $launcher)) {
+            throw "packaged launcher is missing"
+          }
+          if (-not (Test-Path $packagedExeChecksum)) {
+            throw "packaged executable checksum is missing"
+          }
+          $expectedExeHash = ((Get-Content -LiteralPath $packagedExeChecksum -Raw).Trim() -split '\s+')[0]
+          $actualExeHash = (Get-FileHash -Algorithm SHA256 $packagedExe).Hash.ToLowerInvariant()
+          if ($actualExeHash -ne $expectedExeHash -or $actualExeHash -ne $exeHash) {
+            throw "packaged executable checksum verification failed"
+          }
+          Set-Content -Path "${packagedExe}:Zone.Identifier" -Encoding ascii -Value "[ZoneTransfer]`r`nZoneId=3"
+          if (-not (Get-Item -LiteralPath $packagedExe -Stream Zone.Identifier -ErrorAction SilentlyContinue)) {
+            throw "failed to attach Mark-of-the-Web test stream"
+          }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher --help
+          if ($LASTEXITCODE -ne 0) {
+            throw "packaged launcher smoke check failed with exit code $LASTEXITCODE"
+          }
+          if (Get-Item -LiteralPath $packagedExe -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+            throw "packaged launcher did not remove Mark-of-the-Web"
+          }
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "mh3g-converter-write-smoke"
+          $smokeSourceDir = Join-Path $smokeRoot "source"
+          $smokeTargetDir = Join-Path $smokeRoot "target"
+          Remove-Item $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $smokeSourceDir, $smokeTargetDir | Out-Null
+          $smokeSource = Join-Path $smokeSourceDir "user2"
+          $smokeTarget = Join-Path $smokeTargetDir "user2"
+          $sourceBytes = [byte[]]::new(0x8A00)
+          $sourceBytes[0] = 0x2B
+          [System.IO.File]::WriteAllBytes($smokeSource, $sourceBytes)
+          $previousBytes = [byte[]]::new(0x8A24)
+          $previousBytes[0] = 0xA5
+          [System.IO.File]::WriteAllBytes($smokeTarget, $previousBytes)
+          $sourceHashBefore = (Get-FileHash -Algorithm SHA256 $smokeSource).Hash
+          $targetHashBefore = (Get-FileHash -Algorithm SHA256 $smokeTarget).Hash
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher convert $smokeSource --output $smokeTarget --write
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $smokeTarget)) {
+            throw "packaged launcher write smoke failed with exit code $LASTEXITCODE"
+          }
+          $smokeManifest = Join-Path $smokeTargetDir ".user2.mh3g-install.json"
+          $smokeBackups = @(Get-ChildItem -LiteralPath $smokeTargetDir -Filter ".user2.mh3g-backup-*")
+          if (-not (Test-Path $smokeManifest) -or $smokeBackups.Count -ne 1) {
+            throw "packaged launcher did not create exactly one manifest and backup"
+          }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher rollback --manifest $smokeManifest
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $smokeTarget) -or (Test-Path $smokeManifest)) {
+            throw "packaged launcher rollback smoke failed with exit code $LASTEXITCODE"
+          }
+          if (@(Get-ChildItem -LiteralPath $smokeTargetDir -Filter ".user2.mh3g-backup-*").Count -ne 0) {
+            throw "packaged launcher rollback left a backup behind"
+          }
+          $sourceHashAfter = (Get-FileHash -Algorithm SHA256 $smokeSource).Hash
+          $targetHashAfter = (Get-FileHash -Algorithm SHA256 $smokeTarget).Hash
+          if ($sourceHashAfter -ne $sourceHashBefore -or $targetHashAfter -ne $targetHashBefore) {
+            throw "packaged launcher write/rollback changed the source or failed to restore the target"
+          }
           if ((Get-Item $archive).Length -le 0) {
             throw "archive is empty"
           }
@@ -81,5 +162,6 @@ jobs:
           path: |
             artifacts/mh3g-save-convert-windows-x64.zip
             artifacts/mh3g-save-convert-windows-x64.zip.sha256
+            artifacts/mh3g-save-convert.exe.sha256
           if-no-files-found: error
           retention-days: 30

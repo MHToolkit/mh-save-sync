@@ -14,6 +14,7 @@ use mh3g_save_convert::{
         reset_guild_card_component_to_cemu_named,
     },
     events::event_snapshot,
+    io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
     transaction::{install, manifest_path_for_target, rollback, sha256_hex},
@@ -370,7 +371,9 @@ fn convert_cec(
     let target_bytes = match fs::read(&target) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_cemu_cec()?,
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return io_at_path(Err(error), "reading Cemu CEC target", &target);
+        }
     };
     let conversion = convert_cec_records(&source_dir, &target_bytes, slot)?;
     let source_record_sha256 = conversion
@@ -405,13 +408,13 @@ fn inspect_progress(
     quest_id: Option<u16>,
 ) -> Result<ProgressReport, ConversionError> {
     validate_slot_path(&source)?;
-    let source_bytes = fs::read(&source)?;
+    let source_bytes = read_file(&source, "reading source save")?;
     let source_inspection = inspect_bytes(&source_bytes)?;
     let source_progress = quest_progress(&source_bytes)?;
 
     let (target_inspection, target_progress) = if let Some(path) = target.as_ref() {
         validate_slot_path(path)?;
-        let bytes = fs::read(path)?;
+        let bytes = read_file(path, "reading comparison save")?;
         (Some(inspect_bytes(&bytes)?), Some(quest_progress(&bytes)?))
     } else {
         (None, None)
@@ -475,14 +478,14 @@ fn inspect_events(
     all: bool,
 ) -> Result<EventReport, ConversionError> {
     validate_slot_path(&source)?;
-    let source_bytes = fs::read(&source)?;
+    let source_bytes = read_file(&source, "reading source save")?;
     let source_inspection = inspect_bytes(&source_bytes)?;
     let compare_all = all || target.is_some();
     let source_events = event_snapshot(&source_bytes, compare_all)?;
 
     let (target_inspection, target_events) = if let Some(path) = target.as_ref() {
         validate_slot_path(path)?;
-        let bytes = fs::read(path)?;
+        let bytes = read_file(path, "reading comparison save")?;
         (
             Some(inspect_bytes(&bytes)?),
             Some(event_snapshot(&bytes, true)?),
@@ -551,7 +554,7 @@ fn inspect_events(
 }
 
 fn inspect(source: PathBuf) -> Result<Report, ConversionError> {
-    let source_bytes = fs::read(source)?;
+    let source_bytes = read_file(&source, "reading source save")?;
     let inspection = inspect_bytes(&source_bytes)?;
     Ok(Report {
         profile: Some(inspection.profile),
@@ -624,7 +627,7 @@ fn convert_component(
         )));
     }
 
-    let source_bytes = fs::read(source)?;
+    let source_bytes = read_file(&source, "reading source save")?;
     let source_inspection = inspect_bytes(&source_bytes)?;
     if source_inspection.profile != expected_source_profile {
         return Err(ConversionError::InvalidSave(format!(
@@ -666,6 +669,10 @@ fn convert_component(
     Ok(report)
 }
 
+fn read_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, ConversionError> {
+    io_at_path(fs::read(path), operation, path)
+}
+
 fn convert_extras(
     source_dir: PathBuf,
     output_dir: PathBuf,
@@ -696,7 +703,7 @@ fn convert_extras(
                 source.display()
             )));
         }
-        let source_bytes = fs::read(&source)?;
+        let source_bytes = read_file(&source, "reading 3DS extra-data component")?;
         let output_bytes =
             if reset_guild_cards && matches!(component, "card1" | "card2" | "card3" | "cardbox") {
                 reset_guild_card_component_to_cemu_named(&source_bytes, component)?
@@ -736,9 +743,17 @@ fn convert_extras(
         .collect();
 
     if write {
-        fs::create_dir_all(&output_dir)?;
+        io_at_path(
+            fs::create_dir_all(&output_dir),
+            "creating extra-data output directory",
+            &output_dir,
+        )?;
         for ((_, _, output_bytes), output) in converted.iter().zip(output_paths.iter()) {
-            fs::write(output, output_bytes)?;
+            io_at_path(
+                fs::write(output, output_bytes),
+                "writing converted extra-data component",
+                output,
+            )?;
         }
     } else {
         debug_assert!(dry_run || !write);

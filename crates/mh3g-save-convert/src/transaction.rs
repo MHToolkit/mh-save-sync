@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     ConversionError,
     converter::convert_source_to_cemu,
+    io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_save_component_path},
 };
 
@@ -73,23 +74,35 @@ impl ProcessProbe for MacOsProcessProbe {
         #[cfg(target_os = "macos")]
         {
             for name in GUARDED_PROCESS_NAMES {
-                let status = Command::new("pgrep")
-                    .args(["-x", name])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()?;
+                let status = io_at_path(
+                    Command::new("pgrep")
+                        .args(["-x", name])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status(),
+                    "running emulator process probe",
+                    Path::new("pgrep"),
+                )?;
                 match status.code() {
                     Some(0) => return Ok(Some(name.to_owned())),
                     Some(1) => {}
                     Some(code) => {
-                        return Err(ConversionError::Io(std::io::Error::other(format!(
-                            "pgrep -x {name} exited with status {code}"
-                        ))));
+                        return Err(ConversionError::IoAtPath {
+                            operation: "running emulator process probe",
+                            path: PathBuf::from("pgrep"),
+                            source: std::io::Error::other(format!(
+                                "pgrep -x {name} exited with status {code}"
+                            )),
+                        });
                     }
                     None => {
-                        return Err(ConversionError::Io(std::io::Error::other(format!(
-                            "pgrep -x {name} terminated by signal"
-                        ))));
+                        return Err(ConversionError::IoAtPath {
+                            operation: "running emulator process probe",
+                            path: PathBuf::from("pgrep"),
+                            source: std::io::Error::other(format!(
+                                "pgrep -x {name} terminated by signal"
+                            )),
+                        });
                     }
                 }
             }
@@ -141,14 +154,16 @@ impl SlotInstallLock {
                     path.display()
                 )));
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return io_at_path(Err(error), "creating save install lock", &path);
+            }
         };
         if let Err(error) =
             writeln!(file, "pid={}", std::process::id()).and_then(|_| file.sync_all())
         {
             drop(file);
             let _ = fs::remove_file(&path);
-            return Err(error.into());
+            return io_at_path(Err(error), "writing save install lock", &path);
         }
         Ok(Self { path, _file: file })
     }
@@ -239,12 +254,12 @@ pub fn install_with_publisher(
 
     let source_sha256 = sha256_hex(source);
     let installed_sha256 = sha256_hex(installed);
-    let target_previously_existed = target.exists();
-    let previous = if target_previously_existed {
-        Some(fs::read(&target)?)
-    } else {
-        None
+    let previous = match fs::read(&target) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return io_at_path(Err(error), "reading existing target save", &target),
     };
+    let target_previously_existed = previous.is_some();
     let previous_sha256 = previous.as_deref().map(sha256_hex);
     let backup = previous_sha256
         .as_deref()
@@ -267,14 +282,22 @@ pub fn install_with_publisher(
         }
 
         write_new_file(&temporary, installed)?;
-        let staged = fs::read(&temporary)?;
+        let staged = io_at_path(
+            fs::read(&temporary),
+            "reading staged converted save",
+            &temporary,
+        )?;
         if staged != installed {
             return Err(ConversionError::InvalidSave(
                 "staged save bytes do not match the requested installation".to_owned(),
             ));
         }
         validator.validate(&staged)?;
-        fs::rename(&temporary, &target)?;
+        io_at_path(
+            fs::rename(&temporary, &target),
+            "installing staged converted save",
+            &target,
+        )?;
         target_installed = true;
         sync_directory(parent_dir(&target))?;
 
@@ -366,13 +389,22 @@ pub fn rollback_with(
     }
 
     let manifest_path = normalize_path(manifest_path.as_ref())?;
-    let manifest_metadata = fs::symlink_metadata(&manifest_path)?;
+    let manifest_metadata = io_at_path(
+        fs::symlink_metadata(&manifest_path),
+        "reading rollback manifest metadata",
+        &manifest_path,
+    )?;
     if !manifest_metadata.file_type().is_file() {
         return Err(ConversionError::InvalidSave(
             "rollback manifest must be a regular file".to_owned(),
         ));
     }
-    let manifest: InstallManifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+    let manifest_bytes = io_at_path(
+        fs::read(&manifest_path),
+        "reading rollback manifest",
+        &manifest_path,
+    )?;
+    let manifest: InstallManifest = serde_json::from_slice(&manifest_bytes)?;
     if manifest.version != INSTALL_MANIFEST_VERSION {
         return Err(ConversionError::InvalidSave(format!(
             "unsupported install manifest version: {}",
@@ -391,11 +423,7 @@ pub fn rollback_with(
     let current = match fs::read(&target) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(ConversionError::InvalidSave(format!(
-                "cannot read rollback target: {error}"
-            )));
-        }
+        Err(error) => return io_at_path(Err(error), "reading rollback target", &target),
     };
     let current_sha256 = current.as_deref().map(sha256_hex);
 
@@ -418,38 +446,43 @@ pub fn rollback_with(
             }
             match current_sha256.as_deref() {
                 Some(hash) if hash == manifest.installed_sha256 => {
-                    let backup_metadata = fs::symlink_metadata(backup).map_err(|error| {
-                        ConversionError::InvalidSave(format!(
-                            "cannot read rollback backup metadata: {error}"
-                        ))
-                    })?;
+                    let backup_metadata = io_at_path(
+                        fs::symlink_metadata(backup),
+                        "reading rollback backup metadata",
+                        backup,
+                    )?;
                     if !backup_metadata.file_type().is_file() {
                         return Err(ConversionError::InvalidSave(
                             "rollback backup must be a regular non-symlink file".to_owned(),
                         ));
                     }
-                    let previous = fs::read(backup).map_err(|error| {
-                        ConversionError::InvalidSave(format!(
-                            "cannot read rollback backup: {error}"
-                        ))
-                    })?;
+                    let previous = io_at_path(fs::read(backup), "reading rollback backup", backup)?;
                     if sha256_hex(&previous) != *previous_sha256 {
                         return Err(ConversionError::InvalidSave(
                             "rollback backup hash does not match manifest".to_owned(),
                         ));
                     }
                     atomic_replace(&target, &previous)?;
-                    fs::remove_file(backup)?;
+                    io_at_path(
+                        fs::remove_file(backup),
+                        "removing consumed rollback backup",
+                        backup,
+                    )?;
                 }
                 Some(hash) if hash == previous_sha256 => match fs::symlink_metadata(backup) {
                     Ok(metadata) if metadata.file_type().is_file() => {
-                        let previous = fs::read(backup)?;
+                        let previous =
+                            io_at_path(fs::read(backup), "reading rollback backup", backup)?;
                         if sha256_hex(&previous) != *previous_sha256 {
                             return Err(ConversionError::InvalidSave(
                                 "rollback backup hash does not match manifest".to_owned(),
                             ));
                         }
-                        fs::remove_file(backup)?;
+                        io_at_path(
+                            fs::remove_file(backup),
+                            "removing consumed rollback backup",
+                            backup,
+                        )?;
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Ok(_) => {
@@ -457,7 +490,9 @@ pub fn rollback_with(
                             "rollback backup must be a regular non-symlink file".to_owned(),
                         ));
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => {
+                        return io_at_path(Err(error), "reading rollback backup metadata", backup);
+                    }
                 },
                 _ => {
                     return Err(ConversionError::InvalidSave(
@@ -482,7 +517,11 @@ pub fn rollback_with(
         }
     }
 
-    fs::remove_file(&manifest_path)?;
+    io_at_path(
+        fs::remove_file(&manifest_path),
+        "removing consumed rollback manifest",
+        &manifest_path,
+    )?;
     sync_directory(parent_dir(&manifest_path))?;
     Ok(())
 }
@@ -507,7 +546,13 @@ fn existing_manifest_for_reinstall(
     let metadata = match fs::symlink_metadata(manifest_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return io_at_path(
+                Err(error),
+                "reading existing install manifest metadata",
+                manifest_path,
+            );
+        }
     };
     if !metadata.file_type().is_file() {
         return Err(ConversionError::InvalidSave(
@@ -515,7 +560,11 @@ fn existing_manifest_for_reinstall(
         ));
     }
 
-    let bytes = fs::read(manifest_path)?;
+    let bytes = io_at_path(
+        fs::read(manifest_path),
+        "reading existing install manifest",
+        manifest_path,
+    )?;
     let manifest: InstallManifest = serde_json::from_slice(&bytes).map_err(|error| {
         ConversionError::InvalidSave(format!("existing install manifest is invalid: {error}"))
     })?;
@@ -524,7 +573,12 @@ fn existing_manifest_for_reinstall(
     let history_path = install_history_path_for(target, &bytes)?;
     match fs::symlink_metadata(&history_path) {
         Ok(history_metadata) if history_metadata.file_type().is_file() => {
-            if fs::read(&history_path)? != bytes {
+            if io_at_path(
+                fs::read(&history_path),
+                "reading existing install history",
+                &history_path,
+            )? != bytes
+            {
                 return Err(ConversionError::InvalidSave(
                     "existing install history would be overwritten".to_owned(),
                 ));
@@ -536,7 +590,13 @@ fn existing_manifest_for_reinstall(
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return io_at_path(
+                Err(error),
+                "reading install history metadata",
+                &history_path,
+            );
+        }
     }
 
     Ok(Some(ExistingInstallManifest {
@@ -581,17 +641,19 @@ fn validate_existing_manifest(
                     "existing install manifest backup is not the controlled backup path".to_owned(),
                 ));
             }
-            let backup_metadata = fs::symlink_metadata(backup).map_err(|error| {
-                ConversionError::InvalidSave(format!(
-                    "cannot read existing install backup metadata: {error}"
-                ))
-            })?;
+            let backup_metadata = io_at_path(
+                fs::symlink_metadata(backup),
+                "reading existing install backup metadata",
+                backup,
+            )?;
             if !backup_metadata.file_type().is_file() {
                 return Err(ConversionError::InvalidSave(
                     "existing install backup must be a regular non-symlink file".to_owned(),
                 ));
             }
-            if sha256_hex(&fs::read(backup)?) != *previous_sha256 {
+            let backup_bytes =
+                io_at_path(fs::read(backup), "reading existing install backup", backup)?;
+            if sha256_hex(&backup_bytes) != *previous_sha256 {
                 return Err(ConversionError::InvalidSave(
                     "existing install backup hash does not match its manifest".to_owned(),
                 ));
@@ -610,7 +672,12 @@ fn validate_existing_manifest(
 fn archive_existing_manifest(existing: &ExistingInstallManifest) -> Result<bool, ConversionError> {
     match fs::symlink_metadata(&existing.history_path) {
         Ok(metadata) if metadata.file_type().is_file() => {
-            if fs::read(&existing.history_path)? == existing.bytes {
+            if io_at_path(
+                fs::read(&existing.history_path),
+                "reading existing install history",
+                &existing.history_path,
+            )? == existing.bytes
+            {
                 Ok(false)
             } else {
                 Err(ConversionError::InvalidSave(
@@ -626,7 +693,11 @@ fn archive_existing_manifest(existing: &ExistingInstallManifest) -> Result<bool,
             sync_directory(parent_dir(&existing.history_path))?;
             Ok(true)
         }
-        Err(error) => Err(error.into()),
+        Err(error) => io_at_path(
+            Err(error),
+            "reading existing install history metadata",
+            &existing.history_path,
+        ),
     }
 }
 
@@ -646,11 +717,14 @@ fn validate_transaction_paths(
 ) -> Result<(PathBuf, PathBuf), ConversionError> {
     let (target, manifest_path) = normalize_bound_paths(target, manifest_path)?;
     validate_save_component_path(&target)?;
-    if target
-        .symlink_metadata()
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
-    {
+    let target_is_symlink = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return io_at_path(Err(error), "reading save target metadata", &target);
+        }
+    };
+    if target_is_symlink {
         return Err(ConversionError::InvalidSave(
             "save slot path cannot be a symlink".to_owned(),
         ));
@@ -692,7 +766,13 @@ fn normalize_path(path: &Path) -> Result<PathBuf, ConversionError> {
     let basename = path.file_name().ok_or_else(|| {
         ConversionError::InvalidSave(format!("path must name a file: {}", path.display()))
     })?;
-    Ok(fs::canonicalize(parent_dir(path))?.join(basename))
+    let parent = parent_dir(path);
+    Ok(io_at_path(
+        fs::canonicalize(parent),
+        "resolving save component parent directory",
+        parent,
+    )?
+    .join(basename))
 }
 
 fn manifest_path_for_normalized_target(target: &Path) -> Result<PathBuf, ConversionError> {
@@ -759,12 +839,31 @@ fn install_history_path_for(
     )))
 }
 
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+pub(crate) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+    let mut file = io_at_path(
+        OpenOptions::new().write(true).create_new(true).open(path),
+        "creating transaction file",
+        path,
+    )?;
     if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
         drop(file);
-        let _ = fs::remove_file(path);
-        return Err(error.into());
+        let write_error = io_at_path::<()>(Err(error), "writing transaction file", path)
+            .expect_err("an explicit I/O error cannot succeed");
+        return match fs::remove_file(path) {
+            Ok(()) => Err(write_error),
+            Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
+                Err(write_error)
+            }
+            Err(cleanup_error) => Err(ConversionError::UnsafeInstall(format!(
+                "transaction file write failed: {write_error}; cleanup also failed: {}",
+                io_at_path::<()>(
+                    Err(cleanup_error),
+                    "removing incomplete transaction file",
+                    path,
+                )
+                .expect_err("an explicit I/O error cannot succeed")
+            ))),
+        };
     }
     Ok(())
 }
@@ -772,9 +871,13 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
 fn write_manifest(path: &Path, manifest: &InstallManifest) -> Result<(), ConversionError> {
     let temporary = unique_path(path, "manifest-tmp");
     let bytes = serde_json::to_vec_pretty(manifest)?;
-    match write_new_file(&temporary, &bytes)
-        .and_then(|_| fs::rename(&temporary, path).map_err(Into::into))
-    {
+    match write_new_file(&temporary, &bytes).and_then(|_| {
+        io_at_path(
+            fs::rename(&temporary, path),
+            "publishing install manifest",
+            path,
+        )
+    }) {
         Ok(()) => Ok(()),
         Err(error) => {
             let _ = fs::remove_file(&temporary);
@@ -783,12 +886,12 @@ fn write_manifest(path: &Path, manifest: &InstallManifest) -> Result<(), Convers
     }
 }
 
-fn atomic_replace(target: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+pub(crate) fn atomic_replace(target: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
     let temporary = unique_path(target, "restore-tmp");
     write_new_file(&temporary, bytes)?;
     if let Err(error) = fs::rename(&temporary, target) {
         let _ = fs::remove_file(&temporary);
-        return Err(error.into());
+        return io_at_path(Err(error), "restoring transaction target", target);
     }
     sync_directory(parent_dir(target))
 }
@@ -800,23 +903,38 @@ fn parent_dir(path: &Path) -> &Path {
     }
 }
 
-fn remove_if_regular_file(path: &Path) -> Result<(), ConversionError> {
+pub(crate) fn remove_if_regular_file(path: &Path) -> Result<(), ConversionError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_file() => Ok(fs::remove_file(path)?),
+        Ok(metadata) if metadata.file_type().is_file() => {
+            io_at_path(fs::remove_file(path), "removing transaction file", path)
+        }
         Ok(_) => Err(ConversionError::InvalidSave(
             "rollback target is not a regular file".to_owned(),
         )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
+        Err(error) => io_at_path(Err(error), "reading transaction file metadata", path),
     }
 }
 
-fn sync_directory(path: &Path) -> Result<(), ConversionError> {
-    File::open(path)?.sync_all()?;
+#[cfg(not(windows))]
+pub(crate) fn sync_directory(path: &Path) -> Result<(), ConversionError> {
+    let directory = io_at_path(
+        File::open(path),
+        "opening transaction directory for sync",
+        path,
+    )?;
+    io_at_path(directory.sync_all(), "syncing transaction directory", path)?;
     Ok(())
 }
 
-fn unique_path(base: &Path, kind: &str) -> PathBuf {
+#[cfg(windows)]
+pub(crate) fn sync_directory(_path: &Path) -> Result<(), ConversionError> {
+    // std::fs cannot open a Windows directory for FlushFileBuffers and returns
+    // ERROR_ACCESS_DENIED. Transaction files are synced before atomic rename.
+    Ok(())
+}
+
+pub(crate) fn unique_path(base: &Path, kind: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -850,6 +968,14 @@ mod tests {
     };
 
     struct Stopped;
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_sync_does_not_open_windows_directories_as_files() {
+        let temp = tempfile::tempdir().unwrap();
+
+        super::sync_directory(temp.path()).unwrap();
+    }
 
     impl ProcessProbe for Stopped {
         fn matching_process(&self) -> Result<Option<String>, ConversionError> {
