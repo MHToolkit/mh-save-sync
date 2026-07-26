@@ -4,6 +4,10 @@ import ConverterPresentation
 struct InputInspectionView: View {
     @Bindable var workflow: ConversionWorkflow
     let language: ConverterLanguage
+    @Binding var navigation: ConverterNavigation?
+    @State private var slot: SaveSlot = .user2
+    @State private var sourceSelection: URL?
+    @State private var targetSelection: URL?
     @State private var source: URL?
     @State private var target: URL?
     @State private var selectionError: String?
@@ -13,13 +17,22 @@ struct InputInspectionView: View {
         WorkbenchPage(
             artwork: .inputRoute,
             title: ConverterCopy.text("Navigation.Input", language: language),
-            subtitle: ConverterCopy.text("DryRun.NotAuthorized", language: language)
+            subtitle: ConverterCopy.text("Input.Subtitle", language: language)
         ) {
             Form {
                 Section {
+                    Picker(ConverterCopy.text("Input.Slot", language: language), selection: $slot) {
+                        ForEach(SaveSlot.allCases) { slot in
+                            Text(slot.rawValue).tag(slot)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: slot) { _, _ in
+                        resolveSelections()
+                    }
                     SelectedPathRow(
                         title: ConverterCopy.text("Input.Source", language: language),
-                        value: source ?? workflow.input?.source,
+                        value: source,
                         chooseTitle: ConverterCopy.text("Input.Select", language: language)
                     ) {
                         chooseSource()
@@ -30,6 +43,23 @@ struct InputInspectionView: View {
                         chooseTitle: ConverterCopy.text("Input.Select", language: language)
                     ) {
                         chooseTarget()
+                    }
+                    if let target {
+                        LabeledContent(ConverterCopy.text("Input.FinalOutput", language: language)) {
+                            HStack(spacing: 6) {
+                                Image(systemName: FileManager.default.fileExists(atPath: target.path) ? "externaldrive.fill" : "arrow.down.doc")
+                                    .foregroundStyle(.secondary)
+                                Text(target.path)
+                                    .font(.caption.monospaced())
+                                    .lineLimit(2)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        if !FileManager.default.fileExists(atPath: target.path) {
+                            Label(ConverterCopy.text("Input.NewOutput", language: language), systemImage: "checkmark.shield")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     HStack {
                         Button(ConverterCopy.text("Input.Inspect", language: language)) {
@@ -44,11 +74,11 @@ struct InputInspectionView: View {
                     }
                 }
 
-                if let sourceInspection = workflow.sourceInspection, let targetInspection = workflow.targetInspection {
+                if let sourceInspection = workflow.sourceInspection {
                     Section(ConverterCopy.text("Input.SHA256", language: language)) {
                         InspectionTable(
                             source: sourceInspection,
-                            target: targetInspection,
+                            target: workflow.targetInspection,
                             language: language
                         )
                     }
@@ -66,6 +96,17 @@ struct InputInspectionView: View {
                         FailureDetails(failure: failure, language: language)
                     }
                 }
+
+                if workflow.sourceInspection != nil, workflow.state == .componentSelection {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.InputComplete",
+                        actionKey: "Guide.ToComponents",
+                        systemImage: "square.stack.3d.up",
+                        language: language
+                    ) {
+                        navigation = .components
+                    }
+                }
             }
             .formStyle(.grouped)
             .disabled(workflow.activeOperation != nil)
@@ -73,37 +114,50 @@ struct InputInspectionView: View {
         .onAppear {
             source = workflow.input?.source
             target = workflow.input?.target
+            sourceSelection = source
+            targetSelection = target
+            if let source, let resolvedSlot = SavePathResolver.slot(for: source) {
+                slot = resolvedSlot
+            }
         }
     }
 
     private var hasInput: Bool { (source ?? workflow.input?.source) != nil && (target ?? workflow.input?.target) != nil }
 
     private func chooseSource() {
-        guard let url = OpenPanel.selectFile(
+        guard let url = OpenPanel.selectFileOrDirectory(
             title: ConverterCopy.text("Input.Source", language: language),
             message: ConverterCopy.text("Input.SourceMessage", language: language)
         ) else { return }
-        guard ["user1", "user2", "user3"].contains(url.lastPathComponent.lowercased()) else {
-            selectionError = ConverterCopy.text("Input.InvalidSlot", language: language)
-            return
+        sourceSelection = url
+        if let selectedSlot = SavePathResolver.slot(for: url) {
+            slot = selectedSlot
         }
-        source = url
-        selectionError = nil
-        updateInput()
+        resolveSelections()
     }
 
     private func chooseTarget() {
-        guard let url = OpenPanel.selectFile(
+        guard let url = OpenPanel.selectFileOrDirectory(
             title: ConverterCopy.text("Input.Target", language: language),
             message: ConverterCopy.text("Input.TargetMessage", language: language)
         ) else { return }
-        guard ["user1", "user2", "user3"].contains(url.lastPathComponent.lowercased()) else {
-            selectionError = ConverterCopy.text("Input.InvalidSlot", language: language)
-            return
+        targetSelection = url
+        resolveSelections()
+    }
+
+    private func resolveSelections() {
+        do {
+            if let sourceSelection {
+                source = try SavePathResolver.resolveSource(selection: sourceSelection, slot: slot)
+            }
+            if let targetSelection {
+                target = try SavePathResolver.resolveTarget(selection: targetSelection, slot: slot)
+            }
+            selectionError = nil
+            updateInput()
+        } catch {
+            selectionError = error.localizedDescription
         }
-        target = url
-        selectionError = nil
-        updateInput()
     }
 
     private func updateInput() {
@@ -122,6 +176,44 @@ struct InputInspectionView: View {
             } catch {
                 selectionError = error.localizedDescription
             }
+        }
+    }
+}
+
+struct WorkflowGuidanceSection: View {
+    let messageKey: String
+    let actionKey: String?
+    let systemImage: String
+    let language: ConverterLanguage
+    let action: (() -> Void)?
+
+    init(
+        messageKey: String,
+        actionKey: String? = nil,
+        systemImage: String,
+        language: ConverterLanguage,
+        action: (() -> Void)? = nil
+    ) {
+        self.messageKey = messageKey
+        self.actionKey = actionKey
+        self.systemImage = systemImage
+        self.language = language
+        self.action = action
+    }
+
+    var body: some View {
+        Section {
+            Label(ConverterCopy.text(messageKey, language: language), systemImage: systemImage)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let actionKey, let action {
+                Button(action: action) {
+                    Label(ConverterCopy.text(actionKey, language: language), systemImage: "arrow.right.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        } header: {
+            Label(ConverterCopy.text("Guide.NextStep", language: language), systemImage: "signpost.right")
         }
     }
 }
@@ -168,22 +260,46 @@ struct SelectedPathRow: View {
 
     var body: some View {
         LabeledContent(title) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(value?.path ?? "—")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(value == nil ? .secondary : .primary)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
+            HStack(alignment: .center, spacing: 8) {
+                if let value {
+                    Image(systemName: icon(for: value))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(value.lastPathComponent)
+                            .lineLimit(1)
+                        Text(value.deletingLastPathComponent().path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .textSelection(.enabled)
+                    }
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                Button(chooseTitle, action: choose)
+                    .help(value.path)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                Button(action: choose) {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .help(chooseTitle)
+                .accessibilityLabel(chooseTitle)
             }
         }
+    }
+
+    private func icon(for url: URL) -> String {
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        return isDirectory.boolValue ? "folder.fill" : "doc.fill"
     }
 }
 
 struct InspectionTable: View {
     let source: InputInspection
-    let target: InputInspection
+    let target: InputInspection?
     let language: ConverterLanguage
 
     var body: some View {
@@ -196,20 +312,33 @@ struct InspectionTable: View {
             GridRow {
                 Text(ConverterCopy.text("Input.Profile", language: language)).foregroundStyle(.secondary)
                 Text(source.profile)
-                Text(target.profile)
+                targetValue(target?.profile)
             }
             GridRow {
                 Text(ConverterCopy.text("Input.Bytes", language: language)).foregroundStyle(.secondary)
                 Text(source.size, format: .number)
-                Text(target.size, format: .number)
+                targetValue(target.map { String($0.size) })
             }
             GridRow {
                 Text(ConverterCopy.text("Input.SHA256", language: language)).foregroundStyle(.secondary)
                 Text(source.sha256).font(.caption.monospaced()).textSelection(.enabled)
-                Text(target.sha256).font(.caption.monospaced()).textSelection(.enabled)
+                targetValue(target?.sha256, monospaced: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func targetValue(_ value: String?, monospaced: Bool = false) -> some View {
+        if let value {
+            Text(value)
+                .font(monospaced ? .caption.monospaced() : .body)
+                .textSelection(.enabled)
+        } else {
+            Label(ConverterCopy.text("Input.NewOutput", language: language), systemImage: "arrow.down.doc")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

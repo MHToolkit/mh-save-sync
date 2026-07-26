@@ -117,6 +117,10 @@ enum Command {
         /// Require the target SHA-256 observed during the preceding Dry Run.
         #[arg(long, requires = "write")]
         expected_target_sha256: Option<String>,
+        /// Require the target to remain absent from the preceding Dry Run until
+        /// the transactional write acquires its per-slot lock.
+        #[arg(long, requires = "write", conflicts_with = "expected_target_sha256")]
+        expected_target_absent: bool,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -133,6 +137,10 @@ enum Command {
         /// Require the target SHA-256 observed during the preceding Dry Run.
         #[arg(long, requires = "write")]
         expected_target_sha256: Option<String>,
+        /// Require the target to remain absent from the preceding Dry Run until
+        /// the transactional write acquires its per-slot lock.
+        #[arg(long, requires = "write", conflicts_with = "expected_target_sha256")]
+        expected_target_absent: bool,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -203,6 +211,7 @@ struct Report {
 struct HashPreconditions {
     source_sha256: Option<String>,
     target_sha256: Option<String>,
+    target_must_be_absent: bool,
 }
 
 #[derive(Debug)]
@@ -464,6 +473,7 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
+                    expected_target_absent,
                     dry_run,
                     write,
                 } => convert(
@@ -471,6 +481,7 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
+                    expected_target_absent,
                     dry_run,
                     write,
                 )?,
@@ -479,6 +490,7 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
+                    expected_target_absent,
                     dry_run,
                     write,
                 } => convert_system(
@@ -486,6 +498,7 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
+                    expected_target_absent,
                     dry_run,
                     write,
                 )?,
@@ -750,6 +763,7 @@ fn convert(
     output: PathBuf,
     expected_source_sha256: Option<String>,
     expected_target_sha256: Option<String>,
+    expected_target_absent: bool,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
@@ -759,6 +773,7 @@ fn convert(
         HashPreconditions {
             source_sha256: expected_source_sha256,
             target_sha256: expected_target_sha256,
+            target_must_be_absent: expected_target_absent,
         },
         dry_run,
         write,
@@ -775,6 +790,7 @@ fn convert_system(
     output: PathBuf,
     expected_source_sha256: Option<String>,
     expected_target_sha256: Option<String>,
+    expected_target_absent: bool,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
@@ -784,6 +800,7 @@ fn convert_system(
         HashPreconditions {
             source_sha256: expected_source_sha256,
             target_sha256: expected_target_sha256,
+            target_must_be_absent: expected_target_absent,
         },
         dry_run,
         write,
@@ -871,6 +888,7 @@ fn convert_component(
             InstallExpectations {
                 source_sha256: expectations.source_sha256.as_deref(),
                 target_sha256: expectations.target_sha256.as_deref(),
+                target_must_be_absent: expectations.target_must_be_absent,
             },
         )?;
         if let Some(target_sha256_before) = manifest.previous_sha256.as_ref() {
@@ -1144,7 +1162,7 @@ mod tests {
         bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         fs::write(&source, bytes).unwrap();
 
-        let report = convert_system(source, output.clone(), None, None, false, false).unwrap();
+        let report = convert_system(source, output.clone(), None, None, false, false, false).unwrap();
 
         assert_eq!(report.profile, Some(SaveProfile::JpCemuSystem));
         assert_eq!(report.status, "dry-run");

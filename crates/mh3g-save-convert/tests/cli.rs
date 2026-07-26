@@ -742,6 +742,80 @@ fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
 }
 
 #[test]
+fn convert_write_creates_a_new_export_only_when_the_target_stays_absent() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert!(dry_run["hashes"].get("target_before").is_none());
+
+    let written = run_json_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-absent".into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(written["status"], "written");
+    assert!(target.is_file());
+    assert!(written["backup"].is_null());
+}
+
+#[test]
+fn convert_write_refuses_an_export_target_that_appeared_after_dry_run() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    let appeared = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &appeared).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-absent".into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target appeared after Dry Run and was expected to remain absent")
+    );
+    assert_eq!(fs::read(&target).unwrap(), appeared);
+    assert!(!target
+        .parent()
+        .unwrap()
+        .join(".user2.mh3g-install.json")
+        .exists());
+}
+
+#[test]
 fn convert_write_rejects_a_stale_expected_source_hash_without_replacing_target() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();

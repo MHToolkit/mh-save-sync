@@ -29,11 +29,13 @@ PY
 source_before="$(shasum -a 256 "$source" | awk '{print $1}')"
 "$cli" --help >/dev/null
 "$cli" inspect "$source" | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "inspected"'
-"$cli" convert "$source" --output "$target" --dry-run | python3 -c 'import json, sys; assert json.load(sys.stdin)["status"] == "dry-run"'
+dry_run="$("$cli" convert "$source" --output "$target" --dry-run)"
+source_sha256="$(printf '%s' "$dry_run" | python3 -c 'import json, sys; print(json.load(sys.stdin)["hashes"]["source"])')"
+printf '%s' "$dry_run" | python3 -c 'import json, sys; report = json.load(sys.stdin); assert report["status"] == "dry-run"; assert "target_before" not in report["hashes"]'
 [[ ! -e "$target" ]]
 write_stdout="$fixture/write.stdout"
 write_stderr="$fixture/write.stderr"
-if "$cli" convert "$source" --output "$target" --write >"$write_stdout" 2>"$write_stderr"; then
+if "$cli" convert "$source" --output "$target" --expected-source-sha256 "$source_sha256" --expected-target-absent --write >"$write_stdout" 2>"$write_stderr"; then
   python3 - "$write_stdout" <<'PY'
 import json
 import pathlib

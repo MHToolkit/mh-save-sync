@@ -4,6 +4,8 @@ import ConverterPresentation
 struct ComponentSelectionView: View {
     @Bindable var workflow: ConversionWorkflow
     let language: ConverterLanguage
+    @Binding var navigation: ConverterNavigation?
+    @State private var selectionError: String?
 
     var body: some View {
         WorkbenchPage(
@@ -36,6 +38,10 @@ struct ComponentSelectionView: View {
 
                 Section {
                     Toggle(ConverterCopy.text("Components.GuildCards", language: language), isOn: binding(\.includeGuildCards))
+                    Text(ConverterCopy.text("Components.GuildCardsDetail", language: language))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
                     GroupScopeCaption(
                         image: "person.2.badge.gearshape",
                         names: ExtraGroup.guildCards.componentNames.joined(separator: " · "),
@@ -43,6 +49,10 @@ struct ComponentSelectionView: View {
                         language: language
                     )
                     Toggle(ConverterCopy.text("Components.Quests", language: language), isOn: binding(\.includeQuests))
+                    Text(ConverterCopy.text("Components.QuestsDetail", language: language))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
                     GroupScopeCaption(
                         image: "scroll",
                         names: ExtraGroup.quests.componentNames.joined(separator: " · "),
@@ -74,6 +84,56 @@ struct ComponentSelectionView: View {
                     }
                 } footer: {
                     Text(ConverterCopy.text("Components.ExtrasFooter", language: language))
+                }
+
+                if workflow.input != nil,
+                   workflow.sourceInspection != nil,
+                   !workflow.selectedOptionalDataIsConfigured {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.OptionalDataNeedsConfiguration",
+                        systemImage: "exclamationmark.circle",
+                        language: language
+                    )
+                } else if workflow.input != nil,
+                          workflow.sourceInspection != nil,
+                          workflow.coreWriteCompleted,
+                          workflow.hasPendingSelectedOptionalWork {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.OptionalDataReadyForTransaction",
+                        actionKey: "Guide.ToWriteAndOptionals",
+                        systemImage: "externaldrive.badge.checkmark",
+                        language: language
+                    ) {
+                        navigation = .writeRollback
+                    }
+                } else if workflow.input != nil, workflow.sourceInspection != nil {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.ComponentsReady",
+                        actionKey: "Guide.ToDryRun",
+                        systemImage: "checkmark.shield",
+                        language: language
+                    ) {
+                        navigation = .dryRun
+                    }
+                }
+
+                Section {
+                    Label(ConverterCopy.text("CEC.Hidden", language: language), systemImage: "flask")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        navigation = .experimentalCEC
+                    } label: {
+                        Label(ConverterCopy.text("Navigation.ExperimentalCEC", language: language), systemImage: "flask")
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                if let selectionError {
+                    Section {
+                        Label(selectionError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -113,7 +173,13 @@ struct ComponentSelectionView: View {
             title: ConverterCopy.text("Components.ExtDataSource", language: language),
             message: ConverterCopy.text("Components.ExtDataSourceMessage", language: language)
         ) else { return }
-        update { $0.extraSourceDirectory = url }
+        do {
+            let resolved = try SavePathResolver.resolveExtDataUserDirectory(selection: url)
+            update { $0.extraSourceDirectory = resolved }
+            selectionError = nil
+        } catch {
+            selectionError = error.localizedDescription
+        }
     }
 
     private func chooseExtraStaging() {

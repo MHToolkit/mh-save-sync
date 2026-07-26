@@ -14,6 +14,9 @@ public final class ConversionWorkflow {
     public private(set) var extrasStageDryRunFingerprint: ExtrasStageDryRunFingerprint?
     public private(set) var extrasInstallDryRunFingerprint: ExtrasInstallDryRunFingerprint?
     public private(set) var cecDryRunFingerprint: CECDryRunFingerprint?
+    public private(set) var coreWriteCompleted = false
+    public private(set) var systemWriteCompleted = false
+    public private(set) var extrasInstallCompleted = false
     public private(set) var failure: WorkflowFailure?
     public private(set) var latestReport: ConverterReport?
     public private(set) var activeOperation: ConverterOperation?
@@ -28,7 +31,43 @@ public final class ConversionWorkflow {
     }
 
     public var canStartDryRun: Bool {
-        input != nil && sourceInspection != nil && targetInspection != nil && activeOperation == nil
+        input != nil
+            && sourceInspection != nil
+            && selectedOptionalDataIsConfigured
+            && activeOperation == nil
+    }
+
+    /// A missing target inspection is expected for an export directory: the
+    /// selected `user#` does not exist until the guarded transactional write.
+    public var isNewTargetExport: Bool {
+        input != nil && sourceInspection != nil && targetInspection == nil
+    }
+
+    /// A selected optional domain cannot be treated as ready until every path
+    /// required by that domain is explicit. Core Dry Run and write use this
+    /// same gate; every optional command also validates its own paths before
+    /// argv construction.
+    public var selectedOptionalDataIsConfigured: Bool {
+        let systemConfigured = !components.includeSystem
+            || (components.systemSource != nil && components.systemTarget != nil)
+        let extrasConfigured = components.selectedGroups.isEmpty
+            || (components.extraSourceDirectory != nil
+                && components.extraStagingDirectory != nil
+                && components.extraTargetDirectory != nil)
+        return systemConfigured && extrasConfigured
+    }
+
+    /// Completion is tracked per selected standard transaction domain. A
+    /// core-slot write must never make an enabled `system` or ExtData choice
+    /// look complete in the UI. Experimental CEC remains an independent tool
+    /// and does not block the normal conversion route.
+    public var hasPendingSelectedOptionalWork: Bool {
+        (components.includeSystem && !systemWriteCompleted)
+            || (!components.selectedGroups.isEmpty && !extrasInstallCompleted)
+    }
+
+    public var hasPendingSelectedConversionWork: Bool {
+        !coreWriteCompleted || hasPendingSelectedOptionalWork
     }
 
     /// This is intentionally stricter than the button's visual disabled state.
@@ -36,6 +75,7 @@ public final class ConversionWorkflow {
     /// constructing argv, so programmatic UI calls cannot bypass the guard.
     public var canWrite: Bool {
         guard activeOperation == nil,
+              selectedOptionalDataIsConfigured,
               let authorized = dryRunFingerprint,
               let current = currentFingerprint()
         else { return false }
@@ -91,13 +131,15 @@ public final class ConversionWorkflow {
         self.input = input
         sourceInspection = nil
         targetInspection = nil
+        coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .input, clearsPresentation: true)
     }
 
-    public func applyInspections(source: InputInspection, target: InputInspection) {
+    public func applyInspections(source: InputInspection, target: InputInspection?) {
         guard activeOperation == nil else { return }
         sourceInspection = source
         targetInspection = target
+        coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .componentSelection, clearsPresentation: true)
     }
 
@@ -116,18 +158,25 @@ public final class ConversionWorkflow {
             || components.cecTarget != selection.cecTarget
             || components.acknowledgeExperimentalCEC != selection.acknowledgeExperimentalCEC
         components = selection
-        if systemChanged { systemDryRunFingerprint = nil }
+        if systemChanged {
+            systemDryRunFingerprint = nil
+            systemWriteCompleted = false
+        }
         if extrasChanged {
             extrasStageDryRunFingerprint = nil
             extrasInstallDryRunFingerprint = nil
+            extrasInstallCompleted = false
         }
-        if cecChanged { cecDryRunFingerprint = nil }
+        if cecChanged {
+            cecDryRunFingerprint = nil
+        }
         failure = nil
         state = input == nil ? .input : .componentSelection
     }
 
-    /// Calls the Rust `inspect` command for the two exact files selected in the
-    /// open panel.  It deliberately has no directory discovery mode.
+    /// Calls the Rust `inspect` command for the exact source file and, if it
+    /// already exists, the exact target file. A missing target is a supported
+    /// explicit export destination; directory discovery still never occurs.
     public func inspectInputs() async throws {
         try requireIdleForIndependentOperation()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
@@ -137,17 +186,30 @@ public final class ConversionWorkflow {
                 arguments: [ConverterOperation.inspect.rawValue, input.source.path],
                 lease: lease
             )
-            let targetReport = try await self.execute(
-                .inspect,
-                arguments: [ConverterOperation.inspect.rawValue, input.target.path],
-                lease: lease
-            )
-            guard let source = self.inspection(from: sourceReport), let target = self.inspection(from: targetReport) else {
+            guard let source = self.inspection(from: sourceReport) else {
                 throw self.failureAndRethrow(
                     .inspect,
                     ConversionWorkflowError.invalidReport("inspect requires profile, size, and source SHA-256"),
                     stderr: ""
                 )
+            }
+            let target: InputInspection?
+            if FileManager.default.fileExists(atPath: input.target.path) {
+                let targetReport = try await self.execute(
+                    .inspect,
+                    arguments: [ConverterOperation.inspect.rawValue, input.target.path],
+                    lease: lease
+                )
+                guard let inspectedTarget = self.inspection(from: targetReport) else {
+                    throw self.failureAndRethrow(
+                        .inspect,
+                        ConversionWorkflowError.invalidReport("target inspect requires profile, size, and source SHA-256"),
+                        stderr: ""
+                    )
+                }
+                target = inspectedTarget
+            } else {
+                target = nil
             }
             self.sourceInspection = source
             self.targetInspection = target
@@ -160,7 +222,8 @@ public final class ConversionWorkflow {
     public func runCoreDryRun() async throws {
         try requireIdleForIndependentOperation()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
-        guard sourceInspection != nil, targetInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
+        guard sourceInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
+        try requireSelectedOptionalDataConfiguration()
         try await withOperation(.convert) { lease in
             self.dryRunFingerprint = nil
             let report = try await self.execute(
@@ -181,12 +244,10 @@ public final class ConversionWorkflow {
                 )
             }
             let current = try self.requireCurrentFingerprint()
-            guard let reportedSource = report.hash(named: "source"),
-                  let reportedTarget = report.hash(named: "target_before")
-            else {
+            guard let reportedSource = report.hash(named: "source") else {
                 throw self.failureAndRethrow(
                     .convert,
-                    ConversionWorkflowError.invalidReport("Dry Run requires source and target_before SHA-256"),
+                    ConversionWorkflowError.invalidReport("Dry Run requires a source SHA-256"),
                     stderr: report.stderr ?? ""
                 )
             }
@@ -197,7 +258,25 @@ public final class ConversionWorkflow {
                     stderr: report.stderr ?? ""
                 )
             }
-            if reportedTarget != current.targetSHA256 {
+            let reportedTarget = report.hash(named: "target_before")
+            switch (current.targetSHA256, reportedTarget) {
+            case let (.some(expected), .some(reported)) where expected == reported:
+                break
+            case (nil, nil):
+                break
+            case (nil, .some):
+                throw self.failureAndRethrow(
+                    .convert,
+                    ConversionWorkflowError.invalidReport("target appeared during Dry Run; refuse export"),
+                    stderr: report.stderr ?? ""
+                )
+            case (.some, nil):
+                throw self.failureAndRethrow(
+                    .convert,
+                    ConversionWorkflowError.invalidReport("Dry Run requires source and target_before SHA-256"),
+                    stderr: report.stderr ?? ""
+                )
+            case (.some, .some):
                 throw self.failureAndRethrow(
                     .convert,
                     ConversionWorkflowError.invalidReport("target SHA-256 changed during Dry Run"),
@@ -212,19 +291,13 @@ public final class ConversionWorkflow {
 
     public func writeCore() async throws {
         try requireIdleForIndependentOperation()
+        try requireSelectedOptionalDataConfiguration()
         let fingerprint = try currentAuthorizedFingerprint()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         try await withOperation(.convert) { lease in
             let report = try await self.execute(
                 .convert,
-                arguments: [
-                    ConverterOperation.convert.rawValue,
-                    input.source.path,
-                    "--output", input.target.path,
-                    "--write",
-                    "--expected-source-sha256", fingerprint.sourceSHA256,
-                    "--expected-target-sha256", fingerprint.targetSHA256,
-                ],
+                arguments: self.coreWriteArguments(input: input, fingerprint: fingerprint),
                 lease: lease
             )
             try self.complete(with: report, expectedStatus: "written", operation: .convert)
@@ -530,14 +603,7 @@ public final class ConversionWorkflow {
             plan.append(
                 PlannedConverterCommand(
                     operation: .convert,
-                    arguments: [
-                        ConverterOperation.convert.rawValue,
-                        input.source.path,
-                        "--output", input.target.path,
-                        "--write",
-                        "--expected-source-sha256", fingerprint.sourceSHA256,
-                        "--expected-target-sha256", fingerprint.targetSHA256,
-                    ]
+                    arguments: coreWriteArguments(input: input, fingerprint: fingerprint)
                 )
             )
         }
@@ -679,11 +745,27 @@ public final class ConversionWorkflow {
     }
 
     private func currentFingerprint() -> DryRunFingerprint? {
-        guard let sourceInspection, let targetInspection else { return nil }
+        guard let sourceInspection else { return nil }
         return DryRunFingerprint(
             sourceSHA256: sourceInspection.sha256,
-            targetSHA256: targetInspection.sha256
+            targetSHA256: targetInspection?.sha256
         )
+    }
+
+    private func coreWriteArguments(input: ConversionInput, fingerprint: DryRunFingerprint) -> [String] {
+        var arguments = [
+            ConverterOperation.convert.rawValue,
+            input.source.path,
+            "--output", input.target.path,
+            "--write",
+            "--expected-source-sha256", fingerprint.sourceSHA256,
+        ]
+        if let targetSHA256 = fingerprint.targetSHA256 {
+            arguments += ["--expected-target-sha256", targetSHA256]
+        } else {
+            arguments.append("--expected-target-absent")
+        }
+        return arguments
     }
 
     private func requiredExtraPaths() throws -> (source: URL, staging: URL, target: URL) {
@@ -693,6 +775,15 @@ public final class ConversionWorkflow {
               let target = components.extraTargetDirectory
         else { throw ConversionWorkflowError.missingExtraDirectories }
         return (source, staging, target)
+    }
+
+    private func requireSelectedOptionalDataConfiguration() throws {
+        guard !components.includeSystem
+                || (components.systemSource != nil && components.systemTarget != nil)
+        else { throw ConversionWorkflowError.missingSystemPaths }
+        guard selectedOptionalDataIsConfigured else {
+            throw ConversionWorkflowError.missingExtraDirectories
+        }
     }
 
     private func extrasStageArguments(
@@ -820,7 +911,9 @@ public final class ConversionWorkflow {
         }
         latestReport = report
         state = .success
-        invalidateAuthorization(in: scope ?? authorizationScope(for: operation))
+        let completionScope = scope ?? authorizationScope(for: operation)
+        recordCompletion(expectedStatus: expectedStatus, operation: operation, scope: completionScope)
+        invalidateAuthorization(in: completionScope)
     }
 
     private enum AuthorizationScope {
@@ -850,6 +943,43 @@ public final class ConversionWorkflow {
             extrasInstallDryRunFingerprint = nil
         case .cec:
             cecDryRunFingerprint = nil
+        }
+    }
+
+    private func recordCompletion(
+        expectedStatus: String,
+        operation: ConverterOperation,
+        scope: AuthorizationScope
+    ) {
+        switch expectedStatus {
+        case "written":
+            switch operation {
+            case .convert:
+                coreWriteCompleted = true
+            case .convertSystem:
+                systemWriteCompleted = true
+            case .convertExtras:
+                break
+            case .installExtras:
+                extrasInstallCompleted = true
+            case .convertCEC:
+                break
+            case .inspect, .rollback, .rollbackExtras, .rollbackCEC:
+                break
+            }
+        case "rolled-back":
+            switch scope {
+            case .core:
+                coreWriteCompleted = false
+            case .system:
+                systemWriteCompleted = false
+            case .extras:
+                extrasInstallCompleted = false
+            case .cec:
+                break
+            }
+        default:
+            break
         }
     }
 

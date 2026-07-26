@@ -57,15 +57,31 @@ public enum ConverterNavigation: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .input: "doc.text.magnifyingglass"
         case .components: "square.stack.3d.up"
-        case .dryRun: "arrow.triangle.2.circlepath"
-        case .writeRollback: "arrow.uturn.backward.circle"
+        case .dryRun: "checkmark.shield"
+        case .writeRollback: "externaldrive.badge.checkmark"
         case .history: "clock.arrow.circlepath"
-        case .experimentalCEC: "envelope.badge"
+        case .experimentalCEC: "flask"
         case .settings: "gearshape"
         }
     }
 
     public var accessibilityIdentifier: String { "mh3g.converter.navigation.\(rawValue)" }
+
+    /// The primary route remains a suggestion, not a lock: a user can revisit
+    /// any sidebar section, while completed stages always expose one clear
+    /// continuation for first-time conversion.
+    public static func guidedSuccessor(after state: WorkflowState) -> Self? {
+        switch state {
+        case .componentSelection:
+            .components
+        case .dryRun:
+            .writeRollback
+        case .success:
+            .history
+        case .input, .writing, .failure:
+            nil
+        }
+    }
 }
 
 public extension WorkflowState {
@@ -98,9 +114,12 @@ public enum ConverterCopy {
         "Navigation.ExperimentalCEC": "实验性 CEC",
         "Navigation.Settings": "设置",
         "Input.Source": "3DS 源角色文件",
-        "Input.Target": "Cemu 目标角色文件",
+        "Input.Target": "Cemu 目标或导出目录",
+        "Input.Slot": "存档槽位",
+        "Input.FinalOutput": "最终输出",
+        "Input.NewOutput": "新输出文件；写入时必须保持不存在",
         "Input.Select": "选择…",
-        "Input.Inspect": "检查所选文件",
+        "Input.Inspect": "检查所选内容",
         "Input.NoSelection": "尚未选择文件",
         "Components.System": "共享 system",
         "Components.GuildCards": "公会名片与离线伙伴",
@@ -129,16 +148,33 @@ public enum ConverterCopy {
         "Input.SHA256": "SHA-256",
         "Input.Profile": "存档类型",
         "Input.Bytes": "字节数",
-        "Input.SourceMessage": "请选择一个 3DS 的 user1、user2 或 user3 文件。",
-        "Input.TargetMessage": "请选择匹配的 Cemu user1、user2 或 user3 文件。",
-        "Input.InvalidSlot": "请选择 user1、user2 或 user3 文件；不接受文件夹或压缩包。",
-        "Components.Subtitle": "可选数据必须由你明确启用。名片与任务文件始终按 Rust 事务定义的完整组安装。",
+        "Input.Subtitle": "选择 3DS 源存档，再选择已有 Cemu 存档或一个导出目录。目录会明确输出同名 user# 文件。",
+        "Input.SourceMessage": "请选择一个 3DS user1、user2 或 user3 文件，或包含它们的直接父目录。",
+        "Input.TargetMessage": "请选择匹配的现有 Cemu user# 文件，或选择一个已有目录以导出同名 user# 文件。",
+        "Input.InvalidSlot": "请选择 user1、user2 或 user3 文件，或一个直接包含所选槽位的目录。",
+        "Guide.InputComplete": "检查已完成。下一步可按需添加名片、任务或其他可选数据；也可以直接继续 Dry Run。",
+        "Guide.ComponentsReady": "可选数据已确认。接下来运行只读 Dry Run，确认本次转换会写入什么。",
+        "Guide.OptionalDataNeedsConfiguration": "已启用的可选数据尚未配齐。请先在本页选择所需的 system 或 ExtData 目录，再继续 Dry Run。",
+        "Guide.OptionalDataReadyForTransaction": "已选可选数据已配齐。核心角色无需重复转换；前往写入页分别进行可选组件的 Dry Run 和写入。",
+        "Guide.DryRunComplete": "Dry Run 已通过。确认写入前不会修改任何存档。",
+        "Guide.CoreDryRunCompleteWithOptionals": "核心角色 Dry Run 已通过。接下来进入写入页；已选 system 或 ExtData 仍须分别 Dry Run 和写入。",
+        "Guide.SelectedWorkPending": "本次已选数据尚未全部完成。请在本页完成每项的 Dry Run 和写入；完成前不会显示最终报告入口。",
+        "Guide.WriteComplete": "转换已完成。可在本次报告中查看写入结果、备份与 manifest。",
+        "Guide.ToComponents": "继续：配置可选数据",
+        "Guide.ToDryRun": "继续：运行 Dry Run",
+        "Guide.ToWrite": "继续：确认写入",
+        "Guide.ToWriteAndOptionals": "继续：处理写入与可选数据",
+        "Guide.ToHistory": "查看本次报告",
+        "Guide.NextStep": "下一步",
+        "Components.Subtitle": "可选数据不是必需的。只转换角色时可直接继续 Dry Run；选择名片或任务后，再提供对应的 ExtData 目录。",
+        "Components.GuildCardsDetail": "迁移收到的公会名片和离线集会所伙伴。",
+        "Components.QuestsDetail": "迁移任务数据。",
         "Components.SystemSource": "3DS system",
         "Components.SystemTarget": "Cemu system",
         "Components.SystemFooter": "已选择的 system 只对应一个明确文件，不会扩展为整个存档目录。",
         "Components.SystemSourceMessage": "请选择一个 3DS system 文件。",
         "Components.SystemTargetMessage": "请选择一个 Cemu system 文件。",
-        "Components.ExtrasFooter": "请自行选择文档中指定的 3DS ExtData user 目录与 Cemu 存档目录。应用不会猜测 MLC 根目录，也不会覆盖整个目录。",
+        "Components.ExtrasFooter": "选择 00000481 或其直接 user 子目录即可。应用只处理已选的名片/任务组件，不会扫描 SD 卡或覆盖整个 Cemu 存档目录。",
         "Components.ExtDataSourceMessage": "请选择准确的 3DS .../extdata/00000000/00000481/user 目录。",
         "Components.StagingMessage": "请选择一个新的空目录，用于暂存转换后的 ExtData 组件。",
         "Components.TargetMessage": "请选择准确的 Cemu MH3G 存档目录，其中应包含 card1/card2/card3/cardbox 与 quest1 至 quest4。",
@@ -151,6 +187,7 @@ public enum ConverterCopy {
         "DryRun.CoreOnly": "仅核心角色存档",
         "DryRun.Source": "源文件",
         "DryRun.Target": "目标文件",
+        "DryRun.NewExport": "新输出文件（写入前必须保持不存在）",
         "Write.Subtitle": "核心角色写入由事务保护。替换所选 Cemu 目标前会先创建备份和 manifest。",
         "Write.Authorization": "写入授权",
         "Write.CurrentAuthorized": "当前 Dry Run 有效",
@@ -165,6 +202,7 @@ public enum ConverterCopy {
         "Write.Target": "目标",
         "Write.SourceSHA256": "源文件 SHA-256",
         "Write.TargetSHA256": "目标文件 SHA-256",
+        "Write.NewExport": "新输出文件（写入前必须保持不存在）",
         "Write.StagingSetSHA256": "暂存集合 SHA-256",
         "Write.TargetSetSHA256": "目标集合 SHA-256",
         "Write.Backup": "备份",
@@ -238,9 +276,12 @@ public enum ConverterCopy {
         "Navigation.ExperimentalCEC": "Experimental CEC",
         "Navigation.Settings": "Settings",
         "Input.Source": "3DS source character file",
-        "Input.Target": "Cemu target character file",
+        "Input.Target": "Cemu target or export directory",
+        "Input.Slot": "Save slot",
+        "Input.FinalOutput": "Final output",
+        "Input.NewOutput": "New output file; it must remain absent before writing",
         "Input.Select": "Choose…",
-        "Input.Inspect": "Inspect selected files",
+        "Input.Inspect": "Inspect selection",
         "Input.NoSelection": "No file selected",
         "Components.System": "Shared system",
         "Components.GuildCards": "Guild cards & offline partners",
@@ -269,16 +310,33 @@ public enum ConverterCopy {
         "Input.SHA256": "SHA-256",
         "Input.Profile": "Profile",
         "Input.Bytes": "Bytes",
-        "Input.SourceMessage": "Choose one 3DS user1, user2, or user3 file.",
-        "Input.TargetMessage": "Choose the matching Cemu user1, user2, or user3 file.",
-        "Input.InvalidSlot": "Choose exactly user1, user2, or user3; folders and archives are not accepted.",
-        "Components.Subtitle": "Optional data stays opt-in. Card and quest files are always installed as complete Rust-owned groups.",
+        "Input.Subtitle": "Choose a 3DS source, then an existing Cemu slot or an export directory. A directory resolves explicitly to the same user# file.",
+        "Input.SourceMessage": "Choose a 3DS user1, user2, or user3 file, or its direct parent directory.",
+        "Input.TargetMessage": "Choose a matching existing Cemu user# file, or an existing directory for a same-named user# export.",
+        "Input.InvalidSlot": "Choose user1, user2, or user3, or a directory that directly contains the selected slot.",
+        "Guide.InputComplete": "Inspection is complete. Add guild cards, quests, or other optional data if needed, or continue directly to Dry Run.",
+        "Guide.ComponentsReady": "Optional data is set. Next, run a read-only Dry Run to review what this conversion will write.",
+        "Guide.OptionalDataNeedsConfiguration": "Selected optional data is not fully configured. Choose the required system or ExtData directories here before continuing to Dry Run.",
+        "Guide.OptionalDataReadyForTransaction": "Selected optional data is configured. The core slot does not need another conversion; continue to the write page for each optional component's Dry Run and write.",
+        "Guide.DryRunComplete": "Dry Run passed. No save has been modified; continue when you are ready to confirm the write.",
+        "Guide.CoreDryRunCompleteWithOptionals": "The core-slot Dry Run passed. Continue to the write page; selected system or ExtData data still needs its own Dry Run and write.",
+        "Guide.SelectedWorkPending": "Selected data is not all complete. Finish each Dry Run and write on this page before the final report becomes available.",
+        "Guide.WriteComplete": "Conversion is complete. Review this session's result, backup, and manifest.",
+        "Guide.ToComponents": "Continue: configure optional data",
+        "Guide.ToDryRun": "Continue: run Dry Run",
+        "Guide.ToWrite": "Continue: confirm write",
+        "Guide.ToWriteAndOptionals": "Continue: handle writes and optional data",
+        "Guide.ToHistory": "View this session's report",
+        "Guide.NextStep": "Next step",
+        "Components.Subtitle": "Optional data is not required. Continue directly to Dry Run for a character-only conversion, or add the matching ExtData directory after choosing cards or quests.",
+        "Components.GuildCardsDetail": "Migrate received guild cards and offline-hall partners.",
+        "Components.QuestsDetail": "Migrate quest data.",
         "Components.SystemSource": "3DS system",
         "Components.SystemTarget": "Cemu system",
         "Components.SystemFooter": "A selected system is one explicit file. It never expands to a save directory.",
         "Components.SystemSourceMessage": "Choose exactly one 3DS system file.",
         "Components.SystemTargetMessage": "Choose exactly one Cemu system file.",
-        "Components.ExtrasFooter": "Choose the documented 3DS ExtData user directory and Cemu save directory yourself. The app will not infer an MLC root or overwrite an entire directory.",
+        "Components.ExtrasFooter": "Choose 00000481 or its direct user child. The app only handles selected card/quest components; it does not scan an SD card or replace an entire Cemu save directory.",
         "Components.ExtDataSourceMessage": "Choose the exact 3DS .../extdata/00000000/00000481/user directory.",
         "Components.StagingMessage": "Choose a new empty staging directory for converted ExtData components.",
         "Components.TargetMessage": "Choose the exact Cemu MH3G save directory that contains card1/card2/card3/cardbox and quest1 through quest4.",
@@ -291,6 +349,7 @@ public enum ConverterCopy {
         "DryRun.CoreOnly": "Core slot only",
         "DryRun.Source": "Source",
         "DryRun.Target": "Target",
+        "DryRun.NewExport": "New export (must remain absent before write)",
         "Write.Subtitle": "The core slot write is transaction-backed. It creates a backup and manifest before replacing the chosen Cemu target.",
         "Write.Authorization": "Write authorization",
         "Write.CurrentAuthorized": "Current Dry Run is valid",
@@ -305,6 +364,7 @@ public enum ConverterCopy {
         "Write.Target": "Target",
         "Write.SourceSHA256": "Source SHA-256",
         "Write.TargetSHA256": "Target SHA-256",
+        "Write.NewExport": "New export (must remain absent before write)",
         "Write.StagingSetSHA256": "Staging set SHA-256",
         "Write.TargetSetSHA256": "Target set SHA-256",
         "Write.Backup": "Backup",

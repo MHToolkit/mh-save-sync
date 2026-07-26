@@ -64,6 +64,99 @@ public struct ConversionInput: Equatable, Sendable {
     }
 }
 
+/// A core conversion always addresses one of the three named save slots. The
+/// UI may accept a selected directory for convenience, but it resolves that
+/// choice to this exact child file before it ever constructs CLI arguments.
+public enum SaveSlot: String, CaseIterable, Identifiable, Sendable {
+    case user1
+    case user2
+    case user3
+
+    public var id: String { rawValue }
+
+    public init?(fileName: String) {
+        self.init(rawValue: fileName.lowercased())
+    }
+}
+
+public enum SavePathResolutionError: LocalizedError, Equatable, Sendable {
+    case sourceSlotMissing(slot: SaveSlot, directory: URL)
+    case slotNameMismatch(expected: SaveSlot, actual: String)
+    case extDataUserDirectoryMissing(URL)
+
+    public var errorDescription: String? {
+        switch self {
+        case .sourceSlotMissing(let slot, let directory):
+            "\(slot.rawValue) is not directly inside \(directory.path)."
+        case .slotNameMismatch(let expected, let actual):
+            "The selected slot is \(expected.rawValue), but the file is \(actual)."
+        case .extDataUserDirectoryMissing(let directory):
+            "The selected ExtData location does not contain a direct user directory: \(directory.path)."
+        }
+    }
+}
+
+public enum SavePathResolver {
+    /// A direct `user#` file is accepted as-is. A directory is never searched
+    /// recursively; only its direct `user#` child is considered.
+    public static func resolveSource(selection: URL, slot: SaveSlot, fileManager: FileManager = .default) throws -> URL {
+        let selected = selection.standardizedFileURL
+        if isDirectory(selected, fileManager: fileManager) {
+            let candidate = selected.appendingPathComponent(slot.rawValue)
+            guard fileManager.fileExists(atPath: candidate.path) else {
+                throw SavePathResolutionError.sourceSlotMissing(slot: slot, directory: selected)
+            }
+            return candidate.standardizedFileURL
+        }
+        try validate(file: selected, matches: slot)
+        return selected
+    }
+
+    /// A selected directory represents an explicit export location and is
+    /// resolved to `<directory>/user#`. It deliberately creates nothing; the
+    /// transaction layer remains the only writer.
+    public static func resolveTarget(selection: URL, slot: SaveSlot, fileManager: FileManager = .default) throws -> URL {
+        let selected = selection.standardizedFileURL
+        if isDirectory(selected, fileManager: fileManager) {
+            return selected.appendingPathComponent(slot.rawValue).standardizedFileURL
+        }
+        try validate(file: selected, matches: slot)
+        return selected
+    }
+
+    /// ExtData is accepted only as the precise `user` directory or its direct
+    /// `00000481` parent. This helps common SDMC layouts without guessing a
+    /// broader SD-card or emulator root.
+    public static func resolveExtDataUserDirectory(selection: URL, fileManager: FileManager = .default) throws -> URL {
+        let selected = selection.standardizedFileURL
+        if selected.lastPathComponent.lowercased() == "user", isDirectory(selected, fileManager: fileManager) {
+            return selected
+        }
+        let candidate = selected.appendingPathComponent("user", isDirectory: true)
+        guard isDirectory(candidate, fileManager: fileManager) else {
+            throw SavePathResolutionError.extDataUserDirectoryMissing(selected)
+        }
+        return candidate.standardizedFileURL
+    }
+
+    public static func slot(for selection: URL) -> SaveSlot? {
+        SaveSlot(fileName: selection.lastPathComponent)
+    }
+
+    private static func validate(file: URL, matches slot: SaveSlot) throws {
+        let actual = file.lastPathComponent.lowercased()
+        guard actual == slot.rawValue else {
+            throw SavePathResolutionError.slotNameMismatch(expected: slot, actual: actual)
+        }
+    }
+
+    private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
+        return isDirectory.boolValue
+    }
+}
+
 /// Optional data groups.  Each group is deliberately represented as a single
 /// boolean: the Rust transaction owns the indivisible card#/quest# set.
 public struct ComponentSelection: Equatable, Sendable {
@@ -123,14 +216,21 @@ public struct ComponentSelection: Equatable, Sendable {
 /// boundaries and must not invalidate a verified core-slot Dry Run.
 public struct DryRunFingerprint: Equatable, Sendable {
     public let sourceSHA256: String
-    public let targetSHA256: String
+    /// An existing Cemu slot is pinned by its SHA-256. A missing target is an
+    /// explicit new-export authorization and is protected by the CLI's
+    /// `--expected-target-absent` precondition instead.
+    public let targetSHA256: String?
 
     public init(
         sourceSHA256: String,
-        targetSHA256: String
+        targetSHA256: String?
     ) {
         self.sourceSHA256 = sourceSHA256
         self.targetSHA256 = targetSHA256
+    }
+
+    public var exportsNewTarget: Bool {
+        targetSHA256 == nil
     }
 }
 

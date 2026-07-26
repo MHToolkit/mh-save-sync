@@ -57,6 +57,13 @@ The core slot command requires source and destination basenames to match.  For
 example, a source called `user2` can write only a destination called `user2`;
 it cannot be used to overwrite `user1` or an arbitrarily renamed file.
 
+For a guarded `convert` or `convert-system` write, bind the Dry Run's source
+SHA-256 plus one target condition. An existing target uses
+`--expected-target-sha256`; a new output uses `--expected-target-absent`.
+Those target conditions are mutually exclusive. The transaction obtains its
+lock and checks the condition again, so a target that appears after a new-output
+Dry Run is refused rather than overwritten.
+
 ## Exact Component Groups
 
 ### Required Core Slot

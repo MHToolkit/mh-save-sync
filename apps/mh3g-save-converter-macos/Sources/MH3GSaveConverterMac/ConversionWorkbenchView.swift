@@ -51,13 +51,13 @@ struct ConversionWorkbenchView: View {
     private var detailView: some View {
         switch selectedNavigation ?? .input {
         case .input:
-            InputInspectionView(workflow: workflow, language: language)
+            InputInspectionView(workflow: workflow, language: language, navigation: $selectedNavigation)
         case .components:
-            ComponentSelectionView(workflow: workflow, language: language)
+            ComponentSelectionView(workflow: workflow, language: language, navigation: $selectedNavigation)
         case .dryRun:
-            DryRunView(workflow: workflow, language: language)
+            DryRunView(workflow: workflow, language: language, navigation: $selectedNavigation)
         case .writeRollback:
-            WriteRollbackView(workflow: workflow, language: language)
+            WriteRollbackView(workflow: workflow, language: language, navigation: $selectedNavigation)
         case .history:
             ConversionHistoryView(workflow: workflow, language: language)
         case .experimentalCEC:

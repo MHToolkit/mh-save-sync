@@ -4,6 +4,7 @@ import ConverterPresentation
 struct WriteRollbackView: View {
     @Bindable var workflow: ConversionWorkflow
     let language: ConverterLanguage
+    @Binding var navigation: ConverterNavigation?
     @State private var showCoreConfirmation = false
     @State private var showSystemConfirmation = false
     @State private var showExtrasConfirmation = false
@@ -32,6 +33,32 @@ struct WriteRollbackView: View {
                 if let failure = workflow.failure {
                     Section {
                         FailureDetails(failure: failure, language: language)
+                    }
+                }
+
+                if !workflow.selectedOptionalDataIsConfigured {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.OptionalDataNeedsConfiguration",
+                        actionKey: "Guide.ToComponents",
+                        systemImage: "square.stack.3d.up",
+                        language: language
+                    ) {
+                        navigation = .components
+                    }
+                } else if workflow.state == .success, workflow.hasPendingSelectedConversionWork {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.SelectedWorkPending",
+                        systemImage: "checklist",
+                        language: language
+                    )
+                } else if workflow.state == .success {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.WriteComplete",
+                        actionKey: "Guide.ToHistory",
+                        systemImage: "clock.arrow.circlepath",
+                        language: language
+                    ) {
+                        navigation = .history
                     }
                 }
             }
@@ -223,8 +250,10 @@ struct WriteRollbackView: View {
                 value: fingerprint.sourceSHA256
             ),
             TransactionConfirmationDetail(
-                label: ConverterCopy.text("Write.TargetSHA256", language: language),
-                value: fingerprint.targetSHA256
+                label: fingerprint.exportsNewTarget
+                    ? ConverterCopy.text("Write.Target", language: language)
+                    : ConverterCopy.text("Write.TargetSHA256", language: language),
+                value: fingerprint.targetSHA256 ?? ConverterCopy.text("Write.NewExport", language: language)
             ),
         ]
     }

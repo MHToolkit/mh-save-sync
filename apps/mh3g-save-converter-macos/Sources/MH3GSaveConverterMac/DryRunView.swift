@@ -4,6 +4,7 @@ import ConverterPresentation
 struct DryRunView: View {
     @Bindable var workflow: ConversionWorkflow
     let language: ConverterLanguage
+    @Binding var navigation: ConverterNavigation?
     @State private var running = false
 
     var body: some View {
@@ -21,13 +22,15 @@ struct DryRunView: View {
                     )
                     DryRunFlowRow(
                         title: ConverterCopy.text("Input.Target", language: language),
-                        path: workflow.input?.target.path,
-                        state: workflow.targetInspection == nil ? .pending : .ready
+                        path: targetPath,
+                        state: workflow.targetInspection == nil && !workflow.isNewTargetExport ? .pending : .ready
                     )
                     DryRunFlowRow(
                         title: ConverterCopy.text("Navigation.Components", language: language),
                         path: selectedComponentSummary,
-                        state: workflow.components.selectedGroups.isEmpty && !workflow.components.includeSystem ? .notSelected : .ready
+                        state: workflow.components.selectedGroups.isEmpty && !workflow.components.includeSystem
+                            ? .notSelected
+                            : workflow.selectedOptionalDataIsConfigured ? .ready : .pending
                     )
                     DryRunFlowRow(
                         title: ConverterCopy.text("DryRun.BackupManifest", language: language),
@@ -67,6 +70,30 @@ struct DryRunView: View {
                         FailureDetails(failure: failure, language: language)
                     }
                 }
+
+                if !workflow.selectedOptionalDataIsConfigured {
+                    WorkflowGuidanceSection(
+                        messageKey: "Guide.OptionalDataNeedsConfiguration",
+                        actionKey: "Guide.ToComponents",
+                        systemImage: "square.stack.3d.up",
+                        language: language
+                    ) {
+                        navigation = .components
+                    }
+                } else if workflow.canWrite {
+                    WorkflowGuidanceSection(
+                        messageKey: workflow.hasPendingSelectedOptionalWork
+                            ? "Guide.CoreDryRunCompleteWithOptionals"
+                            : "Guide.DryRunComplete",
+                        actionKey: workflow.hasPendingSelectedOptionalWork
+                            ? "Guide.ToWriteAndOptionals"
+                            : "Guide.ToWrite",
+                        systemImage: "externaldrive.badge.checkmark",
+                        language: language
+                    ) {
+                        navigation = .writeRollback
+                    }
+                }
             }
             .formStyle(.grouped)
         }
@@ -85,6 +112,13 @@ struct DryRunView: View {
         })
         if workflow.components.includesCEC { values.append("CEC") }
         return values.isEmpty ? ConverterCopy.text("DryRun.CoreOnly", language: language) : values.joined(separator: " · ")
+    }
+
+    private var targetPath: String? {
+        guard let target = workflow.input?.target else { return nil }
+        guard workflow.isNewTargetExport else { return target.path }
+        let exportLabel = ConverterCopy.text("DryRun.NewExport", language: language)
+        return "\(target.path) · \(exportLabel)"
     }
 
     private func runDryRun() {
@@ -108,7 +142,12 @@ private struct HashRows: View {
             }
             GridRow {
                 Text(ConverterCopy.text("DryRun.Target", language: language)).foregroundStyle(.secondary)
-                Text(fingerprint.targetSHA256).font(.caption.monospaced()).textSelection(.enabled)
+                if let targetSHA256 = fingerprint.targetSHA256 {
+                    Text(targetSHA256).font(.caption.monospaced()).textSelection(.enabled)
+                } else {
+                    Label(ConverterCopy.text("DryRun.NewExport", language: language), systemImage: "arrow.down.doc")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

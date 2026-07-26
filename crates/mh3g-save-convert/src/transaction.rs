@@ -29,6 +29,10 @@ pub const INSTALL_MANIFEST_VERSION: u32 = 1;
 pub struct InstallExpectations<'a> {
     pub source_sha256: Option<&'a str>,
     pub target_sha256: Option<&'a str>,
+    /// A freshly exported target must still be absent once the transaction
+    /// owns the per-slot lock. This prevents a new file from being silently
+    /// overwritten between Dry Run and write.
+    pub target_must_be_absent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -266,6 +270,11 @@ fn install_with_backend(
     let installed_sha256 = sha256_hex(installed);
     let previous = read_existing_target(&target)?;
     let observed_target_sha256 = previous.as_deref().map(sha256_hex);
+    if backend.expectations.target_must_be_absent && observed_target_sha256.is_some() {
+        return Err(ConversionError::UnsafeInstall(
+            "target appeared after Dry Run and was expected to remain absent".to_owned(),
+        ));
+    }
     ensure_expected_hash(
         backend.expectations.target_sha256,
         observed_target_sha256.as_deref(),
@@ -845,6 +854,11 @@ fn validate_manifest_hash(value: &str, label: &str) -> Result<(), ConversionErro
 fn validate_install_expectations(
     expectations: InstallExpectations<'_>,
 ) -> Result<(), ConversionError> {
+    if expectations.target_must_be_absent && expectations.target_sha256.is_some() {
+        return Err(ConversionError::InvalidSave(
+            "target cannot require both an expected SHA-256 and absence".to_owned(),
+        ));
+    }
     for (label, value) in [
         ("source", expectations.source_sha256),
         ("target", expectations.target_sha256),
@@ -1334,6 +1348,7 @@ mod tests {
             super::InstallExpectations {
                 source_sha256: None,
                 target_sha256: Some(&stale_target_sha256),
+                target_must_be_absent: false,
             },
         )
         .unwrap_err();

@@ -54,9 +54,18 @@ public sealed partial class MainWindow : Window
         ViewModel.SetLanguage(item.Tag as string);
     }
 
-    private async void ChooseSource_Click(object sender, RoutedEventArgs e)
+    private async void ChooseSourceFile_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            ApplySourceSelection(path);
+        }
+    }
+
+    private async void ChooseSourceFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
         if (path is not null)
         {
             SourcePathBox.Text = path;
@@ -64,9 +73,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void ChooseTarget_Click(object sender, RoutedEventArgs e)
+    private async void ChooseTargetFile_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            TargetPathBox.Text = path;
+            ViewModel.TargetPath = path;
+        }
+    }
+
+    private async void ChooseTargetFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
         if (path is not null)
         {
             TargetPathBox.Text = path;
@@ -203,6 +222,44 @@ public sealed partial class MainWindow : Window
         else if (sender == TargetPathBox)
         {
             ViewModel.TargetPath = TargetPathBox.Text;
+        }
+    }
+
+    private void GoToCoreWorkflow_Click(object sender, RoutedEventArgs e)
+    {
+        CoreWorkflowAnchor.StartBringIntoView();
+    }
+
+    private void GoToOptionalConfiguration_Click(object sender, RoutedEventArgs e)
+    {
+        OptionalConfigurationAnchor.StartBringIntoView();
+    }
+
+    private void GoToPostWriteDestination_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.HasPendingSelectedOptionalWork)
+        {
+            OptionalConfigurationAnchor.StartBringIntoView();
+            return;
+        }
+
+        ResultAnchor.StartBringIntoView();
+    }
+
+    private void GoToResult_Click(object sender, RoutedEventArgs e)
+    {
+        ResultAnchor.StartBringIntoView();
+    }
+
+    private void ApplySourceSelection(string path)
+    {
+        SourcePathBox.Text = path;
+        ViewModel.SourcePath = path;
+
+        var slot = Path.GetFileName(path).ToLowerInvariant();
+        if (slot is "user1" or "user2" or "user3")
+        {
+            ViewModel.SelectedSlot = slot;
         }
     }
 

@@ -104,7 +104,7 @@ def main() -> int:
 
     workflow = read("ViewModels/MainViewModel.cs")
     for expected in (
-        '"convert", SourcePath, "--output", TargetPath, "--dry-run"',
+        '"convert", paths.Source, "--output", paths.Target, "--dry-run"',
         '"rollback", "--manifest", RollbackManifestPath',
         '"convert-cec", "--source-dir", CecSourceDirectory, "--target", CecTargetPath, "--dry-run"',
         '"--write", "--experimental"',
@@ -114,6 +114,16 @@ def main() -> int:
     ):
         require(expected in workflow, f"workflow is missing {expected}")
 
+    resolver = read("Models/SavePathResolution.cs")
+    for expected in (
+        "TryResolveSource",
+        "TryResolveTarget",
+        "TryResolveExtDataUserDirectory",
+        "Path.Combine(fullPath, slot)",
+        "Path.GetFileName(fullPath)",
+    ):
+        require(expected in resolver, f"Windows path resolver is missing {expected}")
+
     core_dry_run = workflow.split("public async Task RunCoreDryRunAsync()", 1)[1].split(
         "public async Task WriteCoreAsync()", 1
     )[0]
@@ -121,23 +131,81 @@ def main() -> int:
         "_coreAuthorization = null;",
         'var reportSourceHash = result.TryGetHash("source");',
         'var reportTargetHash = result.TryGetHash("target_before");',
-        "!source.Exists || !target.Exists",
-        "string.IsNullOrWhiteSpace(target.Sha256)",
+        "var targetMatchesDryRun = targetAfter.Exists",
+        "? !string.IsNullOrWhiteSpace(targetAfter.Sha256)",
+        "string.IsNullOrWhiteSpace(targetAfter.Sha256)",
         "string.IsNullOrWhiteSpace(reportTargetHash)",
-        "string.Equals(target.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
-        "new DryRunAuthorization(source, target, reportSourceHash",
+        "string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
+        "new DryRunAuthorization(sourceAfter, targetAfter, reportSourceHash",
     ):
         require(expected in core_dry_run, f"core Dry Run is missing target hash validation {expected}")
+
+    # A directory export is deliberately a new-file transaction. The target
+    # state observed by Inspect is part of that intent: an absent target must
+    # not turn into an in-place overwrite merely because another process
+    # creates the selected user# before Dry Run starts.
+    inspect_core = public_method_body(workflow, "InspectCoreAsync")
+    for expected in (
+        "var sourceAtInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);",
+        "var targetAtInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);",
+        "if (!sourceAtInspection.Matches(sourceAfterInspection) || !targetAtInspection.Matches(targetAfterInspection))",
+        "_inspectedSource = sourceAfterInspection;",
+        "_inspectedTarget = targetAfterInspection;",
+    ):
+        require(expected in inspect_core, f"core Inspect is missing stable target intent validation {expected}")
+    for expected in (
+        "var inspectedSource = _inspectedSource",
+        "var inspectedTarget = _inspectedTarget",
+        "if (!inspectedSource.Matches(sourceBefore) || !inspectedTarget.Matches(targetBefore))",
+        "!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter)",
+    ):
+        require(expected in core_dry_run, f"core Dry Run must preserve inspected target intent {expected}")
 
     core_write = workflow.split("public async Task WriteCoreAsync()", 1)[1].split(
         "public async Task RollbackCoreAsync()", 1
     )[0]
     for expected in (
         '"--expected-source-sha256", authorization.SourceReportHash',
-        '"--expected-target-sha256", expectedTargetSha256',
         "var expectedTargetSha256 = authorization.Target.Sha256",
+        "if (authorization.Target.Exists)",
+        'arguments.Add("--expected-target-sha256");',
+        "arguments.Add(expectedTargetSha256);",
+        'arguments.Add("--expected-target-absent");',
     ):
         require(expected in core_write, f"core write is missing dry-run hash binding {expected}")
+
+    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows core workflow must gate selected optional setup")
+    require("public bool HasPendingSelectedOptionalWork" in workflow, "Windows core workflow must retain selected optional work")
+    require("!SelectedOptionalDataIsConfigured" in core_dry_run, "core Dry Run must not bypass incomplete optional setup")
+    require(
+        "SelectedOptionalDataIsConfigured" in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
+        "core write availability must not bypass incomplete optional setup",
+    )
+    require(
+        "!SelectedOptionalDataIsConfigured" in core_write,
+        "core write entry point must reject incomplete optional setup",
+    )
+    optional_availability = workflow.split("private void RaiseOptionalConfigurationAvailability()", 1)[1].split(
+        "private void SetWorkflowGuidance", 1
+    )[0]
+    require(
+        "OnPropertyChanged(nameof(CanWriteCore));" in optional_availability,
+        "changing optional setup must refresh core write availability",
+    )
+    system_write = public_method_body(workflow, "WriteSystemAsync")
+    extras_install = public_method_body(workflow, "InstallExtrasAsync")
+    require("_systemWriteCompleted = true;" in system_write, "system completion must be tracked independently")
+    require("_extrasInstallCompleted = true;" in extras_install, "ExtData completion must be tracked independently")
+
+    window = read("MainWindow.xaml")
+    require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
+    require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
+    require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
+    require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
+    code_behind = read("MainWindow.xaml.cs")
+    require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
+    require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
+    require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")
 
     cec_write = workflow.split("public async Task WriteCecAsync()", 1)[1].split(
         "public async Task RollbackCecAsync()", 1
@@ -309,6 +377,25 @@ def main() -> int:
     window = read("MainWindow.xaml")
     for expected in ("StageArtwork", "DryRun_Click", "CecToggle", "RollbackCore_Click"):
         require(expected in window, f"main surface is missing {expected}")
+    for expected in (
+        "ShowPostInspectGuidance",
+        "ShowPostDryRunGuidance",
+        "ShowPostWriteGuidance",
+        "ShowPostOptionalGuidance",
+        "ShowPostRollbackGuidance",
+        "GoToPostWriteDestination_Click",
+        "GoToCoreWorkflow_Click",
+        "GoToOptionalConfiguration_Click",
+    ):
+        require(expected in window, f"main surface is missing guided continuation {expected}")
+    for expected in (
+        "WorkflowGuidance.CoreInspected",
+        "WorkflowGuidance.CoreDryRunAuthorized",
+        "WorkflowGuidance.CoreWritten",
+        "WorkflowGuidance.OptionalStepComplete",
+        "WorkflowGuidance.RolledBack",
+    ):
+        require(expected in workflow, f"workflow is missing guided continuation {expected}")
     stage_artwork = read("Controls/StageArtwork.xaml.cs")
     require("SceneImage.Source" in stage_artwork, "stage artwork must change with workflow state")
 
