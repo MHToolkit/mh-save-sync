@@ -1,5 +1,7 @@
 # MH Save Sync
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Cross-platform, multi-emulator save synchronization for macOS and Android with
 end-to-end encrypted snapshots and a self-hosted service.
 
@@ -17,188 +19,307 @@ backup product until the data-integrity gates in `docs/ROADMAP.md` pass.
 
 ## Japanese MH3G 3DS -> Cemu conversion (offline)
 
-`mh3g-save-convert` migrates one **Japanese** MH3G 3DS save slot from
-Nemessix/Azahar to the matching Japanese MH3G HD Cemu slot. It is a local-only,
-one-way tool: it does not upload a save, alter a source save, support another
-region, or convert Cemu back to 3DS. It preserves bytes outside the documented
-conversion ranges, but that byte preservation is not a semantic verification of
-every in-game field.
+`mh3g-save-convert` migrates **one Japanese MH3G 3DS slot** to the matching
+Japanese MH3G HD Cemu slot. It is local-only and one-way: it never uploads a
+save, never modifies the source file, does not support another region, and does
+not convert Cemu back to 3DS. It preserves bytes outside documented conversion
+ranges, but preserved bytes are not proof that every in-game field has the same
+meaning on both platforms.
 
-Before **any** `--write` or `rollback`, fully quit Nemessix, Azahar, and Cemu.
-Do not rely only on closing a game window; wait until their processes have
-stopped. `inspect` and dry-run conversion are read-only.
+> **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
+> archives directly, and it does **not** search an arbitrary save directory for
+> a plausible file. Fully extract an archive to a normal local directory, then
+> give the command the exact file or exact directory shown below. Do not run a
+> program from a QQ/browser archive preview. Quote every path that contains a
+> space.
 
-Set the source and target to the same numbered slot. For the default local
-Nemessix and Cemu paths, a `user2` migration is:
+Before any `--write`, `rollback`, or `rollback-cec`, fully quit Nemessix,
+Azahar, and Cemu and wait for their processes to stop. `inspect`,
+`inspect-progress`, `inspect-events`, `inspect-cec`, and every `--dry-run` are
+read-only.
+
+### Select the right extracted input
+
+The Japanese MH3G title savedata and its shared data live in three different
+places. The ExtData root is `00000481`, but `convert-extras` needs its `user`
+child. CEC is a system NAND mailbox, not SD-card ExtData.
+
+| Data group | Give this exact input to the CLI | Do **not** give it | Required? | Purpose / affected files |
+| --- | --- | --- | --- | --- |
+| Core slot | One explicit `user1`, `user2`, or `user3` file under `title/00040000/00048100/data/00000001/` | The title directory, all slots, ExtData, a ZIP | Yes: choose one slot | Character, story/progress, farm, fleet, local offline-hunter data; writes only the named same-number Cemu `user#` target |
+| Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Shared system data; writes only the named Cemu `system` target |
+| Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Generates converted `card*` and `quest*` files in a new staging directory |
+| StreetPass / Hunter Search CEC | The exact `CEC/00048100/` directory containing `InBox___` | SD-card ExtData, the `InBox___` child alone, a ZIP | Optional and experimental | Reads received raw StreetPass records and can write only Cemu `cec` |
+
+For Nemessix, replace `<ID0>` and `<ID1>` with the two 32-hexadecimal
+directory names below `sdmc/Nintendo 3DS/`; zero-filled IDs are only a common
+local emulator example:
+
+```text
+3DS title savedata
+  .../sdmc/Nintendo 3DS/<ID0>/<ID1>/title/00040000/00048100/data/00000001/
+    user1  user2  user3  system
+
+3DS MH3G shared ExtData
+  .../sdmc/Nintendo 3DS/<ID0>/<ID1>/extdata/00000000/00000481/
+    user/                         <- pass this directory to convert-extras
+      card1 card2 card3 cardbox quest1 quest2 quest3 quest4
+    boss/ icon metadata            <- not converter inputs
+
+3DS system StreetPass CEC mailbox
+  .../nand/data/<ID0>/sysdata/00010026/00000000/CEC/00048100/
+    InBox___/BoxInfo_____ and InBox___/_*  <- received messages
+    OutBox__/...                           <- local outgoing broadcast
+```
+
+If an extracted folder contains `user2`, choose that **file** for a core slot
+conversion. If it contains `card1` through `quest4`, choose that folder only
+for `convert-extras`. If it contains an extra wrapper directory, enter it first;
+the expected filenames must be immediate children of the path passed to the
+command.
+
+### Before you write: paths, inspection, and dry-run
+
+The examples below run from this repository after Rust is installed. Define a
+shell array once; when using a packaged binary, replace it with
+`CLI=("/path/to/mh3g-save-convert")`.
 
 ```bash
-SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000/00048100/data/00000001/user2"
-CEMU_DIR="$HOME/Library/Application Support/Nemessix Dev/cemu/mlc01/usr/save/00050000/10104D00/user/80000001"
+CLI=(cargo run --quiet -p mh3g-save-convert --)
+
+# Replace the two IDs and the Cemu user directory with your own extracted paths.
+N3DS_ROOT="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/<ID0>/<ID1>"
+SOURCE="$N3DS_ROOT/title/00040000/00048100/data/00000001/user2"
+SYSTEM_SOURCE="$N3DS_ROOT/title/00040000/00048100/data/00000001/system"
+EXTRAS_SOURCE="$N3DS_ROOT/extdata/00000000/00000481/user"
+CEC_SOURCE="$HOME/Library/Application Support/Nemessix/nand/data/<ID0>/sysdata/00010026/00000000/CEC/00048100"
+
+# Example only: choose the existing Cemu account directory that contains user# files.
+CEMU_DIR="$HOME/Library/Application Support/Cemu/mlc01/usr/save/00050000/10104D00/user/80000001"
 TARGET="$CEMU_DIR/user2"
-
-# Read only: confirm this is the supported Japanese 3DS profile.
-rtk cargo run -p mh3g-save-convert -- inspect "$SOURCE"
-
-# Read only: decode every task and compare logical completion bits by quest ID.
-rtk cargo run -p mh3g-save-convert -- inspect-progress "$SOURCE" --target "$TARGET"
-
-# Read only: compare simple story flags and categorized event coordinates.
-rtk cargo run -p mh3g-save-convert -- inspect-events "$SOURCE" --target "$TARGET"
-
-# Read only: produce and validate the result without changing Cemu's slot.
-rtk cargo run -p mh3g-save-convert -- convert "$SOURCE" --output "$TARGET" --dry-run
-
-# All emulators must be stopped. Atomically install, preserving any old target.
-rtk cargo run -p mh3g-save-convert -- convert "$SOURCE" --output "$TARGET" --write
-
-# If Cemu validation fails, with all emulators still stopped, undo that install.
-rtk cargo run -p mh3g-save-convert -- rollback \
-  --manifest "$CEMU_DIR/.user2.mh3g-install.json"
-```
-
-`--write` creates a same-directory backup when `user2` already exists and writes
-the named manifest. Keep that manifest until you have validated the migrated
-slot in Cemu or completed rollback. The converter currently recognizes the
-Japanese `0x2B` profile only. File-level success is not yet a runtime
-compatibility claim; Cemu load/readback and rollback evidence are required
-before this repository labels the path Runtime Verified. See
-`docs/adr/0013-mh3g-cross-format-conversion.md` for the conversion contract and
-provenance. See [the exact MH3G file contract](docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md)
-before collecting source files or selecting destination components.
-
-The progress decoder maps the 3DS and Wii U task tables by quest ID, including
-the 16 completion words at payload offset `0x6E5C`. It also converts the 58
-simple-event words at `0x62AE` and preserves the byte-addressed categorized
-event table at `0x668C`. Static table provenance is pinned in
-`crates/mh3g-save-convert/data/catalog-provenance.json`.
-
-### Shared extdata, guild cards, and StreetPass CEC
-
-`card1`, `card2`, `card3`, `cardbox`, and `quest1` through `quest4` are shared
-3DS extdata files, separate from `user1`/`user2`/`user3`. They must not be
-treated as part of a successful slot conversion merely because `user#` loads.
-
-`quest1` through `quest4` are payload-compatible and only receive the Cemu
-container. `card1` through `card3` and `cardbox` are not payload-compatible:
-their numeric fields, arena records, and crown/discovery bitfields require the
-statically recovered MEOW v5 3DS-to-Wii U mapping before the Cemu wrapper is
-written. `convert-extras` applies that mapping from the original 3DS body, then
-reports hashes for every generated component. This is file-level evidence, not
-proof that every received guild card works in the Wii U UI:
-
-```bash
-EXTRAS_SOURCE="$HOME/Library/Application Support/Nemessix/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/extdata/00000000/00000481/user"
-EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras"
-
-# Read only: validates every source component and reports output hashes.
-rtk cargo run -p mh3g-save-convert -- convert-extras \
-  --source-dir "$EXTRAS_SOURCE" \
-  --output-dir "$EXTRAS_OUTPUT" \
-  --dry-run
-
-# Writes only the new output directory. Existing component files are refused.
-rtk cargo run -p mh3g-save-convert -- convert-extras \
-  --source-dir "$EXTRAS_SOURCE" \
-  --output-dir "$EXTRAS_OUTPUT" \
-  --write
-```
-
-`--reset-guild-cards` is an explicit destructive recovery option, not part of
-normal migration. It replaces every `card*` payload with an empty native-Cemu
-component and therefore discards both local and received guild cards. Keep the
-source extdata and install only after making a backup of the Cemu destination.
-
-StreetPass/Hunter Search data is a separate 3DS CEC mailbox. It is not stored
-in `card*`, and it is not migrated by `convert-extras`. Before attempting any
-future semantic CEC conversion, inspect both sides without writing:
-
-```bash
-CEC_SOURCE="$HOME/Library/Application Support/Nemessix/nand/data/00000000000000000000000000000000/sysdata/00010026/00000000/CEC/00048100"
 CEMU_CEC="$CEMU_DIR/cec"
 
-rtk cargo run -p mh3g-save-convert -- inspect-cec \
-  --source-dir "$CEC_SOURCE" \
-  --source-slot "$SOURCE" \
-  --target "$CEMU_CEC"
+"${CLI[@]}" --help
+"${CLI[@]}" inspect "$SOURCE"
+"${CLI[@]}" inspect-progress "$SOURCE" --target "$TARGET"
+"${CLI[@]}" inspect-events "$SOURCE" --target "$TARGET"
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run
 ```
 
-The report gives the 3DS CEC inbox/outbox counts, validates each message
-header, and reports whether the source slot's guild-card anchor occurs in an
-outbox message. For the MH3G message shape (`body_size == 0x2A08`) it also
-reports the read-only `0x2A00` record-shaped candidate after the observed
-8-byte body prefix. Cemu stores 50 fixed-size record slots after a 0x1FC-byte
-cache prefix. `convert-cec` is an **experimental raw-slot candidate**, not a
-verified received-guild-card migration. It considers only records in
-`InBox___`: `OutBox__` describes the source hunter's own outgoing transmission
-and is intentionally never written to Cemu. It copies each non-empty received
-MH3G record into the first available empty slot (or slots at/after `--slot`)
-and never overwrites an existing non-empty slot:
+`inspect` takes exactly one `user#` or `system` file and writes nothing.
+`inspect-progress` takes a source slot, optional `--target <Cemu-user#>`, and
+optional `--quest-id <0..65535>` to restrict output. `inspect-events` takes a
+source slot, optional `--target <Cemu-user#>`, and optional `--all` to include
+unset event coordinates. The progress decoder maps quest IDs, including the 16
+completion words at payload offset `0x6E5C`; the event decoder covers 58 simple
+event words at `0x62AE` and the categorized table at `0x668C`.
+
+`convert` accepts one source `user#` file and `--output <same-name-user#>`.
+`user2` can only write a target named `user2`; it cannot overwrite `user1` or
+an arbitrary renamed file. With no `--write`, conversion remains a dry-run;
+pass `--dry-run` explicitly in scripts to make that intention visible. `--write`
+and `--dry-run` conflict.
+
+### Complete command reference
+
+All commands below use the `CLI` array above. Replace it with a packaged binary
+if you are not building from source.
+
+#### `inspect` — read one file
+
+```text
+mh3g-save-convert inspect <SOURCE>
+```
+
+`<SOURCE>` is one `user1`/`user2`/`user3` or `system` file. It validates the
+Japanese `0x2B` profile, reports profile/size/hash information, and writes
+nothing:
 
 ```bash
-# Read only: plan the import and print before/after hashes.
-rtk cargo run -p mh3g-save-convert -- convert-cec \
-  --source-dir "$CEC_SOURCE" \
-  --target "$CEMU_CEC" \
-  --dry-run
-
-# All emulators must be stopped. Write atomically and keep a hash-addressed
-# .cec.mh3g-backup-* plus .cec.mh3g-install.json beside the target.
-rtk cargo run -p mh3g-save-convert -- convert-cec \
-  --source-dir "$CEC_SOURCE" \
-  --target "$CEMU_CEC" \
-  --write --experimental
-
-# If the runtime check is not useful, restore the exact pre-write cec file.
-rtk cargo run -p mh3g-save-convert -- rollback-cec \
-  --manifest "$CEMU_DIR/.cec.mh3g-install.json"
+"${CLI[@]}" inspect "$SOURCE"
+"${CLI[@]}" inspect "$SYSTEM_SOURCE"
 ```
 
-The source 3DS wrapper and its 8-byte message prefix are intentionally not
-copied. The raw record placement is backed by the observed Japanese Cemu
-container geometry and an isolated Cemu process-memory canary, but the
-in-game guild-card list and Hunter Search UI still require runtime validation.
+#### `inspect-progress` — read quest completion
 
-### Windows 11 x64 test package
-
-The `mh3g-converter-windows` GitHub Actions workflow builds a native,
-`x86_64-pc-windows-msvc` executable with Rust's CRT linked statically, runs the
-converter test suite and release-binary help smoke check on Windows, then uploads
-`mh3g-save-convert-windows-x64.zip`, its SHA-256 sidecar, and the SHA-256
-sidecar for the EXE inside the ZIP as workflow artifacts. Download the artifact
-from the pull request or the merged `main` workflow run, extract the inner ZIP,
-and use PowerShell:
-
-```powershell
-$expected = ((Get-Content .\mh3g-save-convert-windows-x64.zip.sha256 -Raw).Trim() -split '\s+')[0]
-$actual = (Get-FileHash -Algorithm SHA256 .\mh3g-save-convert-windows-x64.zip).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw "ZIP SHA-256 mismatch: expected $expected, got $actual" }
-Expand-Archive .\mh3g-save-convert-windows-x64.zip -DestinationPath .\mh3g-converter
-Set-Location .\mh3g-converter\mh3g-save-convert-windows-x64
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 --help
+```text
+mh3g-save-convert inspect-progress [--target <TARGET>] [--quest-id <QUEST_ID>] <SOURCE>
 ```
 
-Run from the fully extracted local directory, not inside the ZIP or a
-QQ/browser archive preview. `Run-Converter.ps1` removes Mark-of-the-Web from
-the extracted EXE only after verifying the packaged
-`mh3g-save-convert.exe.sha256`, forwards all arguments, and preserves the
-converter's exit code. It does not and cannot bypass AppLocker, Smart App Control, antivirus, or
-an organization policy that refuses unsigned executables; in that case an
-administrator must allow the published SHA-256. Once the converter starts,
-top-level reads and transactional filesystem operations report their operation
-and path; retain the complete error line when reporting Windows error 5
-(`Access is denied`).
+`<SOURCE>` is one 3DS `user#`; `--target` is an optional same-slot Cemu
+`user#`; `--quest-id` filters to one numeric quest ID. It writes nothing:
 
-Builds before the Windows transaction fix could pass `--help`, `inspect`, and
-dry-run conversion but fail every `--write` with Windows error 5. The cause was
-the Unix directory `fsync` path attempting to open a directory as a regular
-file on Windows. Current builds still sync each transaction file before atomic
-rename, but do not call the unsupported directory flush on Windows. The Windows
-workflow now performs a real synthetic `--write` followed by `rollback`, rather
-than treating a help-only smoke check as sufficient.
+```bash
+"${CLI[@]}" inspect-progress "$SOURCE" --target "$TARGET" --quest-id 201
+```
 
-The Windows executable has the same Japanese-profile-only, source-read-only,
-backup, dry-run, write, and rollback requirements documented above. Do not use
-`--write` while Cemu, Azahar, or Nemessix is running.
+#### `inspect-events` — read story/event flags
+
+```text
+mh3g-save-convert inspect-events [--target <TARGET>] [--all] <SOURCE>
+```
+
+`<SOURCE>` and optional `--target` are the same kind of files as above.
+`--all` adds unset coordinates; without it the report focuses on active values.
+It writes nothing:
+
+```bash
+"${CLI[@]}" inspect-events "$SOURCE" --target "$TARGET" --all
+```
+
+#### `convert` — convert one character slot
+
+```text
+mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
+```
+
+`<SOURCE>` and `<OUTPUT>` must have the same `user#` basename. Read-only use:
+
+```bash
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run
+```
+
+With all emulators stopped, install atomically:
+
+```bash
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" --write
+```
+
+If a target existed, `--write` creates
+`.user2.mh3g-backup-<previous-sha256>` beside it, plus
+`.user2.mh3g-install.json`; repeated installs may create
+`.user2.mh3g-install-history-<sha256>.json`. Keep the manifest until manual
+Cemu validation succeeds.
+
+#### `convert-system` — convert shared system data
+
+```text
+mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE>
+```
+
+Use explicit `system` files only; it never reads a `user#` or ExtData:
+
+```bash
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --dry-run
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --write
+```
+
+The same transactional backup/manifest pattern applies, using `.system...`
+names. `--write` and `--dry-run` conflict.
+
+#### `convert-extras` — stage shared ExtData
+
+```text
+mh3g-save-convert convert-extras [--dry-run | --write] [--reset-guild-cards] \
+  --source-dir <EXTDATA-USER-DIR> --output-dir <NEW-STAGING-DIR>
+```
+
+`--source-dir` must be the complete `.../extdata/00000000/00000481/user/`
+directory; all eight files are required even if you later install only card
+files. `--output-dir` is a new staging directory. Existing named component
+files are refused, so this command never overwrites a Cemu save:
+
+```bash
+EXTRAS_OUTPUT="$HOME/Desktop/mh3g-cemu-extras"
+"${CLI[@]}" convert-extras --source-dir "$EXTRAS_SOURCE" --output-dir "$EXTRAS_OUTPUT" --dry-run
+"${CLI[@]}" convert-extras --source-dir "$EXTRAS_SOURCE" --output-dir "$EXTRAS_OUTPUT" --write
+```
+
+`quest1`–`quest4` receive the Cemu container. `card1`–`card3` and `cardbox`
+receive the recovered cross-platform field mapping before the wrapper is
+written. `--reset-guild-cards` is an explicit destructive recovery switch: it
+generates empty native-Cemu `card*` files and discards local/received card data.
+Do not use it for normal migration. Back up a Cemu destination before manually
+installing generated files.
+
+#### `inspect-cec` — read StreetPass/Hunter Search mailbox
+
+```text
+mh3g-save-convert inspect-cec --source-dir <CEC-DIR> [--target <CEMU-CEC>] \
+  [--source-slot <USER-SLOT>]
+```
+
+`--source-dir` is the CEC `.../CEC/00048100/` directory, not ExtData.
+`--target` optionally reads a Cemu `cec` file. `--source-slot` optionally reads
+one `user#` only to locate its guild-card anchor. The command writes nothing:
+
+```bash
+"${CLI[@]}" inspect-cec --source-dir "$CEC_SOURCE" --source-slot "$SOURCE" --target "$CEMU_CEC"
+```
+
+#### `convert-cec` — experimental received-message import
+
+```text
+mh3g-save-convert convert-cec [--dry-run | --write --experimental] \
+  [--slot <SLOT>] --source-dir <CEC-DIR> --target <CEMU-CEC>
+```
+
+CEC is not the main save and not the durable guild-card store. `InBox___/_*`
+are raw received messages; `OutBox__/_*` are the local hunter's outgoing
+broadcast and are intentionally ignored. `BoxInfo_____` is mailbox metadata.
+Only non-empty inbox records are candidates. Existing guild cards and
+offline-hall partners use this durable set instead:
+
+```text
+matching user# + card1 + card2 + card3 + cardbox
+```
+
+An empty CEC inbox is normal even when the durable card list is non-empty.
+`convert-cec` is independent and **experimental**: it has file-level evidence,
+not a blanket runtime guarantee for every Wii U UI. It writes no `user#`,
+`system`, `card*`, or `quest*` file. It uses the first empty Cemu slot by
+default; `--slot <SLOT>` chooses the first candidate slot and never overwrites
+an existing non-empty record.
+
+```bash
+"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --dry-run
+"${CLI[@]}" convert-cec --source-dir "$CEC_SOURCE" --target "$CEMU_CEC" --slot 0 --write --experimental
+```
+
+The source 3DS wrapper and observed 8-byte message prefix are not copied. A
+successful CEC write creates `.cec.mh3g-backup-<previous-sha256>` when needed
+and `.cec.mh3g-install.json` beside the target.
+
+#### `rollback` and `rollback-cec` — restore only a known transaction
+
+```text
+mh3g-save-convert rollback --manifest <MANIFEST>
+mh3g-save-convert rollback-cec --manifest <MANIFEST>
+```
+
+Both commands require an exact converter-generated manifest; they do not accept
+a save directory, backup file, or archive. With all emulators stopped:
+
+```bash
+"${CLI[@]}" rollback --manifest "$CEMU_DIR/.user2.mh3g-install.json"
+"${CLI[@]}" rollback-cec --manifest "$CEMU_DIR/.cec.mh3g-install.json"
+```
+
+Rollback restores or removes only the manifest-bound target and clears that
+transaction's controlled artifacts. It never changes the 3DS source.
+
+### Runtime evidence and packages
+
+The converter recognizes the Japanese `0x2B` profile only. Its static tables
+and provenance are in `crates/mh3g-save-convert/data/catalog-provenance.json`;
+the detailed data boundary is in
+[`docs/adr/0013-mh3g-cross-format-conversion.md`](docs/adr/0013-mh3g-cross-format-conversion.md)
+and [the exact MH3G file contract](docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md).
+
+**macOS arm64:** isolated CLI validation is pending for this documentation
+revision. Until it is recorded here, a successful build or byte-level result is
+not a claim that gameplay behavior was tested. Validation uses temporary output
+directories only; it does not start Cemu or write an existing MLC.
+
+**Windows x64:** `.github/workflows/mh3g-converter-windows.yml` builds a native
+statically linked `x86_64-pc-windows-msvc` executable, packages its checksum and
+launcher, simulates Mark-of-the-Web, and runs synthetic write/rollback evidence.
+The current PR's GitHub-hosted workflow result is the package-CI evidence; it
+does not prove an individual PC's AppLocker, Smart App Control, antivirus,
+archive-preview, or directory-permission policy. Download only a successful
+workflow artifact, verify its ZIP SHA-256 sidecar, fully extract it, then use
+the included `Run-Converter.ps1`. Retain the complete operation/path line if
+Windows reports error 5 (`Access is denied`).
 
 
 ## Office Mac ↔ home Android user flow
