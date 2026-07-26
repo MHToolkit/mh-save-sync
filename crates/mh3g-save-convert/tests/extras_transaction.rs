@@ -195,6 +195,32 @@ fn rejects_a_partial_group_before_creating_transaction_artifacts() {
 }
 
 #[test]
+fn rejects_a_quests_group_missing_quest4_before_creating_transaction_artifacts() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::Quests, 0x18);
+    fs::create_dir_all(&target).unwrap();
+    fs::remove_file(staging.join("quest4")).unwrap();
+
+    let error = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::Quests],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ConversionError::InvalidSave(message) if message.contains("incomplete"))
+    );
+    assert_no_transaction_artifacts(&target);
+}
+
+#[test]
 fn dry_run_is_read_only_for_a_complete_group() {
     let temp = tempdir().unwrap();
     let staging = temp.path().join("staging");
@@ -213,8 +239,53 @@ fn dry_run_is_read_only_for_a_complete_group() {
     .unwrap();
 
     assert_eq!(report.entries.len(), 4);
+    assert_eq!(report.groups, vec![ExtraGroup::GuildCards]);
+    assert!(report.staging_dir.is_absolute());
+    assert!(report.target_dir.is_absolute());
     assert_no_transaction_artifacts(&staging);
     assert_no_transaction_artifacts(&target);
+}
+
+#[test]
+fn reports_and_persists_groups_in_canonical_order() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x21);
+    write_group(&staging, ExtraGroup::Quests, 0x31);
+    write_group(&target, ExtraGroup::GuildCards, 0x81);
+    write_group(&target, ExtraGroup::Quests, 0x91);
+
+    let report = dry_run_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::Quests, ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+    )
+    .unwrap();
+    assert_eq!(
+        report.groups,
+        vec![ExtraGroup::GuildCards, ExtraGroup::Quests]
+    );
+
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::Quests, ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let manifest: ExtraInstallManifest =
+        serde_json::from_slice(&fs::read(installed.manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest.groups,
+        vec![ExtraGroup::GuildCards, ExtraGroup::Quests]
+    );
 }
 
 #[test]
@@ -313,6 +384,85 @@ fn rollback_restores_existing_targets_and_removes_originally_absent_targets() {
 }
 
 #[test]
+fn rollback_resumes_after_a_restored_target_backup_was_already_consumed() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x55);
+    write_group(&target, ExtraGroup::GuildCards, 0xB5);
+    let before = target_bytes(&target, ExtraGroup::GuildCards);
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let manifest: ExtraInstallManifest =
+        serde_json::from_slice(&fs::read(&installed.manifest_path).unwrap()).unwrap();
+    let restored = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.component == "card1")
+        .unwrap();
+    let original = before
+        .iter()
+        .find(|(component, _)| component == "card1")
+        .and_then(|(_, bytes)| bytes.as_deref())
+        .unwrap();
+    fs::write(&restored.target, original).unwrap();
+    fs::remove_file(restored.backup.as_ref().unwrap()).unwrap();
+
+    rollback_extra_groups_with(&installed.manifest_path, &Stopped, &StdExtraFileOperations)
+        .unwrap();
+
+    assert_target_bytes(&target, &before);
+    assert_no_transaction_artifacts(&target);
+}
+
+#[test]
+fn rollback_refuses_an_after_state_when_its_required_backup_is_missing() {
+    let temp = tempdir().unwrap();
+    let staging = temp.path().join("staging");
+    let target = temp.path().join("target");
+    write_group(&staging, ExtraGroup::GuildCards, 0x56);
+    write_group(&target, ExtraGroup::GuildCards, 0xB6);
+    let installed = install_extra_groups_with(
+        &staging,
+        &target,
+        &[ExtraGroup::GuildCards],
+        None,
+        None,
+        &Stopped,
+        &StdExtraFileOperations,
+    )
+    .unwrap();
+    let manifest: ExtraInstallManifest =
+        serde_json::from_slice(&fs::read(&installed.manifest_path).unwrap()).unwrap();
+    let missing_backup = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.component == "card1")
+        .unwrap()
+        .backup
+        .as_ref()
+        .unwrap();
+    let before_rollback = target_bytes(&target, ExtraGroup::GuildCards);
+    fs::remove_file(missing_backup).unwrap();
+
+    let error =
+        rollback_extra_groups_with(&installed.manifest_path, &Stopped, &StdExtraFileOperations)
+            .unwrap_err();
+
+    assert!(matches!(error, ConversionError::IoAtPath { .. }));
+    assert_target_bytes(&target, &before_rollback);
+    assert!(installed.manifest_path.is_file());
+}
+
+#[test]
 fn rejects_a_running_emulator_before_changing_the_target() {
     let temp = tempdir().unwrap();
     let staging = temp.path().join("staging");
@@ -403,6 +553,47 @@ fn rejects_a_tampered_manifest_without_changing_installed_targets() {
     assert!(matches!(error, ConversionError::InvalidSave(_)));
     assert_target_bytes(&target, &before_rollback);
     assert!(installed.manifest_path.is_file());
+}
+
+#[test]
+fn rejects_manifest_groups_that_are_missing_duplicated_or_mismatched() {
+    for groups in [
+        vec![],
+        vec![ExtraGroup::GuildCards, ExtraGroup::GuildCards],
+        vec![ExtraGroup::Quests],
+    ] {
+        let temp = tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        let target = temp.path().join("target");
+        write_group(&staging, ExtraGroup::GuildCards, 0x84);
+        write_group(&target, ExtraGroup::GuildCards, 0xE4);
+        let installed = install_extra_groups_with(
+            &staging,
+            &target,
+            &[ExtraGroup::GuildCards],
+            None,
+            None,
+            &Stopped,
+            &StdExtraFileOperations,
+        )
+        .unwrap();
+        let mut manifest: ExtraInstallManifest =
+            serde_json::from_slice(&fs::read(&installed.manifest_path).unwrap()).unwrap();
+        manifest.groups = groups;
+        fs::write(
+            &installed.manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error =
+            rollback_extra_groups_with(&installed.manifest_path, &Stopped, &StdExtraFileOperations)
+                .unwrap_err();
+        assert!(
+            matches!(error, ConversionError::InvalidSave(message) if message.contains("groups"))
+        );
+        assert!(installed.manifest_path.is_file());
+    }
 }
 
 #[test]

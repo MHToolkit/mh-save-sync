@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-pub const EXTRA_INSTALL_MANIFEST_VERSION: u32 = 1;
+pub const EXTRA_INSTALL_MANIFEST_VERSION: u32 = 2;
 const EXTRA_MANIFEST_NAME: &str = ".mh3g-extra-install.json";
 const EXTRA_LOCK_NAME: &str = ".mh3g-extra-install.lock";
 
@@ -68,6 +68,7 @@ pub struct ExtraInstallEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraInstallManifest {
     pub version: u32,
+    pub groups: Vec<ExtraGroup>,
     pub staging_dir: PathBuf,
     pub target_dir: PathBuf,
     pub staging_set_sha256: String,
@@ -78,6 +79,9 @@ pub struct ExtraInstallManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraInstallReport {
     pub manifest_path: PathBuf,
+    pub groups: Vec<ExtraGroup>,
+    pub staging_dir: PathBuf,
+    pub target_dir: PathBuf,
     pub staging_set_sha256: String,
     pub target_set_sha256: String,
     pub entries: Vec<ExtraInstallEntry>,
@@ -190,6 +194,7 @@ struct PreparedEntry {
 struct ExtraInstallPlan {
     staging_dir: PathBuf,
     target_dir: PathBuf,
+    groups: Vec<ExtraGroup>,
     manifest_path: PathBuf,
     staging_set_sha256: String,
     target_set_sha256: String,
@@ -200,6 +205,9 @@ impl ExtraInstallPlan {
     fn report(&self) -> ExtraInstallReport {
         ExtraInstallReport {
             manifest_path: self.manifest_path.clone(),
+            groups: self.groups.clone(),
+            staging_dir: self.staging_dir.clone(),
+            target_dir: self.target_dir.clone(),
             staging_set_sha256: self.staging_set_sha256.clone(),
             target_set_sha256: self.target_set_sha256.clone(),
             entries: self
@@ -213,6 +221,7 @@ impl ExtraInstallPlan {
     fn manifest(&self) -> ExtraInstallManifest {
         ExtraInstallManifest {
             version: EXTRA_INSTALL_MANIFEST_VERSION,
+            groups: self.groups.clone(),
             staging_dir: self.staging_dir.clone(),
             target_dir: self.target_dir.clone(),
             staging_set_sha256: self.staging_set_sha256.clone(),
@@ -461,12 +470,13 @@ pub fn rollback_extra_groups_with(
     let backups = rollback_states
         .iter()
         .filter_map(|state| {
-            state.entry.entry.backup.as_ref().map(|backup| {
-                (
-                    backup.clone(),
-                    state.entry.previous.clone().expect("backup requires bytes"),
-                )
-            })
+            state
+                .entry
+                .entry
+                .backup
+                .as_ref()
+                .zip(state.entry.previous.as_ref())
+                .map(|(backup, previous)| (backup.clone(), previous.clone()))
         })
         .collect::<Vec<(PathBuf, Vec<u8>)>>();
     let mut removed_backups = Vec::new();
@@ -569,6 +579,7 @@ fn prepare_extra_install(
     Ok(ExtraInstallPlan {
         staging_dir,
         target_dir,
+        groups,
         manifest_path,
         staging_set_sha256,
         target_set_sha256,
@@ -892,13 +903,9 @@ fn validate_rollback_manifest(
     }
     validate_sha256(&manifest.staging_set_sha256, "manifest staging set")?;
     validate_sha256(&manifest.target_set_sha256, "manifest target set")?;
-    if manifest.entries.is_empty() {
-        return Err(ConversionError::InvalidSave(
-            "ExtData manifest has no complete groups".to_owned(),
-        ));
-    }
+    validate_manifest_groups(&manifest.groups)?;
 
-    let mut groups = BTreeMap::<ExtraGroup, BTreeSet<String>>::new();
+    let mut entry_groups = BTreeMap::<ExtraGroup, BTreeSet<String>>::new();
     let mut rollback_entries = Vec::with_capacity(manifest.entries.len());
     let mut last_component = None::<&str>;
     for entry in &manifest.entries {
@@ -950,7 +957,7 @@ fn validate_rollback_manifest(
                 ));
             }
         }
-        groups
+        entry_groups
             .entry(entry.group)
             .or_default()
             .insert(entry.component.clone());
@@ -959,7 +966,7 @@ fn validate_rollback_manifest(
             previous: None,
         });
     }
-    for (group, components) in &groups {
+    for (group, components) in &entry_groups {
         let expected = group
             .components()
             .iter()
@@ -971,6 +978,12 @@ fn validate_rollback_manifest(
                 group
             )));
         }
+    }
+    let complete_entry_groups = entry_groups.keys().copied().collect::<Vec<_>>();
+    if manifest.groups != complete_entry_groups {
+        return Err(ConversionError::InvalidSave(
+            "ExtData manifest groups do not exactly match complete entries".to_owned(),
+        ));
     }
     let observed_staging = set_sha256(
         manifest
@@ -994,6 +1007,20 @@ fn validate_rollback_manifest(
     Ok(rollback_entries)
 }
 
+fn validate_manifest_groups(groups: &[ExtraGroup]) -> Result<(), ConversionError> {
+    if groups.is_empty() {
+        return Err(ConversionError::InvalidSave(
+            "ExtData manifest groups must not be empty".to_owned(),
+        ));
+    }
+    if groups.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(ConversionError::InvalidSave(
+            "ExtData manifest groups must be unique and in canonical order".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct RollbackEntry {
     entry: ExtraInstallEntry,
@@ -1015,43 +1042,45 @@ fn prepare_rollback_states(
         .cloned()
         .map(|mut rollback_entry| {
             let entry = &rollback_entry.entry;
-            let previous = match (&entry.before_sha256, &entry.backup) {
-                (Some(before_sha256), Some(backup)) => {
-                    let backup_bytes =
-                        read_regular_file(backup, "reading ExtData rollback backup")?;
-                    if sha256_hex(&backup_bytes) != *before_sha256 {
-                        return Err(ConversionError::InvalidSave(format!(
-                            "ExtData rollback backup hash does not match manifest: {}",
-                            backup.display()
-                        )));
-                    }
-                    validate_cemu_external_component_named(&backup_bytes, &entry.component)?;
-                    Some(backup_bytes)
-                }
-                (None, None) => None,
-                _ => {
-                    unreachable!("manifest fields were validated before rollback state preparation")
-                }
-            };
             let current =
                 read_optional_regular_file(&entry.target, "reading ExtData rollback target")?;
             if let Some(current) = current.as_deref() {
                 validate_cemu_external_component_named(current, &entry.component)?;
             }
-            let needs_restore = match (
+            let current_sha256 = current.as_deref().map(sha256_hex);
+            let (needs_restore, previous) = match (
                 entry.before_sha256.as_deref(),
-                current.as_deref().map(sha256_hex),
+                entry.backup.as_deref(),
+                current_sha256.as_deref(),
             ) {
-                (Some(_before_sha256), Some(current_sha256))
+                (Some(before_sha256), Some(backup), Some(current_sha256))
                     if current_sha256 == entry.after_sha256 =>
                 {
-                    true
+                    (
+                        true,
+                        Some(read_and_validate_rollback_backup(
+                            backup,
+                            before_sha256,
+                            &entry.component,
+                        )?),
+                    )
                 }
-                (Some(before_sha256), Some(current_sha256)) if current_sha256 == before_sha256 => {
-                    false
+                (Some(before_sha256), Some(backup), Some(current_sha256))
+                    if current_sha256 == before_sha256 =>
+                {
+                    (
+                        false,
+                        read_optional_and_validate_rollback_backup(
+                            backup,
+                            before_sha256,
+                            &entry.component,
+                        )?,
+                    )
                 }
-                (None, Some(current_sha256)) if current_sha256 == entry.after_sha256 => true,
-                (None, None) => false,
+                (None, None, Some(current_sha256)) if current_sha256 == entry.after_sha256 => {
+                    (true, None)
+                }
+                (None, None, None) => (false, None),
                 _ => {
                     return Err(ConversionError::InvalidSave(format!(
                         "ExtData rollback target hash does not match manifest: {}",
@@ -1067,6 +1096,43 @@ fn prepare_rollback_states(
             })
         })
         .collect()
+}
+
+fn read_and_validate_rollback_backup(
+    backup: &Path,
+    before_sha256: &str,
+    component: &str,
+) -> Result<Vec<u8>, ConversionError> {
+    let backup_bytes = read_regular_file(backup, "reading ExtData rollback backup")?;
+    validate_rollback_backup_bytes(&backup_bytes, backup, before_sha256, component)?;
+    Ok(backup_bytes)
+}
+
+fn read_optional_and_validate_rollback_backup(
+    backup: &Path,
+    before_sha256: &str,
+    component: &str,
+) -> Result<Option<Vec<u8>>, ConversionError> {
+    let backup_bytes = read_optional_regular_file(backup, "reading ExtData rollback backup")?;
+    if let Some(backup_bytes) = backup_bytes.as_deref() {
+        validate_rollback_backup_bytes(backup_bytes, backup, before_sha256, component)?;
+    }
+    Ok(backup_bytes)
+}
+
+fn validate_rollback_backup_bytes(
+    backup_bytes: &[u8],
+    backup: &Path,
+    before_sha256: &str,
+    component: &str,
+) -> Result<(), ConversionError> {
+    if sha256_hex(backup_bytes) != before_sha256 {
+        return Err(ConversionError::InvalidSave(format!(
+            "ExtData rollback backup hash does not match manifest: {}",
+            backup.display()
+        )));
+    }
+    validate_cemu_external_component_named(backup_bytes, component)
 }
 
 fn compensate_rollback(
