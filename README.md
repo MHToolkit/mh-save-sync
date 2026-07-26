@@ -306,10 +306,19 @@ the detailed data boundary is in
 [`docs/adr/0013-mh3g-cross-format-conversion.md`](docs/adr/0013-mh3g-cross-format-conversion.md)
 and [the exact MH3G file contract](docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md).
 
-**macOS arm64:** isolated CLI validation is pending for this documentation
-revision. Until it is recorded here, a successful build or byte-level result is
-not a claim that gameplay behavior was tested. Validation uses temporary output
-directories only; it does not start Cemu or write an existing MLC.
+**macOS arm64 (isolated CLI verified 2026-07-26):** the packaged release binary
+passed its inner checksum, ZIP checksum, extraction, and extracted `--help`
+checks. Two real Japanese sources (`user1` and `user2`) each passed `inspect`,
+`inspect-progress`, `inspect-events`, explicit dry-run with no target created,
+isolated write, output readback, reinstall/backup/history creation, and
+manifest-bound rollback. Both sources remained byte-for-byte unchanged; their
+outputs were `0x8A24`, and written hashes matched dry-run hashes. The real
+eight-file ExtData directory also passed dry-run with no output directory and
+write to a fresh staging directory with all documented output sizes/hashes.
+Read-only CEC inspection reported zero received inbox messages and one local
+outbox message, so experimental CEC writing was not attempted. Cemu was not
+started and no existing MLC was read or written; this is CLI/file validation,
+not a new gameplay/runtime claim.
 
 **Windows x64:** `.github/workflows/mh3g-converter-windows.yml` builds a native
 statically linked `x86_64-pc-windows-msvc` executable, packages its checksum and
