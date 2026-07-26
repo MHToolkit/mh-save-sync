@@ -29,27 +29,31 @@ DEFAULT_OUTPUT = ROOT / "artifacts/research/ui_ux_link_check.json"
 URL_RE = re.compile(r"https://[^\s|)]+")
 TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
 MAX_READ_BYTES = 512 * 1024
+SOURCES_HEADINGS = {"## Sources reviewed", "## Sources"}
 
 
 def extract_source_urls(markdown: str) -> list[str]:
-    """Extract source URLs from the Sources table only, preserving order."""
+    """Extract source URLs from recognized Sources sections only, in order."""
     urls: list[str] = []
     in_sources = False
     for line in markdown.splitlines():
-        if line.strip() == "## Sources reviewed":
+        if line.strip() in SOURCES_HEADINGS:
             in_sources = True
             continue
         if in_sources and line.startswith("## "):
             break
         if not in_sources:
             continue
-        if not line.startswith("|"):
-            continue
         for url in URL_RE.findall(line):
-            cleaned = url.rstrip(".,")
+            cleaned = url.rstrip(".,>")
             if cleaned not in urls:
                 urls.append(cleaned)
     return urls
+
+
+def repo_relative_path(path: Path) -> str:
+    """Return a repository-relative display path for a CLI path argument."""
+    return str(path.resolve().relative_to(ROOT))
 
 
 def decode_title(raw: bytes) -> str | None:
@@ -163,25 +167,27 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args()
 
-    markdown = args.doc.read_text(encoding="utf-8")
+    doc = args.doc.resolve()
+    output = args.output.resolve()
+    markdown = doc.read_text(encoding="utf-8")
     urls = extract_source_urls(markdown)
     if not urls:
-        print(f"no source URLs found in {args.doc}", file=sys.stderr)
+        print(f"no source URLs found in {doc}", file=sys.stderr)
         return 2
 
     ok, failed = verify(urls, args.timeout)
     report = {
         "ui_ux_research_link_check": not failed,
         "generated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "doc": str(args.doc.relative_to(ROOT)),
+        "doc": repo_relative_path(doc),
         "source_count": len(urls),
         "ok_count": len(ok),
         "failed_count": len(failed),
         "ok": ok,
         "failed": failed,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0 if not failed else 1
 

@@ -126,7 +126,7 @@ and displays that result.
 
 ## Verification
 
-- `rtk proxy python3 scripts/ux-research-link-check.py`
+- `rtk proxy python3 scripts/ux-research-link-check.py --doc docs/research/MH3G_CONVERTER_UI_OPTIONS.md --output artifacts/research/mh3g_converter_ui_link_check.json`
 - `rtk grep -n 'WinUI 3' docs/adr/0014-mh3g-native-converter-ui.md docs/research/MH3G_CONVERTER_UI_OPTIONS.md`
 - `rtk git diff --check`
 
