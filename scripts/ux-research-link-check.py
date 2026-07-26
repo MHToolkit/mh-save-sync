@@ -28,6 +28,7 @@ DEFAULT_OUTPUT = ROOT / "artifacts/research/ui_ux_link_check.json"
 
 URL_RE = re.compile(r"https://[^\s|)]+")
 TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
+SECOND_LEVEL_HEADING_RE = re.compile(r" {0,3}##(?:[ \t]+|$)")
 MAX_READ_BYTES = 512 * 1024
 SOURCES_HEADINGS = {"## Sources reviewed", "## Sources"}
 
@@ -40,7 +41,7 @@ def extract_source_urls(markdown: str) -> list[str]:
         if line.strip() in SOURCES_HEADINGS:
             in_sources = True
             continue
-        if in_sources and line.startswith("## "):
+        if in_sources and SECOND_LEVEL_HEADING_RE.match(line):
             break
         if not in_sources:
             continue

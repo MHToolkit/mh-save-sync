@@ -77,6 +77,22 @@ class UiResearchLinkCheckTest(unittest.TestCase):
             ["https://inside.example.invalid/source"],
         )
 
+    def test_stops_at_a_second_level_heading_with_two_leading_spaces(self) -> None:
+        module = load_link_check_module()
+        markdown = "\n".join(
+            [
+                "## Sources",
+                "- Source: <https://inside.example.invalid/source>",
+                "  ## Next",
+                "https://outside.example.invalid/after",
+            ]
+        )
+
+        self.assertEqual(
+            module.extract_source_urls(markdown),
+            ["https://inside.example.invalid/source"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
