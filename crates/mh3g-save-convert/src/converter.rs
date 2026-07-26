@@ -36,6 +36,26 @@ fn is_guild_card_component(filename: &str) -> bool {
     matches!(filename, "card1" | "card2" | "card3" | "cardbox")
 }
 
+/// Validate an externally stored MH3G component in the exact Cemu container
+/// shape for its basename.  Unlike the slot/system profiles, these files have
+/// component-specific payload lengths and header filename checks.
+pub fn validate_cemu_external_component_named(
+    bytes: &[u8],
+    filename: &str,
+) -> Result<(), ConversionError> {
+    let payload_size = external_component_payload_size(filename).ok_or_else(|| {
+        ConversionError::InvalidSave(format!("unsupported MH3G extra-data component: {filename}"))
+    })?;
+    let expected_header = build_jp_cemu_header(filename, payload_size)?;
+    let expected_size = expected_header.len() + payload_size;
+    if bytes.len() != expected_size || !bytes.starts_with(&expected_header) {
+        return Err(ConversionError::InvalidSave(format!(
+            "invalid Japanese MH3G Cemu extra-data {filename}: expected {expected_size} bytes with matching Cemu header"
+        )));
+    }
+    Ok(())
+}
+
 /// Convert one MH3G 3DS extra-data component into its Cemu save container.
 ///
 /// Card bodies have their own platform-specific scalar and bitfield mapping;
@@ -186,7 +206,7 @@ mod tests {
     use crate::{
         converter::{
             convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named,
-            convert_external_component_to_cemu_named,
+            convert_external_component_to_cemu_named, validate_cemu_external_component_named,
         },
         profile::{
             CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, PAYLOAD_SIZE, SaveProfile, THREE_DS_SIZE,
@@ -324,6 +344,21 @@ mod tests {
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
             "857e91f9f7ec6adf1399480fe4409c1d29ec7b376be6d8f6b28dda3032d965f1"
+        );
+    }
+
+    #[test]
+    fn validates_external_cemu_components_by_exact_name_header_and_size() {
+        let output = convert_external_component_to_cemu_named(
+            &synthetic_external_component(CARD_PAYLOAD_SIZE),
+            "card1",
+        )
+        .unwrap();
+
+        validate_cemu_external_component_named(&output, "card1").unwrap();
+        assert!(validate_cemu_external_component_named(&output, "card2").is_err());
+        assert!(
+            validate_cemu_external_component_named(&output[..output.len() - 1], "card1").is_err()
         );
     }
 
