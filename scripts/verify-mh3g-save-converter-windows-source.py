@@ -64,6 +64,20 @@ def main() -> int:
     ):
         require(expected in workflow, f"workflow is missing {expected}")
 
+    core_dry_run = workflow.split("public async Task RunCoreDryRunAsync()", 1)[1].split(
+        "public async Task WriteCoreAsync()", 1
+    )[0]
+    for expected in (
+        'var reportSourceHash = result.TryGetHash("source");',
+        'var reportTargetHash = result.TryGetHash("target_before");',
+        "!source.Exists || !target.Exists",
+        "string.IsNullOrWhiteSpace(target.Sha256)",
+        "string.IsNullOrWhiteSpace(reportTargetHash)",
+        "string.Equals(target.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
+        "new DryRunAuthorization(source, target, reportSourceHash",
+    ):
+        require(expected in core_dry_run, f"core Dry Run is missing target hash validation {expected}")
+
     core_write = workflow.split("public async Task WriteCoreAsync()", 1)[1].split(
         "public async Task RollbackCoreAsync()", 1
     )[0]

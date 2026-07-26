@@ -346,8 +346,13 @@ public sealed class MainViewModel : ObservableObject
             var source = await _fingerprints.CaptureAsync(SourcePath, cancellationToken);
             var target = await _fingerprints.CaptureAsync(TargetPath, cancellationToken);
             var reportSourceHash = result.TryGetHash("source");
-            if (!source.Exists || string.IsNullOrWhiteSpace(reportSourceHash)
-                || !string.Equals(source.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase))
+            var reportTargetHash = result.TryGetHash("target_before");
+            if (!source.Exists || !target.Exists
+                || string.IsNullOrWhiteSpace(reportSourceHash)
+                || string.IsNullOrWhiteSpace(target.Sha256)
+                || string.IsNullOrWhiteSpace(reportTargetHash)
+                || !string.Equals(source.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(target.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
