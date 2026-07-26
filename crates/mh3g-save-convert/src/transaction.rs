@@ -6,9 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -16,21 +13,11 @@ use crate::{
     ConversionError,
     converter::convert_source_to_cemu,
     io_at_path,
+    process_probe::{PlatformProcessProbe, ProcessProbe},
     profile::{SaveProfile, inspect_bytes, validate_save_component_path},
 };
 
 pub const INSTALL_MANIFEST_VERSION: u32 = 1;
-#[cfg(any(target_os = "macos", test))]
-const GUARDED_PROCESS_NAMES: [&str; 8] = [
-    "Nemessix",
-    "nemessix",
-    "Azahar",
-    "azahar",
-    "Cemu",
-    "cemu",
-    "Cemu_release",
-    "cemu_release",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallManifest {
@@ -49,66 +36,12 @@ struct ExistingInstallManifest {
     history_path: PathBuf,
 }
 
-pub trait ProcessProbe {
-    fn matching_process(&self) -> Result<Option<String>, ConversionError>;
-}
-
 pub trait InstallValidator {
     fn validate(&self, bytes: &[u8]) -> Result<(), ConversionError>;
 }
 
 pub trait ManifestPublisher {
     fn publish(&self, path: &Path, manifest: &InstallManifest) -> Result<(), ConversionError>;
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MacOsProcessProbe;
-
-impl ProcessProbe for MacOsProcessProbe {
-    fn matching_process(&self) -> Result<Option<String>, ConversionError> {
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(None)
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            for name in GUARDED_PROCESS_NAMES {
-                let status = io_at_path(
-                    Command::new("pgrep")
-                        .args(["-x", name])
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status(),
-                    "running emulator process probe",
-                    Path::new("pgrep"),
-                )?;
-                match status.code() {
-                    Some(0) => return Ok(Some(name.to_owned())),
-                    Some(1) => {}
-                    Some(code) => {
-                        return Err(ConversionError::IoAtPath {
-                            operation: "running emulator process probe",
-                            path: PathBuf::from("pgrep"),
-                            source: std::io::Error::other(format!(
-                                "pgrep -x {name} exited with status {code}"
-                            )),
-                        });
-                    }
-                    None => {
-                        return Err(ConversionError::IoAtPath {
-                            operation: "running emulator process probe",
-                            path: PathBuf::from("pgrep"),
-                            source: std::io::Error::other(format!(
-                                "pgrep -x {name} terminated by signal"
-                            )),
-                        });
-                    }
-                }
-            }
-            Ok(None)
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -196,7 +129,7 @@ pub fn install(
         installed,
         target,
         manifest_path,
-        &MacOsProcessProbe,
+        &PlatformProcessProbe::default(),
         &CemuSaveValidator,
         &JsonManifestPublisher,
     )
@@ -375,7 +308,7 @@ pub fn install_with_publisher(
 }
 
 pub fn rollback(manifest_path: impl AsRef<Path>) -> Result<(), ConversionError> {
-    rollback_with(manifest_path, &MacOsProcessProbe)
+    rollback_with(manifest_path, &PlatformProcessProbe::default())
 }
 
 pub fn rollback_with(
@@ -1294,7 +1227,7 @@ mod tests {
     #[test]
     fn process_guard_uses_the_complete_exact_executable_name_list() {
         assert_eq!(
-            super::GUARDED_PROCESS_NAMES,
+            crate::process_probe::GUARDED_PROCESS_NAMES,
             [
                 "Nemessix",
                 "nemessix",

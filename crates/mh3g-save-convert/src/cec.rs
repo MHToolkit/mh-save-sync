@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ConversionError, io_at_path,
+    process_probe::{PlatformProcessProbe, ProcessProbe},
     profile::build_jp_cemu_header,
     transaction::{
-        MacOsProcessProbe, ProcessProbe, atomic_replace, remove_if_regular_file, sha256_hex,
-        sync_directory, unique_path, write_new_file,
+        atomic_replace, remove_if_regular_file, sha256_hex, sync_directory, unique_path,
+        write_new_file,
     },
     transforms::{GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections},
 };
@@ -584,6 +585,20 @@ pub fn install_cec(
     target: &Path,
     conversion: &CecConversion,
 ) -> Result<CecInstallResult, ConversionError> {
+    install_cec_with(
+        source_dir,
+        target,
+        conversion,
+        &PlatformProcessProbe::default(),
+    )
+}
+
+pub fn install_cec_with(
+    source_dir: &Path,
+    target: &Path,
+    conversion: &CecConversion,
+    probe: &dyn ProcessProbe,
+) -> Result<CecInstallResult, ConversionError> {
     if target.file_name().and_then(|name| name.to_str()) != Some("cec") {
         return Err(ConversionError::InvalidSave(format!(
             "Cemu CEC target must be named cec: {}",
@@ -611,7 +626,7 @@ pub fn install_cec(
             "CEC target cannot be a symlink".to_owned(),
         ));
     }
-    if let Some(name) = MacOsProcessProbe.matching_process()? {
+    if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
             "emulator process is running: {name}"
         )));
@@ -799,6 +814,13 @@ fn validate_cec_manifest_hash(value: &str, label: &str) -> Result<(), Conversion
 /// Roll back a prior `install_cec` transaction after verifying the installed
 /// hash and the hash-addressed backup.
 pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
+    rollback_cec_with(manifest_path, &PlatformProcessProbe::default())
+}
+
+pub fn rollback_cec_with(
+    manifest_path: &Path,
+    probe: &dyn ProcessProbe,
+) -> Result<(), ConversionError> {
     if manifest_path.file_name().and_then(|name| name.to_str()) != Some(".cec.mh3g-install.json") {
         return Err(ConversionError::InvalidSave(format!(
             "CEC rollback manifest has an unexpected name: {}",
@@ -857,7 +879,7 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
             "CEC rollback target cannot be a symlink".to_owned(),
         ));
     }
-    if let Some(name) = MacOsProcessProbe.matching_process()? {
+    if let Some(name) = probe.matching_process()? {
         return Err(ConversionError::UnsafeInstall(format!(
             "emulator process is running: {name}"
         )));
@@ -1013,6 +1035,22 @@ pub fn inspect_cec(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    struct Running;
+
+    impl ProcessProbe for Running {
+        fn matching_process(&self) -> Result<Option<String>, ConversionError> {
+            Ok(Some("Cemu.exe".to_owned()))
+        }
+    }
+
+    struct Stopped;
+
+    impl ProcessProbe for Stopped {
+        fn matching_process(&self) -> Result<Option<String>, ConversionError> {
+            Ok(None)
+        }
+    }
 
     #[cfg(windows)]
     #[test]
@@ -1183,6 +1221,42 @@ mod tests {
             records: Vec::new(),
             slots: Vec::new(),
         }
+    }
+
+    #[test]
+    fn cec_install_refuses_a_running_emulator_before_changing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+
+        let error = install_cec_with(temp.path(), &target, &conversion, &Running).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("Cemu.exe"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert!(!temp.path().join(".cec.mh3g-install.json").exists());
+    }
+
+    #[test]
+    fn cec_rollback_refuses_a_running_emulator_before_changing_the_target() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let installed = install_cec_with(temp.path(), &target, &conversion, &Stopped).unwrap();
+        let current = fs::read(&target).unwrap();
+
+        let error = rollback_cec_with(&installed.manifest, &Running).unwrap_err();
+
+        assert!(
+            matches!(error, ConversionError::UnsafeInstall(message) if message.contains("Cemu.exe"))
+        );
+        assert_eq!(fs::read(&target).unwrap(), current);
+        assert!(installed.manifest.exists());
     }
 
     #[cfg(unix)]
