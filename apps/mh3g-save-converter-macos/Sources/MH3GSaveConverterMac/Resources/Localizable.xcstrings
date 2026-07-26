@@ -1,0 +1,13 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Navigation.Components" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Components" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "组件选择" } } } },
+    "Navigation.DryRun" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dry Run" } } } },
+    "Navigation.ExperimentalCEC" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Experimental CEC" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "实验性 CEC" } } } },
+    "Navigation.History" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "History" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转换历史" } } } },
+    "Navigation.Input" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Input & Inspect" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "输入与检查" } } } },
+    "Navigation.Settings" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "设置" } } } },
+    "Navigation.WriteRollback" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Write & Rollback" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "写入与回滚" } } } }
+  },
+  "version" : "1.0"
+}
