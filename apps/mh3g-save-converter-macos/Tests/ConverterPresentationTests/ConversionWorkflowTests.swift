@@ -80,6 +80,10 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(plan.contains(where: { $0.operation == .convertSystem }))
         XCTAssertTrue(plan.contains(where: { $0.operation == .installExtras && $0.arguments.contains("guild-cards") }))
         XCTAssertFalse(plan.contains(where: { $0.arguments.contains("quests") }))
+
+        let systemCommand = try XCTUnwrap(plan.first(where: { $0.operation == .convertSystem }))
+        XCTAssertFalse(systemCommand.arguments.contains("--expected-source-sha256"))
+        XCTAssertFalse(systemCommand.arguments.contains("--expected-target-sha256"))
     }
 
     func testExperimentalCECNeedsSeparateAcknowledgement() async throws {
@@ -108,6 +112,50 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         try workflow.authorizeDryRunForTesting()
         XCTAssertTrue(try workflow.writePlan().contains(where: { $0.operation == .convertCEC }))
+    }
+
+    func testSystemWriteDoesNotBorrowCoreSlotHashPreconditions() async throws {
+        let executor = FakeConverterCommandExecutor()
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(
+            ComponentSelection(
+                includeSystem: true,
+                systemSource: URL(fileURLWithPath: "/tmp/3ds/system"),
+                systemTarget: URL(fileURLWithPath: "/tmp/cemu/system")
+            )
+        )
+
+        try await workflow.writeSystem()
+
+        let commands = await executor.recordedCommands()
+        let command = try XCTUnwrap(commands.first)
+        XCTAssertEqual(Array(command.arguments.prefix(1)), [ConverterOperation.convertSystem.rawValue])
+        XCTAssertFalse(command.arguments.contains("--expected-source-sha256"))
+        XCTAssertFalse(command.arguments.contains("--expected-target-sha256"))
+    }
+
+    func testExperimentalCECWriteDoesNotPassUnsupportedHashPreconditions() async throws {
+        let executor = FakeConverterCommandExecutor()
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.setComponents(
+            ComponentSelection(
+                cecSourceDirectory: URL(fileURLWithPath: "/tmp/CEC/00048100"),
+                cecTarget: URL(fileURLWithPath: "/tmp/cemu/cec"),
+                acknowledgeExperimentalCEC: true
+            )
+        )
+        try workflow.authorizeDryRunForTesting()
+
+        try await workflow.writeCEC()
+
+        let commands = await executor.recordedCommands()
+        let command = try XCTUnwrap(commands.first)
+        XCTAssertEqual(Array(command.arguments.prefix(1)), [ConverterOperation.convertCEC.rawValue])
+        XCTAssertTrue(command.arguments.contains("--experimental"))
+        XCTAssertFalse(command.arguments.contains("--expected-source-record-set-sha256"))
+        XCTAssertFalse(command.arguments.contains("--expected-target-sha256"))
     }
 
     func testFailureKeepsOperationAndStderrVisible() async {
@@ -154,6 +202,10 @@ private actor FakeConverterCommandExecutor: ConverterCommandExecuting {
         commands.append(command)
         let next = results.isEmpty ? .success(ConverterCommandResult(exitCode: 0, stdout: Data("{}".utf8), stderr: Data())) : results.removeFirst()
         return try next.get()
+    }
+
+    func recordedCommands() -> [ConverterCommand] {
+        commands
     }
 }
 

@@ -79,8 +79,9 @@ public final class ConversionWorkflow {
         applyInspections(source: source, target: target)
     }
 
-    /// Core slot Dry Run is the authorization boundary for the main write.
-    /// Optional writes each retain their own backend-side expected hash flags.
+    /// Core slot Dry Run is the authorization boundary for `writeCore` only.
+    /// Optional sources use distinct file or directory inputs and must never
+    /// inherit the user-slot fingerprint as their hash precondition.
     public func runCoreDryRun() async throws {
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         guard sourceInspection != nil, targetInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
@@ -138,7 +139,7 @@ public final class ConversionWorkflow {
     }
 
     public func writeSystem() async throws {
-        let fingerprint = try currentAuthorizedFingerprint()
+        try requireIdleForOptionalWrite()
         guard components.includeSystem,
               let source = components.systemSource,
               let target = components.systemTarget
@@ -150,8 +151,6 @@ public final class ConversionWorkflow {
                 source.path,
                 "--output", target.path,
                 "--write",
-                "--expected-source-sha256", fingerprint.sourceSHA256,
-                "--expected-target-sha256", fingerprint.targetSHA256,
             ]
         )
         complete(with: report)
@@ -196,8 +195,8 @@ public final class ConversionWorkflow {
         complete(with: report)
     }
 
-    public func writeCEC(sourceRecordSetSHA256: String, targetSHA256: String) async throws {
-        _ = try currentAuthorizedFingerprint()
+    public func writeCEC() async throws {
+        try requireIdleForOptionalWrite()
         guard components.includesCEC else { throw ConversionWorkflowError.missingCECDirectories }
         guard components.acknowledgeExperimentalCEC else { throw ConversionWorkflowError.experimentalCECAcknowledgementRequired }
         guard let source = components.cecSourceDirectory, let target = components.cecTarget else {
@@ -211,8 +210,6 @@ public final class ConversionWorkflow {
                 "--target", target.path,
                 "--write",
                 "--experimental",
-                "--expected-source-record-set-sha256", sourceRecordSetSHA256,
-                "--expected-target-sha256", targetSHA256,
             ]
         )
         complete(with: report)
@@ -255,8 +252,6 @@ public final class ConversionWorkflow {
                         source.path,
                         "--output", target.path,
                         "--write",
-                        "--expected-source-sha256", fingerprint.sourceSHA256,
-                        "--expected-target-sha256", fingerprint.targetSHA256,
                     ]
                 )
             )
@@ -339,6 +334,10 @@ public final class ConversionWorkflow {
         guard current == authorized else { throw ConversionWorkflowError.staleDryRun }
         guard activeOperation == nil else { throw ConversionWorkflowError.dryRunRequired }
         return current
+    }
+
+    private func requireIdleForOptionalWrite() throws {
+        guard activeOperation == nil else { throw ConversionWorkflowError.dryRunRequired }
     }
 
     private func currentFingerprint() -> DryRunFingerprint? {
