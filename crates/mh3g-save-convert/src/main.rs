@@ -22,7 +22,7 @@ use mh3g_save_convert::{
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
-#[command(name = "mh3g-save-convert")]
+#[command(name = "mh3g-save-convert", version)]
 #[command(about = "Convert Japanese MH3G 3DS save data to Cemu")]
 struct Cli {
     #[command(subcommand)]
@@ -783,11 +783,20 @@ fn rollback_save(manifest: PathBuf) -> Result<Report, ConversionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
     use mh3g_save_convert::{
         events::SIMPLE_EVENT_START,
         profile::{JP_3DS_HEADER, THREE_DS_SIZE, THREE_DS_SYSTEM_SIZE},
         transforms::QUEST_COMPLETION_START,
     };
+
+    #[test]
+    fn cli_reports_the_packaged_version() {
+        let error = Cli::try_parse_from(["mh3g-save-convert", "--version"]).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+        assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
 
     #[test]
     fn convert_extras_accepts_an_explicit_guild_card_reset_flag() {
