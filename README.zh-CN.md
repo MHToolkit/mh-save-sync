@@ -109,6 +109,10 @@ CEMU_CEC="$CEMU_DIR/cec"
 
 `convert` 接收一个源 `user#` 文件和 `--output <同名-user#>`。`user2` 只能写入名为 `user2` 的目标，不能覆盖 `user1` 或任意改名文件。不传 `--write` 时转换保持 dry-run；在脚本中建议显式传入 `--dry-run`，以便清楚表达只读意图。`--write` 与 `--dry-run` 互斥。
 
+对于 GUI 和自动化调用，`convert` 与 `convert-system` 还提供可选的写入前置条件：`--expected-source-sha256` 和 `--expected-target-sha256`。这两个参数都只能与 `--write` 一起使用。它们的值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样只要任一文件在 dry-run 后发生变化，写入就会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
+
+仅当目标文件已存在时，JSON 才会提供 `hashes.target_before`。如果它不存在，不要伪造哨兵哈希或传入 `--expected-target-sha256`：已提供目标前置条件时，目标缺失会被刻意拒绝。首次安装仍可按调用方策略只使用源哈希前置条件。
+
 ### 完整命令参考
 
 下面所有命令都使用前文定义的 `CLI` 数组。如果不从源码构建，请替换为打包好的二进制文件。
@@ -153,7 +157,7 @@ mh3g-save-convert inspect-events [--target <TARGET>] [--all] <SOURCE>
 #### `convert`：转换一个角色槽位
 
 ```text
-mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` 与 `<OUTPUT>` 必须拥有相同的 `user#` 文件名。只读执行：
@@ -168,12 +172,29 @@ mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
 "${CLI[@]}" convert "$SOURCE" --output "$TARGET" --write
 ```
 
+面向已有目标文件的 GUI/自动化写入，应保留一份 dry-run JSON，并将其中哈希作为 argv 值传入。下面的 Bash 示例依赖 `jq`，不使用 `eval`，也不会由 JSON 重建 shell 命令：
+
+```bash
+set -euo pipefail
+
+DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$DRY_RUN_JSON")
+TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$SOURCE_SHA256" \
+  --expected-target-sha256 "$TARGET_SHA256" \
+  --write
+```
+
+当目标不存在或报告不包含这两个哈希时，`jq -e` 会使这个受保护流程停止。两个 `--expected-...` 参数不能用于 dry-run，也不能脱离 `--write` 单独传入。
+
 如果目标原本存在，`--write` 会在同目录创建 `.user2.mh3g-backup-<previous-sha256>` 和 `.user2.mh3g-install.json`；重复安装还可能生成 `.user2.mh3g-install-history-<sha256>.json`。在 Cemu 中手动验证成功前，请保留 manifest。
 
 #### `convert-system`：转换共享 system 数据
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 只能使用明确的 `system` 文件；它不会读取 `user#` 或 ExtData：
@@ -183,7 +204,19 @@ mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE
 "${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --write
 ```
 
-它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥。
+它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥。相同的受保护写入流程也适用，但必须使用该次 `convert-system` dry-run 的哈希，不能复用角色槽位转换的结果：
+
+```bash
+SYSTEM_TARGET="$CEMU_DIR/system"
+SYSTEM_DRY_RUN_JSON=$("${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" --dry-run)
+SYSTEM_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$SYSTEM_DRY_RUN_JSON")
+SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" \
+  --expected-source-sha256 "$SYSTEM_SOURCE_SHA256" \
+  --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
+  --write
+```
 
 #### `convert-extras`：生成共享 ExtData 暂存文件
 

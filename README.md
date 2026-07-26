@@ -150,6 +150,21 @@ an arbitrary renamed file. With no `--write`, conversion remains a dry-run;
 pass `--dry-run` explicitly in scripts to make that intention visible. `--write`
 and `--dry-run` conflict.
 
+For GUI and automation clients, `convert` and `convert-system` also expose
+optional write preconditions: `--expected-source-sha256` and
+`--expected-target-sha256`. Each flag is accepted only together with `--write`.
+Take their values only from `hashes.source` and `hashes.target_before` in the
+JSON emitted by the **same** immediately preceding Dry Run for the same source
+and output paths. This makes the write fail closed if either file changed; the
+target hash is rechecked after the per-slot installation lock is acquired.
+Do not reuse an older report or calculate replacement values separately.
+
+`hashes.target_before` is present only when the target file already exists. If
+it is absent, do not invent a sentinel hash or pass
+`--expected-target-sha256`: a supplied target expectation intentionally rejects
+a missing target. A first install may still use the source expectation alone,
+according to the caller's policy.
+
 ### Complete command reference
 
 All commands below use the `CLI` array above. Replace it with a packaged binary
@@ -201,7 +216,7 @@ It writes nothing:
 #### `convert` — convert one character slot
 
 ```text
-mh3g-save-convert convert [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` and `<OUTPUT>` must have the same `user#` basename. Read-only use:
@@ -216,6 +231,27 @@ With all emulators stopped, install atomically:
 "${CLI[@]}" convert "$SOURCE" --output "$TARGET" --write
 ```
 
+For a GUI or automation write to an existing target, preserve one Dry Run JSON
+document and pass its hashes as argv values. This Bash example needs `jq`; it
+does not use `eval` or reconstruct a shell command from JSON:
+
+```bash
+set -euo pipefail
+
+DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$DRY_RUN_JSON")
+TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$SOURCE_SHA256" \
+  --expected-target-sha256 "$TARGET_SHA256" \
+  --write
+```
+
+`jq -e` stops this guarded path if the target was absent or the report did not
+contain both hashes. The two `--expected-...` flags must not be supplied to a
+Dry Run or without `--write`.
+
 If a target existed, `--write` creates
 `.user2.mh3g-backup-<previous-sha256>` beside it, plus
 `.user2.mh3g-install.json`; repeated installs may create
@@ -225,7 +261,7 @@ Cemu validation succeeds.
 #### `convert-system` — convert shared system data
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
 ```
 
 Use explicit `system` files only; it never reads a `user#` or ExtData:
@@ -236,7 +272,21 @@ Use explicit `system` files only; it never reads a `user#` or ExtData:
 ```
 
 The same transactional backup/manifest pattern applies, using `.system...`
-names. `--write` and `--dry-run` conflict.
+names. `--write` and `--dry-run` conflict. The same optional guarded-write
+flow applies; use values from that `convert-system` Dry Run, not from a slot
+conversion:
+
+```bash
+SYSTEM_TARGET="$CEMU_DIR/system"
+SYSTEM_DRY_RUN_JSON=$("${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" --dry-run)
+SYSTEM_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$SYSTEM_DRY_RUN_JSON")
+SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
+
+"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$SYSTEM_TARGET" \
+  --expected-source-sha256 "$SYSTEM_SOURCE_SHA256" \
+  --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
+  --write
+```
 
 #### `convert-extras` — stage shared ExtData
 
