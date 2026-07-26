@@ -7,7 +7,7 @@ app_dir="$app_root/MH3G Save Converter.app"
 contents="$app_dir/Contents"
 macos="$contents/MacOS"
 resources="$contents/Resources"
-version="${MH3G_CONVERTER_UI_VERSION:-0.0.2-dev}"
+version="${MH3G_CONVERTER_UI_VERSION:-0.0.3-dev}"
 build_number="${MH3G_CONVERTER_UI_BUILD:-1}"
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "macOS app packaging must run on macOS" >&2; exit 1; }
