@@ -26,6 +26,36 @@ not convert Cemu back to 3DS. It preserves bytes outside documented conversion
 ranges, but preserved bytes are not proof that every in-game field has the same
 meaning on both platforms.
 
+### Native macOS workbench (development)
+
+`apps/mh3g-save-converter-macos` is a separate foreground SwiftUI app, not the
+existing MH Save Sync menu-bar client. It uses the bundled
+`mh3g-save-convert` executable through an argv array and its JSON reports; it
+does not implement byte conversion, backup, manifest, process checks, or
+rollback itself. The window appears in the Dock and Cmd-Tab, starts in the
+four-stage workbench, follows the system language by default, and can switch
+between Simplified Chinese and English in Settings.
+
+The app accepts only explicitly selected `user1`, `user2`, `user3`, `system`,
+ExtData, and CEC paths. It does not discover an MLC root, scan a directory, or
+accept archive files. A core write remains disabled until its current Dry Run
+fingerprint matches the selected source SHA-256, target SHA-256, and component
+scope. CEC is a separate collapsed experimental page and is never needed for
+the normal guild-card/offline-partner group.
+
+On an arm64 macOS development host, build and exercise only synthetic fixtures:
+
+```bash
+bash scripts/build-mh3g-save-converter-macos-app.sh
+bash scripts/mh3g-save-converter-macos-smoke.sh
+bash scripts/package-mh3g-save-converter-macos.sh
+```
+
+The smoke test creates a temporary zero-content fixture, verifies inspect,
+dry-run, transactional write, manifest-bound rollback, and source hash
+preservation, then removes the temporary directory. It never launches Cemu or
+opens a real MLC.
+
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
 > archives directly, and it does **not** search an arbitrary save directory for
 > a plausible file. Fully extract an archive to a normal local directory, then

@@ -19,6 +19,30 @@
 
 `mh3g-save-convert` 用于把**一个日版 MH3G 3DS 角色槽位**转换到编号相同的日版 MH3G HD Cemu 槽位。它是仅在本地执行的单向工具：不会上传存档、不会修改 3DS 源文件、不支持其他地区版本，也不能把 Cemu 存档反向转换成 3DS 存档。转换器会保留已记录转换范围以外的字节，但字节得到保留并不能证明两个平台中所有游戏字段的含义完全相同。
 
+### 原生 macOS 工作台（开发中）
+
+`apps/mh3g-save-converter-macos` 是独立的前台 SwiftUI App，不是已有的 MH Save
+Sync 菜单栏客户端。它只通过 argv 数组调用随包的 `mh3g-save-convert` 并读取其
+JSON 报告；不会在 UI 内重写字节转换、备份、manifest、模拟器进程检查或回滚规则。
+窗口会正常出现于 Dock 和 Cmd-Tab，首屏就是四阶段工作台；默认跟随系统语言，也可在
+设置中切换简体中文或 English。
+
+App 只接受用户明确选择的 `user1`、`user2`、`user3`、`system`、ExtData 与 CEC
+路径。它不会推断 MLC 根目录、递归扫描目录，也不接受压缩包。核心角色写入只有在当前
+Dry Run 指纹仍与所选源 SHA-256、目标 SHA-256 和组件范围一致时才会启用。CEC 位于
+单独、默认折叠的实验性页面；正常的公会名片/离线伙伴组不依赖它。
+
+在 arm64 macOS 开发主机上，可只使用合成 fixture 构建并验证：
+
+```bash
+bash scripts/build-mh3g-save-converter-macos-app.sh
+bash scripts/mh3g-save-converter-macos-smoke.sh
+bash scripts/package-mh3g-save-converter-macos.sh
+```
+
+smoke 脚本会创建临时零内容 fixture，验证 inspect、dry-run、事务写入、manifest 绑定
+回滚和源文件 hash 不变，然后删除临时目录。它不会启动 Cemu，也不会打开真实 MLC。
+
 > **使用前必读：**当前 CLI **不能直接读取 ZIP、7z 或 RAR**，也不会在任意存档目录中递归搜索可能的文件。必须先把压缩包完整解压到普通本地目录，然后按照下文要求传入准确的文件或准确层级的目录。不要从 QQ 或浏览器的压缩包预览界面直接运行程序。路径中包含空格时必须加引号。
 
 执行任何 `--write`、`rollback` 或 `rollback-cec` 前，必须完全退出 Nemessix、Azahar 和 Cemu，并等待相应进程结束。`inspect`、`inspect-progress`、`inspect-events`、`inspect-cec` 以及所有 `--dry-run` 操作都只读。
