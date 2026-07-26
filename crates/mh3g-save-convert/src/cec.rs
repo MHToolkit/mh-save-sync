@@ -1,16 +1,18 @@
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ConversionError,
+    ConversionError, io_at_path,
     profile::build_jp_cemu_header,
-    transaction::{MacOsProcessProbe, ProcessProbe, sha256_hex},
+    transaction::{
+        MacOsProcessProbe, ProcessProbe, atomic_replace, remove_if_regular_file, sha256_hex,
+        sync_directory, unique_path, write_new_file,
+    },
     transforms::{GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections},
 };
 
@@ -190,16 +192,24 @@ fn parse_box_info(bytes: &[u8]) -> Option<ParsedBoxInfo> {
 
 fn box_report(directory: &Path) -> Result<CecBoxReport, ConversionError> {
     let info_path = directory.join("BoxInfo_____");
-    let info_bytes = fs::read(&info_path)?;
+    let info_bytes = io_at_path(
+        fs::read(&info_path),
+        "reading CEC mailbox metadata",
+        &info_path,
+    )?;
     let parsed = parse_box_info(&info_bytes);
-    let mut message_files = fs::read_dir(directory)?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let file_type = entry.file_type().ok()?;
-            let name = entry.file_name().into_string().ok()?;
-            (file_type.is_file() && name.starts_with('_')).then_some(name)
-        })
-        .collect::<Vec<_>>();
+    let mut message_files = io_at_path(
+        fs::read_dir(directory),
+        "listing CEC mailbox directory",
+        directory,
+    )?
+    .filter_map(Result::ok)
+    .filter_map(|entry| {
+        let file_type = entry.file_type().ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        (file_type.is_file() && name.starts_with('_')).then_some(name)
+    })
+    .collect::<Vec<_>>();
     message_files.sort();
 
     Ok(CecBoxReport {
@@ -224,7 +234,7 @@ fn parse_message(
     source_slot: Option<&[u8]>,
     box_name: &str,
 ) -> Result<CecMessageReport, ConversionError> {
-    let bytes = fs::read(path)?;
+    let bytes = io_at_path(fs::read(path), "reading CEC message", path)?;
     let header_valid = bytes.len() >= MESSAGE_HEADER_SIZE && read_u16(&bytes, 0) == Some(0x6060);
     let source_anchor = source_slot
         .and_then(|slot| {
@@ -316,7 +326,9 @@ fn source_report(
         }
     }
 
-    let slot_bytes = source_slot.map(fs::read).transpose()?;
+    let slot_bytes = source_slot
+        .map(|path| io_at_path(fs::read(path), "reading CEC source save slot", path))
+        .transpose()?;
     let inbox = box_report(&inbox_dir)?;
     let outbox = box_report(&outbox_dir)?;
     let mut messages = Vec::new();
@@ -343,20 +355,24 @@ fn source_report(
 }
 
 fn message_paths(directory: &Path) -> Result<Vec<PathBuf>, ConversionError> {
-    let mut paths = fs::read_dir(directory)?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let file_type = entry.file_type().ok()?;
-            let name = entry.file_name().into_string().ok()?;
-            (file_type.is_file() && name.starts_with('_')).then_some(entry.path())
-        })
-        .collect::<Vec<_>>();
+    let mut paths = io_at_path(
+        fs::read_dir(directory),
+        "listing received CEC messages",
+        directory,
+    )?
+    .filter_map(Result::ok)
+    .filter_map(|entry| {
+        let file_type = entry.file_type().ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        (file_type.is_file() && name.starts_with('_')).then_some(entry.path())
+    })
+    .collect::<Vec<_>>();
     paths.sort();
     Ok(paths)
 }
 
 fn read_mh3g_record(path: &Path) -> Result<Option<Vec<u8>>, ConversionError> {
-    let bytes = fs::read(path)?;
+    let bytes = io_at_path(fs::read(path), "reading received CEC message", path)?;
     if bytes.len() < MESSAGE_HEADER_SIZE || read_u16(&bytes, 0) != Some(0x6060) {
         return Ok(None);
     }
@@ -561,18 +577,6 @@ pub fn convert_cec_records(
     })
 }
 
-fn sync_directory(directory: &Path) -> Result<(), ConversionError> {
-    File::open(directory)?.sync_all()?;
-    Ok(())
-}
-
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
-}
-
 /// Atomically install a converted Cemu cec cache, retaining a hash-addressed
 /// backup and a manifest next to the target.
 pub fn install_cec(
@@ -595,11 +599,14 @@ pub fn install_cec(
             parent.display()
         )));
     }
-    if target
-        .symlink_metadata()
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
-    {
+    let target_is_symlink = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return io_at_path(Err(error), "reading Cemu CEC target metadata", target);
+        }
+    };
+    if target_is_symlink {
         return Err(ConversionError::InvalidSave(
             "CEC target cannot be a symlink".to_owned(),
         ));
@@ -610,11 +617,21 @@ pub fn install_cec(
         )));
     }
     let manifest_path = parent.join(".cec.mh3g-install.json");
-    if manifest_path.exists() {
-        return Err(ConversionError::UnsafeInstall(format!(
-            "CEC install manifest already exists: {}",
-            manifest_path.display()
-        )));
+    match fs::symlink_metadata(&manifest_path) {
+        Ok(_) => {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "CEC install manifest already exists: {}",
+                manifest_path.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return io_at_path(
+                Err(error),
+                "reading CEC install manifest metadata",
+                &manifest_path,
+            );
+        }
     }
 
     let previous = match fs::read(target) {
@@ -623,7 +640,7 @@ pub fn install_cec(
             Some(bytes)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
+        Err(error) => return io_at_path(Err(error), "reading Cemu CEC target", target),
     };
     let previous_sha256 = previous.as_deref().map(sha256_hex);
     let observed_sha256 = match previous_sha256.as_deref() {
@@ -638,62 +655,145 @@ pub fn install_cec(
     let backup = previous_sha256
         .as_deref()
         .map(|hash| parent.join(format!(".cec.mh3g-backup-{hash}")));
-    if let (Some(path), Some(bytes)) = (&backup, previous.as_deref()) {
-        match fs::read(path) {
-            Ok(existing) if existing == bytes => {}
-            Ok(_) => {
-                return Err(ConversionError::UnsafeInstall(format!(
-                    "CEC backup path already contains different bytes: {}",
-                    path.display()
-                )));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                write_new_file(path, bytes)?;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-
-    let temporary = parent.join(format!(".cec.mh3g-tmp-{}", std::process::id()));
-    write_new_file(&temporary, &conversion.bytes)?;
+    let manifest = CecInstallManifest {
+        version: 1,
+        source_dir: source_dir.to_path_buf(),
+        source_record_sha256: conversion
+            .records
+            .iter()
+            .map(|record| record.sha256.clone())
+            .collect(),
+        installed_sha256: conversion.after_sha256.clone(),
+        previous_sha256,
+        target: target.to_path_buf(),
+        backup: backup.clone(),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    let temporary = unique_path(target, "cec-tmp");
+    let mut backup_created = false;
+    let mut temporary_created = false;
+    let mut target_installed = false;
+    let mut manifest_created = false;
     let result = (|| {
-        fs::rename(&temporary, target)?;
+        if let (Some(path), Some(bytes)) = (&backup, previous.as_deref()) {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    let existing = io_at_path(fs::read(path), "reading existing CEC backup", path)?;
+                    if existing != bytes {
+                        return Err(ConversionError::UnsafeInstall(format!(
+                            "CEC backup path already contains different bytes: {}",
+                            path.display()
+                        )));
+                    }
+                }
+                Ok(_) => {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "CEC backup path must be a regular non-symlink file: {}",
+                        path.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    write_new_file(path, bytes)?;
+                    backup_created = true;
+                }
+                Err(error) => {
+                    return io_at_path(Err(error), "reading existing CEC backup metadata", path);
+                }
+            }
+        }
+
+        write_new_file(&temporary, &conversion.bytes)?;
+        temporary_created = true;
+        io_at_path(
+            fs::rename(&temporary, target),
+            "installing staged CEC cache",
+            target,
+        )?;
+        temporary_created = false;
+        target_installed = true;
         sync_directory(parent)?;
-        let manifest = CecInstallManifest {
-            version: 1,
-            source_dir: source_dir.to_path_buf(),
-            source_record_sha256: conversion
-                .records
-                .iter()
-                .map(|record| record.sha256.clone())
-                .collect(),
-            installed_sha256: conversion.after_sha256.clone(),
-            previous_sha256,
-            target: target.to_path_buf(),
-            backup: backup.clone(),
-        };
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         write_new_file(&manifest_path, &manifest_bytes)?;
+        manifest_created = true;
         sync_directory(parent)?;
         Ok(CecInstallResult {
-            backup,
+            backup: backup.clone(),
             manifest: manifest_path.clone(),
             installed_sha256: conversion.after_sha256.clone(),
         })
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-        if let Some(previous) = previous.as_deref() {
-            let restore = parent.join(format!(".cec.mh3g-restore-{}", std::process::id()));
-            if write_new_file(&restore, previous).is_ok() {
-                let _ = fs::rename(&restore, target);
+
+    match result {
+        Ok(installed) => Ok(installed),
+        Err(install_error) => {
+            let mut cleanup_errors = Vec::new();
+            if temporary_created && let Err(error) = remove_if_regular_file(&temporary) {
+                cleanup_errors.push(format!("remove staged CEC cache: {error}"));
             }
-        } else {
-            let _ = fs::remove_file(target);
+
+            let restore_result = if target_installed {
+                if let Some(previous) = previous.as_deref() {
+                    atomic_replace(target, previous)
+                } else {
+                    remove_if_regular_file(target)
+                }
+            } else {
+                Ok(())
+            };
+            let target_restored = restore_result.is_ok();
+            if let Err(error) = restore_result {
+                cleanup_errors.push(format!("restore prior CEC cache: {error}"));
+            }
+
+            if target_restored {
+                if manifest_created && let Err(error) = remove_if_regular_file(&manifest_path) {
+                    cleanup_errors.push(format!("remove new CEC manifest: {error}"));
+                }
+                if backup_created
+                    && let Some(path) = backup.as_deref()
+                    && let Err(error) = remove_if_regular_file(path)
+                {
+                    cleanup_errors.push(format!("remove new CEC backup: {error}"));
+                }
+            } else if !manifest_created {
+                match write_new_file(&manifest_path, &manifest_bytes) {
+                    Ok(()) => manifest_created = true,
+                    Err(error) => {
+                        cleanup_errors.push(format!("publish CEC recovery manifest: {error}"));
+                    }
+                }
+            }
+
+            if let Err(error) = sync_directory(parent) {
+                cleanup_errors.push(format!("sync CEC transaction directory: {error}"));
+            }
+
+            if cleanup_errors.is_empty() {
+                Err(install_error)
+            } else {
+                let recovery = if manifest_created {
+                    format!("; recovery manifest: {}", manifest_path.display())
+                } else if let Some(path) = backup.as_deref() {
+                    format!("; retained backup: {}", path.display())
+                } else {
+                    String::new()
+                };
+                Err(ConversionError::UnsafeInstall(format!(
+                    "CEC installation failed: {install_error}; cleanup also failed: {}{recovery}",
+                    cleanup_errors.join("; ")
+                )))
+            }
         }
-        let _ = fs::remove_file(&manifest_path);
     }
-    result
+}
+
+fn validate_cec_manifest_hash(value: &str, label: &str) -> Result<(), ConversionError> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(ConversionError::InvalidSave(format!(
+            "CEC manifest {label} hash is not a SHA-256 hex digest"
+        )))
+    }
 }
 
 /// Roll back a prior `install_cec` transaction after verifying the installed
@@ -711,13 +811,29 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
             manifest_path.display()
         ))
     })?;
-    let manifest: CecInstallManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
+    let manifest_metadata = io_at_path(
+        fs::symlink_metadata(manifest_path),
+        "reading CEC rollback manifest metadata",
+        manifest_path,
+    )?;
+    if !manifest_metadata.file_type().is_file() {
+        return Err(ConversionError::InvalidSave(
+            "CEC rollback manifest must be a regular non-symlink file".to_owned(),
+        ));
+    }
+    let manifest_bytes = io_at_path(
+        fs::read(manifest_path),
+        "reading CEC rollback manifest",
+        manifest_path,
+    )?;
+    let manifest: CecInstallManifest = serde_json::from_slice(&manifest_bytes)?;
     if manifest.version != 1 {
         return Err(ConversionError::InvalidSave(format!(
             "unsupported CEC install manifest version: {}",
             manifest.version
         )));
     }
+    validate_cec_manifest_hash(&manifest.installed_sha256, "installed")?;
     if manifest.target.file_name().and_then(|name| name.to_str()) != Some("cec")
         || manifest.target.parent() != Some(parent)
     {
@@ -725,12 +841,18 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
             "CEC rollback target is not bound to the manifest directory".to_owned(),
         ));
     }
-    if manifest
-        .target
-        .symlink_metadata()
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
-    {
+    let target_is_symlink = match fs::symlink_metadata(&manifest.target) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return io_at_path(
+                Err(error),
+                "reading CEC rollback target metadata",
+                &manifest.target,
+            );
+        }
+    };
+    if target_is_symlink {
         return Err(ConversionError::InvalidSave(
             "CEC rollback target cannot be a symlink".to_owned(),
         ));
@@ -742,53 +864,105 @@ pub fn rollback_cec(manifest_path: &Path) -> Result<(), ConversionError> {
     }
 
     let current = match fs::read(&manifest.target) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ConversionError::InvalidSave(
-                "CEC rollback target is missing".to_owned(),
-            ));
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return io_at_path(Err(error), "reading CEC rollback target", &manifest.target);
         }
-        Err(error) => return Err(error.into()),
     };
-    if sha256_hex(&current) != manifest.installed_sha256 {
-        return Err(ConversionError::InvalidSave(
-            "CEC rollback target hash does not match the install manifest".to_owned(),
-        ));
-    }
+    let current_sha256 = current.as_deref().map(sha256_hex);
 
     match (&manifest.backup, &manifest.previous_sha256) {
         (Some(backup), Some(previous_sha256)) => {
+            validate_cec_manifest_hash(previous_sha256, "previous")?;
             let expected = parent.join(format!(".cec.mh3g-backup-{previous_sha256}"));
             if backup != &expected {
                 return Err(ConversionError::InvalidSave(
                     "CEC rollback backup path is not hash-bound".to_owned(),
                 ));
             }
-            let previous = fs::read(backup)?;
-            if sha256_hex(&previous) != *previous_sha256 {
+            match current_sha256.as_deref() {
+                Some(hash) if hash == manifest.installed_sha256 => {
+                    let backup_metadata = io_at_path(
+                        fs::symlink_metadata(backup),
+                        "reading CEC rollback backup metadata",
+                        backup,
+                    )?;
+                    if !backup_metadata.file_type().is_file() {
+                        return Err(ConversionError::InvalidSave(
+                            "CEC rollback backup must be a regular non-symlink file".to_owned(),
+                        ));
+                    }
+                    let previous =
+                        io_at_path(fs::read(backup), "reading CEC rollback backup", backup)?;
+                    if sha256_hex(&previous) != *previous_sha256 {
+                        return Err(ConversionError::InvalidSave(
+                            "CEC rollback backup hash does not match the manifest".to_owned(),
+                        ));
+                    }
+                    atomic_replace(&manifest.target, &previous)?;
+                    remove_if_regular_file(backup)?;
+                }
+                Some(hash) if hash == previous_sha256 => match fs::symlink_metadata(backup) {
+                    Ok(metadata) if metadata.file_type().is_file() => {
+                        let previous =
+                            io_at_path(fs::read(backup), "reading CEC rollback backup", backup)?;
+                        if sha256_hex(&previous) != *previous_sha256 {
+                            return Err(ConversionError::InvalidSave(
+                                "CEC rollback backup hash does not match the manifest".to_owned(),
+                            ));
+                        }
+                        remove_if_regular_file(backup)?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(_) => {
+                        return Err(ConversionError::InvalidSave(
+                            "CEC rollback backup must be a regular non-symlink file".to_owned(),
+                        ));
+                    }
+                    Err(error) => {
+                        return io_at_path(
+                            Err(error),
+                            "reading CEC rollback backup metadata",
+                            backup,
+                        );
+                    }
+                },
+                _ => {
+                    return Err(ConversionError::InvalidSave(
+                        "CEC rollback target hash does not match the install manifest".to_owned(),
+                    ));
+                }
+            }
+        }
+        (None, None) => match current_sha256.as_deref() {
+            Some(hash) if hash == manifest.installed_sha256 => {
+                remove_if_regular_file(&manifest.target)?;
+            }
+            None => {}
+            _ => {
                 return Err(ConversionError::InvalidSave(
-                    "CEC rollback backup hash does not match the manifest".to_owned(),
+                    "CEC rollback target hash does not match the install manifest".to_owned(),
                 ));
             }
-            let temporary = parent.join(format!(".cec.mh3g-rollback-{}", std::process::id()));
-            write_new_file(&temporary, &previous)?;
-            fs::rename(&temporary, &manifest.target)?;
-            fs::remove_file(backup)?;
-        }
-        (None, None) => fs::remove_file(&manifest.target)?,
+        },
         _ => {
             return Err(ConversionError::InvalidSave(
                 "CEC rollback manifest backup fields are inconsistent".to_owned(),
             ));
         }
     }
-    fs::remove_file(manifest_path)?;
+    io_at_path(
+        fs::remove_file(manifest_path),
+        "removing consumed CEC rollback manifest",
+        manifest_path,
+    )?;
     sync_directory(parent)?;
     Ok(())
 }
 
 fn target_report(path: &Path) -> Result<CemuCecReport, ConversionError> {
-    let bytes = fs::read(path)?;
+    let bytes = io_at_path(fs::read(path), "reading Cemu CEC target", path)?;
     validate_cemu_cec_bytes(&bytes).map_err(|_| {
         ConversionError::InvalidSave(format!(
             "unrecognized Cemu MH3G cec container: {}",
@@ -840,6 +1014,14 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[cfg(windows)]
+    #[test]
+    fn directory_sync_does_not_open_windows_directories_as_files() {
+        let temp = tempdir().unwrap();
+
+        sync_directory(temp.path()).unwrap();
+    }
+
     #[test]
     fn cemu_record_geometry_matches_native_japanese_container() {
         assert_eq!(
@@ -851,6 +1033,20 @@ mod tests {
             CEMU_RECORD_SLOT_SIZE,
             CEC_GUILD_CARD_SLOT_COUNT * GUILD_CARD_SLOT_SIZE
         );
+    }
+
+    #[test]
+    fn transaction_file_create_error_identifies_the_actual_path() {
+        let temp = tempdir().unwrap();
+        let occupied_parent = temp.path().join("not-a-directory");
+        fs::write(&occupied_parent, b"not a directory").unwrap();
+        let path = occupied_parent.join(".cec.mh3g-tmp-test");
+
+        let error = write_new_file(&path, b"converted cec").unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("I/O error while creating transaction file"));
+        assert!(message.contains(path.to_str().unwrap()));
     }
 
     #[test]
@@ -975,5 +1171,111 @@ mod tests {
             matches!(error, ConversionError::UnsafeInstall(message) if message.contains("changed"))
         );
         assert!(!temp.path().join(".cec.mh3g-install.json").exists());
+    }
+
+    fn planned_cec_conversion(before: &[u8], marker: u8) -> CecConversion {
+        let mut bytes = before.to_vec();
+        bytes[CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET] = marker;
+        CecConversion {
+            before_sha256: sha256_hex(before),
+            after_sha256: sha256_hex(&bytes),
+            bytes,
+            records: Vec::new(),
+            slots: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_failure_restores_target_without_removing_preexisting_manifest_entry() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let previous_sha256 = sha256_hex(&previous);
+        let backup = temp
+            .path()
+            .join(format!(".cec.mh3g-backup-{previous_sha256}"));
+        let manifest = temp.path().join(".cec.mh3g-install.json");
+        symlink(temp.path().join("missing-manifest-target"), &manifest).unwrap();
+
+        install_cec(temp.path(), &target, &conversion).unwrap_err();
+
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert!(
+            fs::symlink_metadata(&manifest)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!backup.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_refuses_an_existing_backup_symlink_before_changing_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let backup = temp
+            .path()
+            .join(format!(".cec.mh3g-backup-{}", sha256_hex(&previous)));
+        let linked_backup = temp.path().join("linked-backup");
+        fs::write(&linked_backup, &previous).unwrap();
+        symlink(&linked_backup, &backup).unwrap();
+
+        install_cec(temp.path(), &target, &conversion).unwrap_err();
+
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert!(
+            fs::symlink_metadata(&backup)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!temp.path().join(".cec.mh3g-install.json").exists());
+    }
+
+    #[test]
+    fn rollback_cec_finishes_after_existing_target_was_already_restored() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let previous = empty_cemu_cec().unwrap();
+        fs::write(&target, &previous).unwrap();
+        let conversion = planned_cec_conversion(&previous, 0xA5);
+        let installed = install_cec(temp.path(), &target, &conversion).unwrap();
+        let backup = installed.backup.unwrap();
+
+        fs::write(&target, &previous).unwrap();
+        fs::remove_file(&backup).unwrap();
+
+        rollback_cec(&installed.manifest).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), previous);
+        assert!(!backup.exists());
+        assert!(!installed.manifest.exists());
+    }
+
+    #[test]
+    fn rollback_cec_finishes_after_new_target_was_already_removed() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("cec");
+        let empty = empty_cemu_cec().unwrap();
+        let conversion = planned_cec_conversion(&empty, 0xA5);
+        let installed = install_cec(temp.path(), &target, &conversion).unwrap();
+
+        fs::remove_file(&target).unwrap();
+
+        rollback_cec(&installed.manifest).unwrap();
+
+        assert!(!target.exists());
+        assert!(!installed.manifest.exists());
     }
 }

@@ -63,7 +63,8 @@ Japanese `0x2B` profile only. File-level success is not yet a runtime
 compatibility claim; Cemu load/readback and rollback evidence are required
 before this repository labels the path Runtime Verified. See
 `docs/adr/0013-mh3g-cross-format-conversion.md` for the conversion contract and
-provenance.
+provenance. See [the exact MH3G file contract](docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md)
+before collecting source files or selecting destination components.
 
 The progress decoder maps the 3DS and Wii U task tables by quest ID, including
 the 16 completion words at payload offset `0x6E5C`. It also converts the 58
@@ -162,14 +163,38 @@ in-game guild-card list and Hunter Search UI still require runtime validation.
 The `mh3g-converter-windows` GitHub Actions workflow builds a native,
 `x86_64-pc-windows-msvc` executable with Rust's CRT linked statically, runs the
 converter test suite and release-binary help smoke check on Windows, then uploads
-`mh3g-save-convert-windows-x64.zip` and its SHA-256 sidecar as a workflow
-artifact. Download the artifact from the pull request or the merged `main`
-workflow run, extract the inner ZIP, and use PowerShell:
+`mh3g-save-convert-windows-x64.zip`, its SHA-256 sidecar, and the SHA-256
+sidecar for the EXE inside the ZIP as workflow artifacts. Download the artifact
+from the pull request or the merged `main` workflow run, extract the inner ZIP,
+and use PowerShell:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\mh3g-save-convert-windows-x64.zip
-.\mh3g-save-convert.exe --help
+$expected = ((Get-Content .\mh3g-save-convert-windows-x64.zip.sha256 -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash -Algorithm SHA256 .\mh3g-save-convert-windows-x64.zip).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "ZIP SHA-256 mismatch: expected $expected, got $actual" }
+Expand-Archive .\mh3g-save-convert-windows-x64.zip -DestinationPath .\mh3g-converter
+Set-Location .\mh3g-converter\mh3g-save-convert-windows-x64
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 --help
 ```
+
+Run from the fully extracted local directory, not inside the ZIP or a
+QQ/browser archive preview. `Run-Converter.ps1` removes Mark-of-the-Web from
+the extracted EXE only after verifying the packaged
+`mh3g-save-convert.exe.sha256`, forwards all arguments, and preserves the
+converter's exit code. It does not and cannot bypass AppLocker, Smart App Control, antivirus, or
+an organization policy that refuses unsigned executables; in that case an
+administrator must allow the published SHA-256. Once the converter starts,
+top-level reads and transactional filesystem operations report their operation
+and path; retain the complete error line when reporting Windows error 5
+(`Access is denied`).
+
+Builds before the Windows transaction fix could pass `--help`, `inspect`, and
+dry-run conversion but fail every `--write` with Windows error 5. The cause was
+the Unix directory `fsync` path attempting to open a directory as a regular
+file on Windows. Current builds still sync each transaction file before atomic
+rename, but do not call the unsupported directory flush on Windows. The Windows
+workflow now performs a real synthetic `--write` followed by `rollback`, rather
+than treating a help-only smoke check as sufficient.
 
 The Windows executable has the same Japanese-profile-only, source-read-only,
 backup, dry-run, write, and rollback requirements documented above. Do not use
