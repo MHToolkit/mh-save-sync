@@ -699,6 +699,7 @@ fn stat_is_directory(stat: &libc::stat) -> bool {
 }
 
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // macOS dev_t is signed; Linux already uses u64.
 fn stat_identity(stat: &libc::stat) -> FileIdentity {
     (stat.st_dev as u64, stat.st_ino)
 }
@@ -2290,7 +2291,7 @@ fn set_sha256<'a>(values: impl Iterator<Item = (&'a str, Option<String>)>) -> St
         hasher.update(component.as_bytes());
         hasher.update([0]);
         hasher.update(hash.as_deref().unwrap_or("missing").as_bytes());
-        hasher.update([b'\n']);
+        hasher.update(b"\n");
     }
     hex::encode(hasher.finalize())
 }
