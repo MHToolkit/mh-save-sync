@@ -361,7 +361,8 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task WriteCoreAsync()
     {
-        if (_coreAuthorization is null)
+        var authorization = _coreAuthorization;
+        if (authorization is null)
         {
             Fail(Copy.WriteUnavailable);
             return;
@@ -371,16 +372,24 @@ public sealed class MainViewModel : ObservableObject
         {
             var currentSource = await _fingerprints.CaptureAsync(SourcePath, cancellationToken);
             var currentTarget = await _fingerprints.CaptureAsync(TargetPath, cancellationToken);
-            if (!_coreAuthorization.Source.Matches(currentSource) || !_coreAuthorization.Target.Matches(currentTarget))
+            if (!authorization.Source.Matches(currentSource) || !authorization.Target.Matches(currentTarget))
             {
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
 
+            var expectedTargetSha256 = authorization.Target.Sha256
+                ?? throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             Stage = WorkflowStage.Writing;
             var result = await ExecuteAsync(
                 "convert --write",
-                new[] { "convert", SourcePath, "--output", TargetPath, "--write" },
+                new[]
+                {
+                    "convert", SourcePath, "--output", TargetPath,
+                    "--expected-source-sha256", authorization.SourceReportHash,
+                    "--expected-target-sha256", expectedTargetSha256,
+                    "--write",
+                },
                 cancellationToken);
             RequireSuccess(result, "write core slot");
             RequireStatus(result, "written", "write core slot");

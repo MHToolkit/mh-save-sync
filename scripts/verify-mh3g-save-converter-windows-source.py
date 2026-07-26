@@ -56,7 +56,6 @@ def main() -> int:
     workflow = read("ViewModels/MainViewModel.cs")
     for expected in (
         '"convert", SourcePath, "--output", TargetPath, "--dry-run"',
-        '"convert", SourcePath, "--output", TargetPath, "--write"',
         '"rollback", "--manifest", RollbackManifestPath',
         '"convert-cec", "--source-dir", CecSourceDirectory, "--target", CecTargetPath, "--dry-run"',
         '"--write", "--experimental"',
@@ -64,7 +63,23 @@ def main() -> int:
         "_cecAuthorization",
     ):
         require(expected in workflow, f"workflow is missing {expected}")
-    require("--expected-source-sha256" not in workflow, "UI must not invent unsupported CLI flags")
+
+    core_write = workflow.split("public async Task WriteCoreAsync()", 1)[1].split(
+        "public async Task RollbackCoreAsync()", 1
+    )[0]
+    for expected in (
+        '"--expected-source-sha256", authorization.SourceReportHash',
+        '"--expected-target-sha256", expectedTargetSha256',
+        "var expectedTargetSha256 = authorization.Target.Sha256",
+    ):
+        require(expected in core_write, f"core write is missing dry-run hash binding {expected}")
+
+    cec_write = workflow.split("public async Task WriteCecAsync()", 1)[1].split(
+        "public async Task RollbackCecAsync()", 1
+    )[0]
+    require('"convert-cec --dry-run verification"' in cec_write, "CEC write must retain its planner recheck")
+    require("--expected-source-sha256" not in cec_write, "CEC must not use core slot hash arguments")
+    require("--expected-target-sha256" not in cec_write, "CEC must not use core slot hash arguments")
 
     copy = read("Infrastructure/ConverterCopy.cs")
     for expected in ("Simplified Chinese", "简体中文", "Experimental CEC", "实验性 CEC"):
