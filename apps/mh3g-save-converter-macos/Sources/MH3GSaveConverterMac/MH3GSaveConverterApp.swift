@@ -53,8 +53,7 @@ struct MH3GSaveConverterMac: App {
 
 private enum AppDiagnostics {
     static func json() -> String {
-        let cli = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/mh3g-save-convert")
+        let cli = ConverterExecutableLocator.locate()
         let payload: [String: String] = [
             "ui_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
             "bundled_cli": cli.path,

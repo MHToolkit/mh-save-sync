@@ -68,9 +68,11 @@ struct ConversionWorkbenchView: View {
     }
 }
 
-private enum ConverterExecutableLocator {
+enum ConverterExecutableLocator {
     static func locate() -> URL {
-        if let bundled = Bundle.main.url(forResource: "mh3g-save-convert", withExtension: nil) {
+        let bundled = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/mh3g-save-convert")
+        if FileManager.default.isExecutableFile(atPath: bundled.path) {
             return bundled
         }
         if let configured = ProcessInfo.processInfo.environment["MH3G_CONVERTER_CLI"], !configured.isEmpty {
