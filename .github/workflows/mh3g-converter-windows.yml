@@ -9,6 +9,8 @@ on:
       - Cargo.lock
       - crates/mh3g-save-convert/**
       - README.md
+      - README.zh-CN.md
+      - packaging/mh3g-save-convert/**
       - scripts/mh3g-windows-launcher.ps1
       - .github/workflows/mh3g-converter-windows.yml
   push:
@@ -18,6 +20,8 @@ on:
       - Cargo.lock
       - crates/mh3g-save-convert/**
       - README.md
+      - README.zh-CN.md
+      - packaging/mh3g-save-convert/**
       - scripts/mh3g-windows-launcher.ps1
       - .github/workflows/mh3g-converter-windows.yml
 
@@ -61,29 +65,7 @@ jobs:
           $exeHash = (Get-FileHash -Algorithm SHA256 "$stage/mh3g-save-convert.exe").Hash.ToLowerInvariant()
           "$exeHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$stage/mh3g-save-convert.exe.sha256"
           Copy-Item "$stage/mh3g-save-convert.exe.sha256" $exeChecksum
-          @'
-          MH3G Japanese 3DS -> Wii U/Cemu save converter for Windows x64
-
-          This package supports the Japanese MH3G profile only.
-          Extract the complete folder to a normal local directory first. Do not
-          run the EXE inside the ZIP or from a QQ/browser archive preview.
-
-          In PowerShell, verify that the converter starts:
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 --help
-
-          Run-Converter.ps1 verifies mh3g-save-convert.exe.sha256 before launch,
-          then removes Mark-of-the-Web from the hash-pinned executable.
-
-          Start with a read-only check:
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 inspect <3DS-user1-user2-or-user3>
-
-          Before any --write or rollback, fully exit Cemu, Azahar and Nemessix.
-          Always run convert --dry-run before --write. The source save is never modified.
-          If Windows application control still blocks the unsigned EXE, an administrator
-          must allow this SHA-256-pinned artifact; the launcher does not bypass that policy.
-          If the CLI reports an I/O error, keep the complete operation and path from that line.
-          See the repository README for the complete backup, dry-run and rollback procedure.
-          '@ | Set-Content -NoNewline -Encoding utf8 "$stage/README-Windows.txt"
+          Copy-Item "packaging/mh3g-save-convert/README-Windows.txt" "$stage/README-Windows.txt"
           Compress-Archive -Path $stage -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           "$hash  mh3g-save-convert-windows-x64.zip" | Set-Content -NoNewline -Encoding ascii $checksum
@@ -95,11 +77,15 @@ jobs:
           $launcher = "$verifyDir/mh3g-save-convert-windows-x64/Run-Converter.ps1"
           $packagedExe = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe"
           $packagedExeChecksum = "$verifyDir/mh3g-save-convert-windows-x64/mh3g-save-convert.exe.sha256"
+          $packagedReadme = "$verifyDir/mh3g-save-convert-windows-x64/README-Windows.txt"
           if (-not (Test-Path $launcher)) {
             throw "packaged launcher is missing"
           }
           if (-not (Test-Path $packagedExeChecksum)) {
             throw "packaged executable checksum is missing"
+          }
+          if (-not (Test-Path $packagedReadme)) {
+            throw "packaged bilingual README is missing"
           }
           $expectedExeHash = ((Get-Content -LiteralPath $packagedExeChecksum -Raw).Trim() -split '\s+')[0]
           $actualExeHash = (Get-FileHash -Algorithm SHA256 $packagedExe).Hash.ToLowerInvariant()

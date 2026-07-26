@@ -1,5 +1,7 @@
 # MH3G 3DS to Wii U/Cemu File Contract
 
+[English](MH3G_3DS_TO_CEMU_FILE_CONTRACT.md) | [简体中文](MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md)
+
 This document records the **implemented CLI contract**, rather than an
 inference from Cemu's save directory.  It applies only to the Japanese MH3G
 `0x2B` profile accepted by `mh3g-save-convert`.
@@ -35,6 +37,21 @@ hardcoded paths.  The logical source groups are:
   InBox___/BoxInfo_____
   InBox___/_*                  # received MH3G message files
 ```
+
+`00000481` is the MH3G ExtData root.  The required `convert-extras`
+`--source-dir` is its `user` child, where all eight named files are immediate
+children; do not pass the root, its `boss` child, or a hand-picked subset.
+Likewise, the CEC `--source-dir` is the `00048100` mailbox root containing
+`InBox___`, not the `InBox___` child alone.
+
+## Archive Inputs
+
+The CLI accepts ordinary filesystem files and directories only.  It does not
+open ZIP, 7z, RAR, QQ, or browser archive previews and it never recursively
+discovers a save from a parent directory.  Fully extract an archive to a normal
+local directory first, then select the exact `user#`/`system` file, the exact
+ExtData `user` directory, or the exact CEC `00048100` directory described
+above.  Quote paths containing spaces.
 
 The core slot command requires source and destination basenames to match.  For
 example, a source called `user2` can write only a destination called `user2`;
