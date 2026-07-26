@@ -189,10 +189,10 @@ fn quest_selection_requires_all_four_components() { /* quest1..quest4 */ }
 fn dry_run_does_not_create_targets_backups_or_manifest() { /* selected full group */ }
 
 #[test]
-fn failed_second_replacement_restores_every_target_and_leaves_no_new_artifact() { /* injected writer failure */ }
+fn failed_second_replacement_retains_a_recovery_journal_for_explicit_rollback() { /* injected writer failure */ }
 
 #[test]
-fn rollback_restores_every_preexisting_target_and_removes_every_new_target() { /* full manifest */ }
+fn rollback_restores_every_initialized_target() { /* full recovery journal */ }
 
 #[test]
 fn running_emulator_rejects_extra_install_before_any_target_changes() { /* static active probe */ }
@@ -201,7 +201,7 @@ fn running_emulator_rejects_extra_install_before_any_target_changes() { /* stati
 fn changed_source_or_target_set_hash_rejects_write_before_any_target_changes() { /* dry-run token */ }
 ```
 
-Use a test `ExtraFileOperations` implementation that fails when attempting the second selected rename. Assert byte-for-byte equality with every pre-install target, zero `.mh3g-extra-backup-*` files, no temp files and no manifest after failure.
+Use a test `ExtraFileOperations` implementation that fails when attempting the second selected exchange. Assert that the first completed target remains recoverable through the retained journal, then run explicit rollback and assert byte-for-byte equality with every pre-install target and zero transaction artifacts. Add a race test that changes a valid target at the exchange seam; the install must reject and preserve that later value.
 
 - [ ] **Step 2: Confirm the batch tests fail because the API is absent.**
 
@@ -225,6 +225,7 @@ pub enum ExtraGroup { GuildCards, Quests }
 pub struct ExtraInstallEntry {
     pub group: ExtraGroup,
     pub target: PathBuf,
+    pub temporary: PathBuf,
     pub before_sha256: Option<String>,
     pub after_sha256: String,
     pub backup: Option<PathBuf>,
@@ -234,6 +235,7 @@ pub struct ExtraInstallEntry {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtraInstallManifest {
     pub version: u32,
+    pub transaction_id: String,
     pub staging_dir: PathBuf,
     pub target_dir: PathBuf,
     pub groups: Vec<ExtraGroup>,
@@ -241,9 +243,9 @@ pub struct ExtraInstallManifest {
 }
 ```
 
-`install_extra_groups_with(staging_dir, target_dir, groups, expected_staging_set_sha256, expected_target_set_sha256, probe, operations)` must normalize paths, reject duplicates and symlinks, require each requested complete group, verify every staged component's Cemu wrapper and SHA-256 before changing targets, calculate and require the exact expected staging-set and before-target-set SHA-256 values, acquire one directory-bound lock, snapshot every selected target, stage every selected output into a same-directory temporary file, then replace all targets. It publishes `.mh3g-extra-install.json` only after every replacement succeeds. Any failure restores every changed target, removes every created backup, temporary and new manifest, and reports cleanup failure as `UnsafeInstall`.
+`install_extra_groups_with(staging_dir, target_dir, groups, expected_staging_set_sha256, expected_target_set_sha256, probe, operations)` must normalize paths, reject duplicates and symlinks, require each requested complete group, and require every selected target component to already exist as a valid Cemu file from an initialized Wii U/Cemu save. It verifies every staged component's Cemu wrapper and SHA-256 before changing targets, calculates and requires the exact expected staging-set and before-target-set SHA-256 values, acquires one directory-bound lock, then creates a canonical UUID transaction ID and pre-plans every controlled temporary path. It must create `.mh3g-extra-recovery.json` with create-new semantics before creating any backup or temporary file, sync the journal, snapshot every selected target, stage every selected output at its manifest-bound temporary path, and sync the complete recovery material before the first target exchange. Replacement and rollback use a platform atomic swap (`renamex_np(RENAME_SWAP)` on macOS or `renameat2(RENAME_EXCHANGE)` on Linux/Android), verify both displaced values, and fail closed while retaining the journal on any uncertain exchange. A successful installation retains the create-new recovery journal as its sole active rollback record; it must not promote then unlink it. Windows UI must disable optional multi-file ExtData writes until it has an equivalent durable directory metadata barrier.
 
-`rollback_extra_groups_with(manifest, probe, operations)` must verify manifest version, normalized controlled paths, group completeness, per-entry hashes and controlled backup paths before restoring the complete entry set. It must consume all backups and the manifest only after the restoration succeeds.
+`rollback_extra_groups_with(manifest, probe, operations)` must verify manifest version, normalized controlled paths, group completeness, per-entry hashes and controlled backup paths before restoring the complete entry set. It must consume all backups and the recovery journal only after every target restoration succeeds; a conflicting target remains untouched and leaves the journal for a later retry.
 
 Keep `convert-extras` as a staging-only conversion. Extend every UI-facing write command with optional optimistic-concurrency flags: `convert` and `convert-system` accept `--expected-source-sha256` plus `--expected-target-sha256`; `convert-extras` accepts `--expected-source-set-sha256`; `install-extras` accepts `--expected-staging-set-sha256` plus `--expected-target-set-sha256`; `convert-cec` accepts `--expected-source-record-set-sha256` plus `--expected-target-sha256`. A supplied value is compared after all required inputs are read and before any backup, temporary file or target change. The existing CLI remains compatible when those optional flags are omitted, while both UI shells always provide them after a successful dry-run. Add `install-extras --staging-dir <dir> --target-dir <dir> --groups guild-cards,quests [--expected-staging-set-sha256 <sha256>] [--expected-target-set-sha256 <sha256>] [--dry-run|--write]` and `rollback-extras --manifest <path>`; no command accepts an individual `card#` or `quest#` path.
 

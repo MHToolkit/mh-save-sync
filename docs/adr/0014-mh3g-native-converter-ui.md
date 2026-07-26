@@ -18,10 +18,11 @@ installation, backups, manifests, and rollback. A GUI is useful for selecting
 the documented source and target components, but it must not reinterpret those
 operations or make an unsafe write appear safe.
 
-The current backend does not yet meet every desktop-write prerequisite. In
-particular, Windows must establish that supported emulator processes are
-stopped before any write or rollback. ExtData installation also needs
-transactional grouping rather than independent copies of staged files.
+The converter owns the durable ExtData transaction boundary as well as the
+single-file conversion paths. A desktop shell must therefore expose the
+backend's actual safety state, including a retained recovery record after an
+interrupted ExtData transaction, instead of presenting a best-effort copy as a
+completed write.
 
 ## Decision
 
@@ -74,8 +75,21 @@ of the following backend-enforced guarantees:
 - `card1`, `card2`, `card3`, and `cardbox` form one indivisible guild-card
   ExtData installation and rollback group. `quest1` through `quest4` form one
   indivisible quest ExtData installation and rollback group. Each selected
-  group is backed up, installed, manifested, and restored as a complete unit.
-  A failure restores that complete group rather than leaving a partial install.
+  group requires an already initialized, valid Cemu target component, and is
+  backed up, staged, installed, and restored as a complete unit.
+- Before the first target-name change, the converter persists a create-new
+  recovery journal, every backup, and every staged replacement, then syncs the
+  containing directory. Existing target components are exchanged atomically
+  with the staged components (`renamex_np(RENAME_SWAP)` on macOS and
+  `renameat2(RENAME_EXCHANGE)` on Linux/Android) and both returned paths are
+  verified. There is no fallback to an unconditional rename.
+- Once an ExtData target exchange has begun, an error is treated as an
+  uncertain commit state. The converter does not run an automatic compensating
+  overwrite that could discard a competing writer. It retains the recovery
+  journal, backup, and temporary paths and requires an explicit, validated
+  rollback after the emulator is stopped. On platforms without the required
+  durable directory and atomic-exchange primitives, multi-file ExtData write
+  and rollback fail closed before any component is changed.
 - CEC is disabled by default and remains explicitly experimental. It requires a
   separate opt-in and does not join the default Write path.
 - A Write requires a backend-issued dry-run hash authorization. The subsequent
@@ -112,17 +126,20 @@ for process guards, hash authorization, backup, atomic installation, manifest
 validation, and rollback.
 
 No UI may call a write before a successful dry-run authorization, or present a
-partial ExtData group as an installed or recoverable result. CEC stays outside
-the ordinary path until its experimental evidence is sufficient for a separate
-acceptance decision.
+partial ExtData group as an installed or recoverable result. A retained
+recovery journal is an actionable state, not a successful completion: the UI
+must surface its path and offer only the backend's explicit rollback flow.
+CEC stays outside the ordinary path until its experimental evidence is
+sufficient for a separate acceptance decision.
 
 ## Migration and rollback
 
 This ADR changes no existing save data and does not introduce a GUI write path
 before the backend prerequisites exist. Early desktop builds are inspect and
-dry-run only. Once the prerequisites are implemented, every write is reverted
-through the converter's manifest-bound rollback operation; the UI only invokes
-and displays that result.
+dry-run only. Once the prerequisites are implemented, every completed ExtData
+write retains its manifest-bound recovery journal until explicit rollback;
+rollback atomically exchanges each initialized component back only after
+revalidation. The UI only invokes and displays that result.
 
 ## Verification
 
@@ -132,7 +149,8 @@ and displays that result.
 
 Implementation acceptance additionally requires platform tests proving strict
 argv invocation and JSON consumption, Windows fail-closed process probing,
-dry-run hash authorization, and complete group rollback after an injected
-ExtData failure. It also requires complete Simplified Chinese and English
-resources, plus tests proving the system-language default and the settings
-locale override.
+dry-run hash authorization, initialized-target rejection, exchange-seam race
+rejection, retained-journal recovery, and complete group rollback after an
+injected ExtData failure. It also requires complete Simplified Chinese and
+English resources, plus tests proving the system-language default and the
+settings locale override.
