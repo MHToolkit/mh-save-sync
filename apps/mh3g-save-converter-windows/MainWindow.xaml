@@ -310,6 +310,7 @@
 
                         <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
                         <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />
+                        <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />
                         <StackPanel Orientation="Horizontal" Spacing="16">
                             <CheckBox x:Name="GuildCardsCheckBox" Content="{Binding Copy.GuildCards}" IsChecked="{Binding IncludeGuildCards, Mode=TwoWay}" />
                             <CheckBox x:Name="QuestsCheckBox" Content="{Binding Copy.Quests}" IsChecked="{Binding IncludeQuests, Mode=TwoWay}" />

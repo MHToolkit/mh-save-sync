@@ -87,6 +87,8 @@ def verify_local_packaging_script() -> None:
         "ExpandEnvironmentVariables",
         "UTF8Encoding",
         "Test-RustMinimumVersion",
+        "Get-DotnetEightSdkCommand",
+        "MH3GSaveConverter\\BuildTools\\dotnet8\\dotnet.exe",
         "1.95.0",
         "Test-WindowsSdk",
         "Microsoft.VisualStudio.Component.Windows10SDK.19041",
@@ -105,6 +107,9 @@ def verify_local_packaging_script() -> None:
         "Get-FileHash",
         "Compress-Archive",
         "mh3g-save-convert-windows-x64.zip",
+        "Get-RunningSupportedEmulators",
+        "Assert-EmulatorsStoppedForRustTests",
+        "$packageDirectoryName",
         "& $FilePath @Arguments | Out-Host",
     ):
         require(expected in script, f"Windows local packaging script is missing {expected}")
@@ -125,6 +130,30 @@ def verify_local_packaging_script() -> None:
     require(
         "$OutputDirectory = Join-Path $repoRoot" in script,
         "Windows package output must resolve only after $PSScriptRoot is available",
+    )
+    require(
+        "$dotnet = Get-DotnetEightSdkCommand" in script,
+        "Windows package build must reuse the same .NET 8 SDK resolver as preflight",
+    )
+    dotnet_resolver = script.split("function Get-DotnetEightSdkCommand", 1)[1].split(
+        "function Test-DotnetEightSdk", 1
+    )[0]
+    require(
+        "BuildTools\\dotnet8\\dotnet.exe" in dotnet_resolver
+        and "LocalApplicationData" in dotnet_resolver
+        and "--list-sdks" in dotnet_resolver,
+        "Windows .NET resolver must reuse a valid private MH3G .NET 8 SDK instead of downloading it again",
+    )
+    package_layout = script.split("function Test-PackagedLayout", 1)[1].split("try {", 1)[0]
+    require(
+        "PackageDirectoryName" in package_layout
+        and "$packageRoot = Join-Path $verifyRoot $PackageDirectoryName" in script
+        and "Test-PackagedLayout -ArchivePath $archive -PackageDirectoryName $packageDirectoryName" in script,
+        "Windows package self-check must follow a custom staging directory leaf rather than a hard-coded archive root",
+    )
+    require(
+        "if (-not $SkipTests) {\n        Assert-EmulatorsStoppedForRustTests\n    }\n\n    Write-Host \"=== Toolchain ===\"" in script,
+        "Windows package tests must fail before toolchain work with a clear emulator-process explanation instead of leaking a synthetic test failure",
     )
     require(
         "reparse point" in script.lower(),
@@ -343,9 +372,11 @@ def main() -> int:
         "changing optional setup must refresh core write availability",
     )
     system_write = public_method_body(workflow, "WriteSystemAsync")
-    extras_install = public_method_body(workflow, "InstallExtrasAsync")
     require("_systemWriteCompleted = true;" in system_write, "system completion must be tracked independently")
-    require("_extrasInstallCompleted = true;" in extras_install, "ExtData completion must be tracked independently")
+    require(
+        "_extrasInstallCompleted" not in workflow,
+        "Windows must not track a completed ExtData install while that capability is unavailable",
+    )
 
     window = read("MainWindow.xaml")
     require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
@@ -434,6 +465,40 @@ def main() -> int:
         "a failed operation must not revoke unrelated authorization domains",
     )
 
+    # The CLI deliberately fail-closes automatic multi-file ExtData install
+    # and rollback on Windows until it has a safe two-name exchange backend.
+    # The native shell may still expose the genuinely read-only install Dry
+    # Run, but must never guide a user to a sidecar write/rollback that is
+    # specified to refuse. Staging always converts the complete ExtData set
+    # into the explicitly selected staging directory.
+    for expected in (
+        "private static bool SupportsSafeExtrasInstall => false;",
+        "!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths()",
+        "public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();",
+        "public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();",
+        "public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasInstallPaths();",
+        "SupportsSafeExtrasInstall && !IsBusy && _extrasInstallAuthorization is not null && HasExtrasInstallPaths()",
+        "SupportsSafeExtrasInstall && !IsBusy && HasSelectedExtraGroups()",
+        "private bool HasExtrasStagePaths()",
+        "private bool HasExtrasInstallPaths()",
+        "private bool TryRequireExtrasStagePaths()",
+    ):
+        require(expected in workflow, f"Windows ExtData safety capability is missing {expected}")
+    for method in ("InstallExtrasAsync", "RollbackExtrasAsync"):
+        body = public_method_body(workflow, method)
+        require(
+            "if (!SupportsSafeExtrasInstall)" in body
+            and "Fail(Copy.ExtDataInstallUnavailable);" in body,
+            f"{method} must report the Windows ExtData install capability boundary before invoking the sidecar",
+        )
+    extras_install_preview = public_method_body(workflow, "RunExtrasInstallDryRunAsync")
+    require(
+        "if (!SupportsSafeExtrasInstall)" not in extras_install_preview
+        and "TryRequireExtrasInstallPaths()" in extras_install_preview
+        and '"install-extras --dry-run"' in extras_install_preview,
+        "Windows may offer only the read-only ExtData install preview; it must not be blocked by the write capability gate",
+    )
+
     # Every failed CLI operation must revoke only the authorization which
     # supplied that operation's guarded write. This keeps the other domains
     # fail-closed without forcing users to repeat unrelated Dry Runs.
@@ -500,6 +565,15 @@ def main() -> int:
         "QuestsCheckBox",
     ):
         require(expected in window, f"WinUI optional transaction controls are missing {expected}")
+    require(
+        "Copy.ExtDataInstallUnavailable" in window,
+        "Windows ExtData controls must explain why automatic install is unavailable",
+    )
+    require(
+        "<InfoBar " not in window
+        and '<controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />' in window,
+        "every WinUI InfoBar must use the Microsoft.UI.Xaml.Controls namespace prefix",
+    )
 
     code_behind = read("MainWindow.xaml.cs")
     for expected in (
@@ -520,6 +594,7 @@ def main() -> int:
         "共享 system",
         "Optional ExtData",
         "可选 ExtData",
+        "ExtDataInstallUnavailable",
     ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")

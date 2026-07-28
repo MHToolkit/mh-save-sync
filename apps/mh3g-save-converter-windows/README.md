@@ -27,7 +27,10 @@ code.
   on merely because a player selected the primary slot.
 - `system` and ExtData (`card*`, `cardbox`, `quest*`) remain explicit,
   independent CLI transactions in this first Windows shell. The UI does not
-  guess a Cemu MLC directory or silently install an ExtData group.
+  guess a Cemu MLC directory or silently install an ExtData group. On Windows,
+  ExtData conversion can be previewed and staged, but its multi-file install and rollback
+  are intentionally unavailable until the backend has an equivalent durable
+  directory-metadata and atomic-exchange transaction.
 
 Quit Nemessix, Azahar, and Cemu before any write or rollback. See the root
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md) and
@@ -94,8 +97,11 @@ the persistent PATH, and does not select a new persistent default toolchain;
 the package build selects `stable-x86_64-pc-windows-msvc` only for its own
 process. A 3010/1641 installer result is reported as a required restart
 followed by the same command. The normal command never installs software or
-changes the system. Neither route clears NuGet, Cargo, or `target` caches, so
-repeat runs reuse downloaded dependencies.
+changes the system. It also reuses a valid private .NET 8 SDK from an earlier
+package version at `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`;
+a prior `-NoPath` installation therefore does not trigger a second download.
+Neither route clears NuGet, Cargo, or `target` caches, so repeat runs reuse
+downloaded dependencies.
 
 On success the package and its diagnostics are written to:
 
@@ -109,14 +115,17 @@ artifacts\mh3g-save-convert-windows-build-transcript.txt
 The script runs `dotnet restore`, Rust test/release builds for the fixed MSVC
 target, self-contained WinUI `dotnet publish`, sidecar and ZIP SHA-256
 generation, then an extracted archive/layout/sidecar check. It never launches
-the GUI, Cemu, or reads a real save. When no emulator is running it additionally
-runs a disposable synthetic `write -> rollback` smoke; when one is running it
-leaves it untouched and skips that synthetic write. Do not use `-SkipTests` or
-`-SkipTransactionSmoke` for a normal distribution build.
+the GUI, Cemu, or reads a real save. Before the mandatory Rust test suite it
+checks for Cemu, Cemu_release, Nemessix, and Azahar and fails early with their
+names if any are running; it never terminates them. If an emulator appears
+after that test, the disposable synthetic `write -> rollback` smoke is skipped
+rather than touching it. Do not use `-SkipTests` or `-SkipTransactionSmoke` for
+a normal distribution build.
 
-If it fails, send the **first** `error`, `MSB`, `link.exe`, or `cargo` line from
-`artifacts\mh3g-save-convert-windows-build-transcript.txt` instead of
-switching to a different manual build command.
+If it fails, send the **first failed command block** from
+`artifacts\mh3g-save-convert-windows-build-transcript.txt`: begin at its `>>`
+line and include the failure lines below it. Do not switch to a different manual
+build command.
 
 ## Source checks on non-Windows hosts
 

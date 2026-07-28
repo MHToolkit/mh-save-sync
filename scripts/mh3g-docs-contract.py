@@ -74,8 +74,10 @@ def main() -> int:
         relative_path: read_required(relative_path, failures)
         for relative_path in CONTRACT_DOCS
     }
-    for relative_path in PACKAGE_DOCS:
-        read_required(relative_path, failures)
+    package_docs = {
+        relative_path: read_required(relative_path, failures)
+        for relative_path in PACKAGE_DOCS
+    }
 
     english = root_docs["README.md"]
     chinese = root_docs["README.zh-CN.md"]
@@ -168,6 +170,28 @@ def main() -> int:
             failures.append(
                 f"{WINDOWS_PACKAGE_SCRIPT}: missing tracked Windows package README template: {WINDOWS_TEMPLATE}"
             )
+
+    windows_package = package_docs[WINDOWS_TEMPLATE]
+    if windows_package is not None:
+        for token, purpose in (
+            ("`install-extras --dry-run`", "read-only ExtData preview"),
+            ("`install-extras --write`", "explicit Windows ExtData write refusal"),
+            ("`rollback-extras`", "explicit Windows ExtData rollback refusal"),
+            ("Windows package deliberately refuses", "English Windows ExtData safety boundary"),
+            ("此 Windows 包会", "Chinese Windows ExtData safety boundary"),
+            ("全部八个", "Chinese complete ExtData staging disclosure"),
+            ("**all eight**", "English complete ExtData staging disclosure"),
+        ):
+            require_contains(failures, WINDOWS_TEMPLATE, windows_package, token, purpose)
+        for stale in (
+            "$ExtrasWrite",
+            "$ExtrasManifest",
+            'rollback-extras --manifest "$ExtrasManifest"',
+        ):
+            if stale in windows_package:
+                failures.append(
+                    f"{WINDOWS_TEMPLATE}: stale Windows ExtData write/rollback recipe: {stale}"
+                )
 
     if failures:
         for failure in failures:

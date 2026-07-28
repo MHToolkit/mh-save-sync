@@ -10,7 +10,7 @@ MH3G Japanese 3DS -> Wii U/Cemu Save Converter (Windows x64)
 - 这是本地、单向转换；不会上传或修改 3DS 源文件，不能从 Cemu 转回 3DS。
 - 不支持直接读取 ZIP、7z、RAR，也不会自动扫描整个存档目录。
 - 必须先把下载 artifact 和内部 ZIP 完整解压到普通本地目录。不要在 QQ/浏览器压缩包预览中运行 EXE。
-- 执行任何 --write、rollback、rollback-extras 或 rollback-cec 前，必须完全退出 Cemu、Azahar 和 Nemessix。
+- 执行任何受支持的 `--write`、`rollback` 或 `rollback-cec` 前，必须完全退出 Cemu、Azahar 和 Nemessix。
 
 先校验下载的 ZIP（在 ZIP 和 .sha256 所在目录执行）
 --------------------------------------------------
@@ -72,29 +72,22 @@ system：同样以 Dry Run 哈希受保护地写入
   if ([string]::IsNullOrWhiteSpace($SystemSourceHash) -or [string]::IsNullOrWhiteSpace($SystemTargetHash)) { throw "System Dry Run did not provide both guarded-write hashes" }
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-system "$SystemSource" --output "$SystemTarget" --expected-source-sha256 "$SystemSourceHash" --expected-target-sha256 "$SystemTargetHash" --write
 
-ExtData：暂存、事务安装与回滚
-------------------------------
+ExtData：完整暂存与只读安装预览（Windows 不会写入多文件组件）
+--------------------------------------------------------------
 
   $ExtData = "D:\MH3G-3DS\extdata\00000000\00000481\user"
   $Staging = "D:\MH3G-Cemu-Extras"
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-extras --source-dir "$ExtData" --output-dir "$Staging" --dry-run
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-extras --source-dir "$ExtData" --output-dir "$Staging" --write
 
-`convert-extras` 只会写入新的暂存目录；如果八个同名输出中的任何一个已存在，它会拒绝写入，且不会直接修改 Cemu。正常迁移不要使用 `--reset-guild-cards`；该参数会生成空白 card* 并丢弃公会名片。
+`convert-extras` 必须读取完整的八个文件，并始终把**全部八个**转换到新的暂存目录；它不会直接修改 Cemu。如果八个同名输出中的任何一个已存在，它会拒绝写入。正常迁移不要使用 `--reset-guild-cards`；该参数会生成空白 card* 并丢弃公会名片。
 
-不要手工复制单个 `card*` 或 `quest*`。使用 `install-extras` 对完整组件组做事务安装。目标必须是已初始化的 MH3G Cemu 存档目录，且已含被选择的同名组件：
+可选：可将完整暂存集与已初始化的 Cemu 存档目录做**只读**组件组预览。`guild-cards` 是 `card1`、`card2`、`card3`、`cardbox`；`quests` 是 `quest1` 到 `quest4`。该预览不创建锁、备份、manifest 或目标更新：
 
-  $ExtrasInstallDryRun = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --dry-run | ConvertFrom-Json
-  $ExtrasStagingHash = $ExtrasInstallDryRun.staging_set_sha256
-  $ExtrasTargetHash = $ExtrasInstallDryRun.target_set_sha256_before
-  if ([string]::IsNullOrWhiteSpace($ExtrasStagingHash) -or [string]::IsNullOrWhiteSpace($ExtrasTargetHash)) { throw "ExtData Dry Run did not provide both guarded-install hashes" }
-  $ExtrasWrite = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --expected-staging-set-sha256 "$ExtrasStagingHash" --expected-target-set-sha256 "$ExtrasTargetHash" --write | ConvertFrom-Json
-  $ExtrasManifest = $ExtrasWrite.manifest
-  if ([string]::IsNullOrWhiteSpace($ExtrasManifest)) { throw "ExtData write did not provide a rollback manifest" }
+  $ExtrasPreview = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --dry-run | ConvertFrom-Json
+  $ExtrasPreview | Format-List operation,status,groups,staging_set_sha256,target_set_sha256_before
 
-`guild-cards` 是 `card1`、`card2`、`card3`、`cardbox`；`quests` 是 `quest1` 到 `quest4`。只能选择完整组件组。写入创建绑定 manifest 的备份事务；游戏内验证失败时保持模拟器关闭并回滚：
-
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 rollback-extras --manifest "$ExtrasManifest"
+此 Windows 包会在尚未改动任何 ExtData 文件前，明确拒绝 `install-extras --write` 和 `rollback-extras`。不要手工复制单个 `card*` 或 `quest*`；请在具备完整事务后端的受支持平台（例如当前 macOS 包）完成受保护的安装/回滚。核心 `user#`、共享 `system` 和实验性 CEC 的支持范围不受此限制影响。
 
 CEC：只读检查与实验性写入
 -------------------------
@@ -119,7 +112,7 @@ CEC 的成功写入会生成 `$CemuDir\.cec.mh3g-install.json`；验证失败时
 --------------
 
 - 核心槽位/system 写入会在目标旁生成 `.<name>.mh3g-install.json`；旧目标存在时还会生成按 SHA-256 命名的 backup。
-- `install-extras` 和 `convert-cec` 也会生成 manifest 绑定的恢复事务；保留所有 manifest，直到完成 Cemu 游戏内验证或执行回滚。
+- Windows 的 `convert-extras` 只会生成完整的暂存文件；`install-extras --dry-run` 也完全只读。`convert-cec` 成功写入时会生成 manifest 绑定的恢复事务；保留所有 manifest，直到完成 Cemu 游戏内验证或执行回滚。
 - `ConvertFrom-Json` 或显式空值检查会在缺少所需 Dry Run 哈希或 manifest 时停止流程；不要跳过该保护步骤。
 - 启动器不能绕过 AppLocker、Smart App Control、杀毒软件或组织策略。
 - 如果仍出现 Windows error 5 / Access is denied，请保留 CLI 输出中包含 operation 和 path 的完整错误行，并把 EXE SHA-256 提供给管理员或测试负责人。
@@ -132,7 +125,7 @@ Scope
 - Japanese MH3G 3DS profile 0x2B to Japanese MH3G HD Cemu only.
 - Local, one-way conversion. The 3DS source is read-only and nothing is uploaded.
 - ZIP, 7z, and RAR are not direct inputs. Extract the complete package to a normal local folder; do not run it from a QQ/browser archive preview.
-- Fully stop Cemu, Azahar, and Nemessix before any --write, rollback, rollback-extras, or rollback-cec.
+- Fully stop Cemu, Azahar, and Nemessix before any supported --write, rollback, or rollback-cec operation.
 
 Verify and start
 ----------------
@@ -183,36 +176,33 @@ System: the same Dry Run hash guard
   if ([string]::IsNullOrWhiteSpace($SystemSourceHash) -or [string]::IsNullOrWhiteSpace($SystemTargetHash)) { throw "System Dry Run did not provide both guarded-write hashes" }
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-system "$SystemSource" --output "$SystemTarget" --expected-source-sha256 "$SystemSourceHash" --expected-target-sha256 "$SystemTargetHash" --write
 
-ExtData: stage, transactionally install, and roll back
-------------------------------------------------------
+ExtData: complete staging and read-only install preview (Windows does not write multi-file groups)
+-----------------------------------------------------------------------------------------------
 
   $ExtData = "D:\MH3G-3DS\extdata\00000000\00000481\user"
   $Staging = "D:\MH3G-Cemu-Extras"
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-extras --source-dir "$ExtData" --output-dir "$Staging" --dry-run
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 convert-extras --source-dir "$ExtData" --output-dir "$Staging" --write
 
-`convert-extras` requires every one of the eight files and writes only to a
-fresh staging directory; it does not modify Cemu. `--reset-guild-cards` creates
-empty guild cards and discards card data, so it is not for a normal migration.
+`convert-extras` requires all eight files and always converts **all eight** to
+a fresh staging directory; it does not modify Cemu. It refuses when any
+same-named staged output already exists. `--reset-guild-cards` creates empty
+guild cards and discards card data, so it is not for a normal migration.
 
-Do not manually copy a single `card*` or `quest*` file. Use `install-extras`
-for an all-or-nothing component-group transaction. The target must be an
-initialized MH3G Cemu save directory containing the selected named components:
+Optional: preview one or both complete component groups against an initialized
+Cemu save directory in **read-only** mode. `guild-cards` is `card1`, `card2`,
+`card3`, and `cardbox`; `quests` is `quest1` through `quest4`. This preview
+creates no lock, backup, manifest, or target update:
 
-  $ExtrasInstallDryRun = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --dry-run | ConvertFrom-Json
-  $ExtrasStagingHash = $ExtrasInstallDryRun.staging_set_sha256
-  $ExtrasTargetHash = $ExtrasInstallDryRun.target_set_sha256_before
-  if ([string]::IsNullOrWhiteSpace($ExtrasStagingHash) -or [string]::IsNullOrWhiteSpace($ExtrasTargetHash)) { throw "ExtData Dry Run did not provide both guarded-install hashes" }
-  $ExtrasWrite = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --expected-staging-set-sha256 "$ExtrasStagingHash" --expected-target-set-sha256 "$ExtrasTargetHash" --write | ConvertFrom-Json
-  $ExtrasManifest = $ExtrasWrite.manifest
-  if ([string]::IsNullOrWhiteSpace($ExtrasManifest)) { throw "ExtData write did not provide a rollback manifest" }
+  $ExtrasPreview = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 install-extras --staging-dir "$Staging" --target-dir "$CemuDir" --groups guild-cards,quests --dry-run | ConvertFrom-Json
+  $ExtrasPreview | Format-List operation,status,groups,staging_set_sha256,target_set_sha256_before
 
-`guild-cards` is `card1`, `card2`, `card3`, and `cardbox`; `quests` is
-`quest1` through `quest4`. Only whole groups are supported. A write retains a
-manifest-bound recovery transaction; with emulators stopped, roll back after a
-failed validation:
-
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Converter.ps1 rollback-extras --manifest "$ExtrasManifest"
+This Windows package deliberately refuses `install-extras --write` and
+`rollback-extras` before changing any ExtData file. Do not manually copy a
+single `card*` or `quest*` file; complete the guarded install/rollback on a
+supported platform with the full transaction backend (for example, the current
+macOS package). Core `user#`, shared `system`, and experimental CEC support are
+not limited by this ExtData boundary.
 
 CEC: read-only inspection and experimental write
 ------------------------------------------------
@@ -239,7 +229,7 @@ Transaction notes
 -----------------
 
 - Core/system writes create `.<name>.mh3g-install.json`; an existing target also receives a SHA-256-named backup.
-- `install-extras` and `convert-cec` create manifest-bound recovery transactions. Keep every manifest until Cemu validation passes or rollback finishes.
+- On Windows, `convert-extras` creates complete staging files only and `install-extras --dry-run` remains read-only. A successful `convert-cec` write creates a manifest-bound recovery transaction; keep every manifest until Cemu validation passes or rollback finishes.
 - `ConvertFrom-Json` and the explicit empty-value checks stop these examples when a required Dry Run hash or manifest is absent. Do not skip that guard.
 
 In the WinUI release package, Run-Converter.ps1 verifies tools\mh3g-save-convert.exe against tools\mh3g-save-convert.exe.sha256 before removing Mark-of-the-Web from that hash-pinned sidecar. It cannot bypass system or organization application-control policy. Keep the complete operation and path if Windows reports error 5 (Access is denied). See the repository README for every command and option.

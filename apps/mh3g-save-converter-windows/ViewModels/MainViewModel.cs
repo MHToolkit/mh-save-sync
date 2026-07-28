@@ -12,6 +12,14 @@ namespace MHToolkit.MH3GSaveConverter.Windows.ViewModels;
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
+    // The Rust sidecar deliberately refuses the multi-file ExtData install and
+    // rollback path on Windows: it has no safe two-name atomic-exchange
+    // backend there. Conversion of the complete ExtData set to an explicitly
+    // selected staging directory and a read-only target preflight remain
+    // available, but the UI must never imply that a staged card/quest group
+    // can be safely installed from this platform.
+    private static bool SupportsSafeExtrasInstall => false;
+
     private readonly ConverterCliClient _cliClient;
     private readonly FileFingerprintService _fingerprints;
     private readonly LanguagePreferenceStore _languageStore;
@@ -52,7 +60,6 @@ public sealed class MainViewModel : ObservableObject
     private ExtrasInstallDryRunAuthorization? _extrasInstallAuthorization;
     private CecDryRunAuthorization? _cecAuthorization;
     private bool _systemWriteCompleted;
-    private bool _extrasInstallCompleted;
     private WorkflowGuidance _workflowGuidance;
 
     private enum AuthorizationDomain
@@ -467,9 +474,8 @@ public sealed class MainViewModel : ObservableObject
     public bool ShowPostOptionalGuidance => _workflowGuidance == WorkflowGuidance.OptionalStepComplete;
     public bool ShowPostRollbackGuidance => _workflowGuidance == WorkflowGuidance.RolledBack;
     public bool SelectedOptionalDataIsConfigured => (!IsSystemEnabled || HasSystemPaths())
-        && (!HasSelectedExtraGroups() || HasExtrasPaths());
-    public bool HasPendingSelectedOptionalWork => (IsSystemEnabled && !_systemWriteCompleted)
-        || (HasSelectedExtraGroups() && !_extrasInstallCompleted);
+        && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
+    public bool HasPendingSelectedOptionalWork => IsSystemEnabled && !_systemWriteCompleted;
     public string PostWriteGuidanceMessage => HasPendingSelectedOptionalWork
         ? Copy.NextAfterCoreWriteWithOptionalData
         : Copy.NextAfterWrite;
@@ -492,11 +498,11 @@ public sealed class MainViewModel : ObservableObject
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
     public bool CanWriteSystem => !IsBusy && IsSystemEnabled && _systemAuthorization is not null && HasSystemPaths();
     public bool CanRollbackSystem => !IsBusy && IsSystemEnabled && !string.IsNullOrWhiteSpace(SystemRollbackManifestPath);
-    public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasPaths();
-    public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasPaths();
-    public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasPaths();
-    public bool CanInstallExtras => !IsBusy && _extrasInstallAuthorization is not null && HasExtrasPaths();
-    public bool CanRollbackExtras => !IsBusy && HasSelectedExtraGroups() && !string.IsNullOrWhiteSpace(ExtrasRollbackManifestPath);
+    public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();
+    public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();
+    public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasInstallPaths();
+    public bool CanInstallExtras => SupportsSafeExtrasInstall && !IsBusy && _extrasInstallAuthorization is not null && HasExtrasInstallPaths();
+    public bool CanRollbackExtras => SupportsSafeExtrasInstall && !IsBusy && HasSelectedExtraGroups() && !string.IsNullOrWhiteSpace(ExtrasRollbackManifestPath);
     public bool CanInspectCec => !IsBusy && IsCecEnabled && HasCecPaths();
     public bool CanRunCecDryRun => !IsBusy && IsCecEnabled && HasCecPaths();
     public bool CanWriteCec => !IsBusy && IsCecEnabled && IsCecAcknowledged && _cecAuthorization is not null && HasCecPaths();
@@ -873,7 +879,7 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RunExtrasStageDryRunAsync()
     {
-        if (!TryRequireExtrasPaths())
+        if (!TryRequireExtrasStagePaths())
         {
             return;
         }
@@ -948,7 +954,7 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RunExtrasInstallDryRunAsync()
     {
-        if (!TryRequireExtrasPaths())
+        if (!TryRequireExtrasInstallPaths())
         {
             return;
         }
@@ -989,6 +995,11 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task InstallExtrasAsync()
     {
+        if (!SupportsSafeExtrasInstall)
+        {
+            Fail(Copy.ExtDataInstallUnavailable);
+            return;
+        }
         var authorization = _extrasInstallAuthorization;
         if (authorization is null || !MatchesExtrasInstallAuthorization(authorization))
         {
@@ -1008,7 +1019,6 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "written", "install ExtData");
             ExtrasRollbackManifestPath = result.TryGetString("manifest") ?? ExtrasRollbackManifestPath;
             InvalidateExtrasAuthorization();
-            _extrasInstallCompleted = true;
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
             SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
@@ -1018,6 +1028,11 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RollbackExtrasAsync()
     {
+        if (!SupportsSafeExtrasInstall)
+        {
+            Fail(Copy.ExtDataInstallUnavailable);
+            return;
+        }
         if (!CanRollbackExtras)
         {
             return;
@@ -1032,7 +1047,6 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback ExtData");
             RequireStatus(result, "rolled-back", "rollback ExtData");
-            _extrasInstallCompleted = false;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
@@ -1275,9 +1289,27 @@ public sealed class MainViewModel : ObservableObject
         return false;
     }
 
-    private bool TryRequireExtrasPaths()
+    private bool TryRequireExtrasStagePaths()
     {
-        if (HasExtrasPaths())
+        if (HasExtrasStagePaths())
+        {
+            return true;
+        }
+
+        if (HasSelectedExtraGroups()
+            && !SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out var error))
+        {
+            Fail(Copy.DescribePathError(error));
+            return false;
+        }
+
+        Fail(Copy.ExtrasPathsRequired);
+        return false;
+    }
+
+    private bool TryRequireExtrasInstallPaths()
+    {
+        if (HasExtrasInstallPaths())
         {
             return true;
         }
@@ -1337,11 +1369,16 @@ public sealed class MainViewModel : ObservableObject
 
     private bool HasSelectedExtraGroups() => IncludeGuildCards || IncludeQuests;
 
-    private bool HasExtrasPaths()
+    private bool HasExtrasStagePaths()
     {
         return HasSelectedExtraGroups()
             && SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out _)
-            && !string.IsNullOrWhiteSpace(ExtrasStagingDirectory)
+            && !string.IsNullOrWhiteSpace(ExtrasStagingDirectory);
+    }
+
+    private bool HasExtrasInstallPaths()
+    {
+        return HasExtrasStagePaths()
             && !string.IsNullOrWhiteSpace(ExtrasTargetDirectory);
     }
 
@@ -1402,7 +1439,7 @@ public sealed class MainViewModel : ObservableObject
             return false;
         }
 
-        return HasExtrasPaths()
+        return HasExtrasStagePaths()
             && string.Equals(authorization.SourceDirectory, Path.GetFullPath(sourceDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.StagingDirectory, Path.GetFullPath(ExtrasStagingDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.Groups, SelectedExtraGroups(), StringComparison.Ordinal);
@@ -1410,7 +1447,7 @@ public sealed class MainViewModel : ObservableObject
 
     private bool MatchesExtrasInstallAuthorization(ExtrasInstallDryRunAuthorization authorization)
     {
-        return HasExtrasPaths()
+        return HasExtrasInstallPaths()
             && string.Equals(authorization.StagingDirectory, Path.GetFullPath(ExtrasStagingDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.TargetDirectory, Path.GetFullPath(ExtrasTargetDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.Groups, SelectedExtraGroups(), StringComparison.Ordinal);
@@ -1456,7 +1493,6 @@ public sealed class MainViewModel : ObservableObject
     {
         _extrasStageAuthorization = null;
         _extrasInstallAuthorization = null;
-        _extrasInstallCompleted = false;
         ClearOptionalGuidance();
         RaiseExtrasActionAvailability();
         RaiseOptionalConfigurationAvailability();

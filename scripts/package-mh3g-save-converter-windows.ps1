@@ -22,6 +22,10 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repoRoot "artifacts\mh3g-save-convert-windows-x64"
 }
 $stage = [System.IO.Path]::GetFullPath($OutputDirectory)
+$packageDirectoryName = [System.IO.Path]::GetFileName($stage.TrimEnd([char]92, [char]47))
+if ([string]::IsNullOrWhiteSpace($packageDirectoryName)) {
+    throw "-OutputDirectory must name a package directory below $artifactsRoot."
+}
 $archive = Join-Path $artifactsRoot "mh3g-save-convert-windows-x64.zip"
 $archiveChecksum = "$archive.sha256"
 $transcript = Join-Path $artifactsRoot "mh3g-save-convert-windows-build-transcript.txt"
@@ -46,7 +50,7 @@ function Invoke-External {
     & $FilePath @Arguments | Out-Host
     $exitCode = $LASTEXITCODE
     if ($AcceptedExitCodes -notcontains $exitCode) {
-        throw "$Description failed with exit code $exitCode. See $transcript for the first compiler error."
+        throw "$Description failed with exit code $exitCode. See $transcript for the first failed command."
     }
     return $exitCode
 }
@@ -145,20 +149,46 @@ function Get-VisualStudioInstallerPath {
     return $null
 }
 
-function Test-DotnetEightSdk {
-    $dotnet = Get-ExternalCommand "dotnet.exe"
-    if ($null -eq $dotnet) {
-        $dotnet = Get-ExternalCommand "dotnet"
+function Get-DotnetEightSdkCommand {
+    # A previous version of this package script installed a private SDK with
+    # dotnet-install -NoPath. Reuse that valid per-user payload before asking
+    # WinGet to download another SDK. Probe the normal PATH first so a managed
+    # system SDK still takes precedence.
+    $candidates = @()
+    $pathDotnet = Get-ExternalCommand "dotnet.exe"
+    if ($null -eq $pathDotnet) {
+        $pathDotnet = Get-ExternalCommand "dotnet"
     }
-    if ($null -eq $dotnet) {
-        return $false
+    if ($null -ne $pathDotnet) {
+        $candidates += $pathDotnet
     }
 
-    $sdks = @(& $dotnet --list-sdks)
-    if ($LASTEXITCODE -ne 0) {
-        return $false
+    $localAppDataRoots = @(
+        [Environment]::GetEnvironmentVariable("LOCALAPPDATA", "Process"),
+        [Environment]::GetEnvironmentVariable("LOCALAPPDATA", "User"),
+        [Environment]::GetEnvironmentVariable("LOCALAPPDATA", "Machine"),
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) } |
+        Select-Object -Unique
+    foreach ($localAppData in $localAppDataRoots) {
+        $candidates += Join-Path $localAppData "MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe"
     }
-    return [bool]($sdks | Where-Object { $_ -match '^\s*8\.' })
+
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $sdks = @(& $candidate --list-sdks)
+        if ($LASTEXITCODE -eq 0 -and [bool]($sdks | Where-Object { $_ -match '^\s*8\.' })) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Test-DotnetEightSdk {
+    return $null -ne (Get-DotnetEightSdkCommand)
 }
 
 function Test-WindowsSdk {
@@ -673,13 +703,32 @@ function Write-Sha256File {
     return $hash
 }
 
+function Get-RunningSupportedEmulators {
+    # The Rust integration suite intentionally exercises guarded writes against
+    # synthetic files. Its process probe must see no real emulator, just as a
+    # real conversion must. Never terminate a user process from a build script.
+    return @(Get-Process -Name "Cemu", "Cemu_release", "Nemessix", "Azahar" -ErrorAction SilentlyContinue)
+}
+
+function Assert-EmulatorsStoppedForRustTests {
+    $activeEmulators = @(Get-RunningSupportedEmulators)
+    if ($activeEmulators.Count -eq 0) {
+        return
+    }
+    $names = @($activeEmulators | ForEach-Object { $_.ProcessName } | Sort-Object -Unique)
+    throw ("Close these emulator processes before the mandatory Rust test suite: {0}. No process was stopped; after they exit, rerun this exact package command. Use -SkipTests only for an isolated publish/ZIP diagnosis, never for a final distribution build." -f ($names -join ", "))
+}
+
 function Test-PackagedLayout {
-    param([Parameter(Mandatory = $true)][string]$ArchivePath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ArchivePath,
+        [Parameter(Mandatory = $true)][string]$PackageDirectoryName
+    )
 
     $verifyRoot = Join-Path $artifactsRoot ("mh3g-save-convert-windows-verify-" + [Guid]::NewGuid().ToString("N"))
     try {
         Expand-Archive -LiteralPath $ArchivePath -DestinationPath $verifyRoot -Force
-        $packageRoot = Join-Path $verifyRoot "mh3g-save-convert-windows-x64"
+        $packageRoot = Join-Path $verifyRoot $PackageDirectoryName
         $gui = Join-Path $packageRoot "MH3GSaveConverter.exe"
         $sidecar = Join-Path $packageRoot "tools\mh3g-save-convert.exe"
         $sidecarChecksum = "$sidecar.sha256"
@@ -724,7 +773,7 @@ function Test-PackagedLayout {
             Write-Warning "Skipping synthetic transaction smoke by explicit -SkipTransactionSmoke."
             return
         }
-        $activeEmulators = @(Get-Process -Name "Cemu", "Cemu_release", "Nemessix", "Azahar" -ErrorAction SilentlyContinue)
+        $activeEmulators = @(Get-RunningSupportedEmulators)
         if ($activeEmulators.Count -gt 0) {
             Write-Warning "Skipping synthetic transaction smoke because an emulator is running. No process was stopped and no real save was touched."
             return
@@ -809,16 +858,19 @@ try {
     }
 
     Initialize-MsvcBuildEnvironment
-    $dotnet = Get-ExternalCommand "dotnet.exe"
-    if ($null -eq $dotnet) { $dotnet = Get-ExternalCommand "dotnet" }
+    $dotnet = Get-DotnetEightSdkCommand
     $cargo = Get-RustToolCommand "cargo"
     $rustup = Get-RustToolCommand "rustup"
     $rustc = Get-RustToolCommand "rustc"
     if ($null -eq $dotnet -or $null -eq $cargo -or $null -eq $rustup -or $null -eq $rustc) {
         throw "A required executable disappeared after preflight. Reopen 64-bit PowerShell and rerun with -Bootstrap if needed."
     }
+    if (-not $SkipTests) {
+        Assert-EmulatorsStoppedForRustTests
+    }
 
     Write-Host "=== Toolchain ==="
+    Write-Host ("dotnet: {0}" -f $dotnet)
     & $dotnet --version
     & $cargo --version
     & $rustc --version
@@ -883,7 +935,7 @@ try {
         Remove-Item -LiteralPath $archive, $archiveChecksum -Force -ErrorAction SilentlyContinue
         Compress-Archive -LiteralPath $stage -DestinationPath $archive -Force
         Write-Sha256File -FilePath $archive -OutputPath $archiveChecksum -DisplayName "mh3g-save-convert-windows-x64.zip" | Out-Null
-        Test-PackagedLayout -ArchivePath $archive
+        Test-PackagedLayout -ArchivePath $archive -PackageDirectoryName $packageDirectoryName
     } finally {
         Pop-Location
     }

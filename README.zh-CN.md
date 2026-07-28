@@ -67,8 +67,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 
 首次缺少依赖时才显式追加 `-Bootstrap`；它使用 `winget` 安装缺失组件，可能要求管理员批准。
 若 WinGet 的 Rustup 安装登记残留、但当前用户缺少 `rustup.exe`，同一条 bootstrap 会原地修复，
-并以官方 HTTPS bootstrapper 与其 SHA-256 sidecar 完整性校验兜底，不会删除 `.cargo` 或 `.rustup`。常规运行不会清 NuGet/Cargo 缓存。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
-`mh3g-save-convert-windows-build-transcript.txt` 是测试员应回传的首个编译错误证据。完整的
+并以官方 HTTPS bootstrapper 与其 SHA-256 sidecar 完整性校验兜底，不会删除 `.cargo` 或 `.rustup`。常规运行不会清 NuGet/Cargo 缓存；若旧版脚本曾以 `-NoPath` 把私有 .NET 8 SDK 安装到 `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`，新脚本会直接复用，避免重复下载。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
+`mh3g-save-convert-windows-build-transcript.txt` 需回传首个失败命令的完整输出块。完整的
 Windows 前置条件、行为和可选参数见
 [`apps/mh3g-save-converter-windows/README.zh-CN.md`](apps/mh3g-save-converter-windows/README.zh-CN.md)。
 
@@ -298,6 +298,12 @@ mh3g-save-convert install-extras [--dry-run | --write] \
 表示 `quest1` 到 `quest4`。目标必须是已初始化的 MH3G Cemu 存档目录，并且已经包含被选择的
 同名组件。写入会创建绑定 manifest 的恢复事务并保留目标原始字节；不会单独安装某一个 `card#`
 或 `quest#` 文件。
+
+> **Windows 限制：**Windows 支持 `convert-extras` 生成暂存文件和
+> `install-extras --dry-run` 预览，但会在尚未改动任何 ExtData 文件前，主动拒绝
+> `install-extras --write` 与 `rollback-extras`。安全的多文件安装需要当前转换器完整的持久目录元数据协议和
+> 双名称原子交换；请在受支持的平台完成该受保护的安装/回滚步骤。核心 `user#` 与共享 `system`
+> 转换仍可在 Windows 使用。
 
 安装前应紧接着执行 Dry Run，并把两组报告哈希绑定到写入：
 

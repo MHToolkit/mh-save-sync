@@ -1162,7 +1162,8 @@ mod tests {
         bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         fs::write(&source, bytes).unwrap();
 
-        let report = convert_system(source, output.clone(), None, None, false, false, false).unwrap();
+        let report =
+            convert_system(source, output.clone(), None, None, false, false, false).unwrap();
 
         assert_eq!(report.profile, Some(SaveProfile::JpCemuSystem));
         assert_eq!(report.status, "dry-run");

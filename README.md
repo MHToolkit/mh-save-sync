@@ -92,10 +92,12 @@ If WinGet has a stale Rustup registration but the current user lacks
 `rustup.exe`, the same bootstrap repairs it in place and falls back to a
 official HTTPS bootstrapper with a SHA-256 sidecar integrity check, without
 deleting `.cargo` or `.rustup`.
-Normal runs never clear NuGet/Cargo caches. Artifacts, SHA-256 files, and a
-failure transcript are written beneath `artifacts\`; the first compiler error
-in `mh3g-save-convert-windows-build-transcript.txt` is the evidence to return
-from a tester. See the complete Windows contract and optional switches in
+Normal runs never clear NuGet/Cargo caches. They also reuse a valid private
+.NET 8 SDK from an earlier package version at
+`%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`, so an SDK
+installed with `-NoPath` is not downloaded again. Artifacts, SHA-256 files, and
+a failure transcript are written beneath `artifacts\`; return the first failed
+command block in `mh3g-save-convert-windows-build-transcript.txt` from a tester. See the complete Windows contract and optional switches in
 [`apps/mh3g-save-converter-windows/README.md`](apps/mh3g-save-converter-windows/README.md).
 
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
@@ -398,6 +400,14 @@ contain all eight generated files, while `--groups` chooses only whole groups:
 directory containing the selected named components. A write creates a
 manifest-bound recovery transaction and retains the previous target bytes; it
 never installs one `card#` or `quest#` file by itself.
+
+> **Windows limitation:** Windows supports `convert-extras` staging and
+> `install-extras --dry-run` review, but intentionally refuses
+> `install-extras --write` and `rollback-extras` before changing any ExtData
+> files. A safe multi-file install requires this converter's durable
+> directory-metadata protocol and a two-name atomic exchange; use a supported platform for that guarded
+> install/rollback step. Core-slot and shared-`system` conversion remain
+> available on Windows.
 
 Run the installation Dry Run immediately before writing, and bind both reported
 set hashes to the write:
