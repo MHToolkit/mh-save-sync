@@ -49,25 +49,53 @@ Run-Converter.ps1
 参数。开发场景可以显式选择另一个 CLI 路径，或设置 `MH3G_CONVERTER_CLI`。若
 sidecar 不存在或没有输出 JSON，应用会将该操作标记为失败。
 
-## 在 Windows 上构建
+## 在 Windows x64 上一键打包
 
-安装带有 **.NET desktop development** 工作负载、Windows 10/11 SDK 与 .NET 8
-SDK 的 Visual Studio 2022。然后在仓库根目录执行：
+不要让 IDE、Qoder 或人工命令分别构建 Rust 与 WinUI：从仓库根目录只运行这一条
+**唯一权威命令**：
 
 ```powershell
-dotnet restore apps\mh3g-save-converter-windows\MH3GSaveConverter.Windows.csproj
-cargo build --locked --release -p mh3g-save-convert --bin mh3g-save-convert
-$publish = "artifacts\mh3g-save-convert-windows-x64"
-dotnet publish apps\mh3g-save-converter-windows\MH3GSaveConverter.Windows.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -o $publish
-New-Item -ItemType Directory -Force "$publish\tools"
-Copy-Item target\release\mh3g-save-convert.exe "$publish\tools\mh3g-save-convert.exe"
-$sidecarHash = (Get-FileHash -Algorithm SHA256 "$publish\tools\mh3g-save-convert.exe").Hash.ToLowerInvariant()
-"$sidecarHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$publish\tools\mh3g-save-convert.exe.sha256"
-Copy-Item scripts\mh3g-windows-launcher.ps1 "$publish\Run-Converter.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
 ```
 
-本地组包前应生成并核验 sidecar 的 SHA-256。GitHub Windows workflow 会完成此
-组包流程，并在 UI 包中保留 Rust 二进制的来源链路。
+脚本会预检 Windows 10 1809+/Windows 11 x64、.NET 8 SDK、Rust 1.95+ 的
+`cargo`/`rustup`，以及
+带 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` 和 Windows SDK 的 Visual
+Studio 2022 Build Tools；随后它通过 `VsDevCmd.bat` 导入 x64 MSVC 环境，不依赖启动
+Qoder 的 shell。Rust 测试和 sidecar 构建固定使用
+`x86_64-pc-windows-msvc`，不会错误地沿用测试员的 GNU 默认 target。
+
+首次机器缺少依赖时，才显式允许脚本使用 `winget` 安装；这一步可能需要管理员批准：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1 -Bootstrap
+```
+
+`-Bootstrap` 只会安装缺失的 .NET 8 SDK、Rustup 和 Visual Studio 2022 C++ Build
+Tools（含推荐的 Windows SDK 组件）；若电脑已有不完整的 Visual Studio/Build Tools，
+它会调用 `setup.exe modify --installPath` 补齐 VC Tools/SDK，而不是把已安装实例当作
+无变化的 `winget install`。安装器返回 3010/1641 时脚本会要求重启后原命令重跑。默认
+命令绝不会静默安装或更改系统。两种路径均不会清空 NuGet、Cargo 或 `target` 缓存，
+因此重复执行会复用已有下载。
+
+成功后会产生：
+
+```text
+artifacts\mh3g-save-convert-windows-x64.zip
+artifacts\mh3g-save-convert-windows-x64.zip.sha256
+artifacts\mh3g-save-convert.exe.sha256
+artifacts\mh3g-save-convert-windows-build-transcript.txt
+```
+
+脚本会依次执行 `dotnet restore`、固定 MSVC target 的 Rust 测试/发布、self-contained
+WinUI `dotnet publish`、sidecar SHA-256、ZIP SHA-256 及解压后的布局/sidecar
+自检。它不会启动 GUI、Cemu 或读取真实存档；没有模拟器运行时，还会只在临时目录做一
+次合成 `write -> rollback` smoke。若模拟器已在运行，则不停止它，只跳过该合成写入
+smoke。常规发包不要使用 `-SkipTests` 或 `-SkipTransactionSmoke`。
+
+若仍失败，请直接提供
+`artifacts\mh3g-save-convert-windows-build-transcript.txt` 中的**第一个**
+`error`/`MSB`/`link.exe`/`cargo` 错误行，而不是让工具改用另一组手工构建命令。
 
 ## 非 Windows 主机上的源级检查
 

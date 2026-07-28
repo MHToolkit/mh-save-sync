@@ -34,6 +34,7 @@ COMMANDS = (
 EXTDATA_SUFFIX = "extdata/00000000/00000481/user/"
 CEC_SUFFIX = "CEC/00048100/"
 WINDOWS_TEMPLATE = "packaging/mh3g-save-convert/README-Windows.txt"
+WINDOWS_PACKAGE_SCRIPT = "scripts/package-mh3g-save-converter-windows.ps1"
 DIRECT_ZIP_CLAIMS = (
     "ZIP input is supported",
     "ZIP archives are supported directly",
@@ -154,9 +155,19 @@ def main() -> int:
             failures,
             workflow_path,
             workflow,
-            WINDOWS_TEMPLATE,
-            "tracked Windows package README template",
+            WINDOWS_PACKAGE_SCRIPT,
+            "canonical Windows package script",
         )
+
+    package_script = read_required(WINDOWS_PACKAGE_SCRIPT, failures)
+    if package_script is not None:
+        if (
+            WINDOWS_TEMPLATE not in package_script
+            and WINDOWS_TEMPLATE.replace("/", "\\") not in package_script
+        ):
+            failures.append(
+                f"{WINDOWS_PACKAGE_SCRIPT}: missing tracked Windows package README template: {WINDOWS_TEMPLATE}"
+            )
 
     if failures:
         for failure in failures:

@@ -57,6 +57,20 @@ hash 不变。没有模拟器运行时，它还会验证事务写入和 manifest
 或 Cemu 已在运行，则会验证 CLI 拒绝合成写入且临时目标未创建。它不会启动 Cemu，也不会打开
 真实 MLC。
 
+Windows 10 1809+/Windows 11 x64 的本地 WinUI 发包不要拆成 IDE/Qoder 的多条手工命令。
+从仓库根目录运行唯一脚本即可预检 .NET 8、Rust MSVC 和 Visual Studio Build Tools/Windows
+SDK，构建并自检 WinUI + Rust sidecar ZIP：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
+```
+
+首次缺少依赖时才显式追加 `-Bootstrap`；它使用 `winget` 安装缺失组件，可能要求管理员批准。
+常规运行不会清 NuGet/Cargo 缓存。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
+`mh3g-save-convert-windows-build-transcript.txt` 是测试员应回传的首个编译错误证据。完整的
+Windows 前置条件、行为和可选参数见
+[`apps/mh3g-save-converter-windows/README.zh-CN.md`](apps/mh3g-save-converter-windows/README.zh-CN.md)。
+
 > **使用前必读：**当前 CLI **不能直接读取 ZIP、7z 或 RAR**，也不会在任意存档目录中递归搜索可能的文件。必须先把压缩包完整解压到普通本地目录，然后按照下文要求传入准确的文件或准确层级的目录。上文为 GUI 提供的核心目录选择便利**不适用于 CLI**。不要从 QQ 或浏览器的压缩包预览界面直接运行程序。路径中包含空格时必须加引号。
 
 执行任何 `--write`、`rollback`、`rollback-extras` 或 `rollback-cec` 前，必须完全退出 Nemessix、Azahar 和 Cemu，并等待相应进程结束。`inspect`、`inspect-progress`、`inspect-events`、`inspect-cec` 以及所有 `--dry-run` 操作都只读。

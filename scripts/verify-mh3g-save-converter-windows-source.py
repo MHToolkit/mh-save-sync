@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "apps" / "mh3g-save-converter-windows"
 WINDOWS_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-windows.yml"
+WINDOWS_PACKAGE_SCRIPT = ROOT / "scripts" / "package-mh3g-save-converter-windows.ps1"
 
 
 def require(condition: bool, message: str) -> None:
@@ -43,18 +44,14 @@ def verify_release_workflow() -> None:
 
     for expected in (
         "- apps/mh3g-save-converter-windows/**",
+        "- scripts/package-mh3g-save-converter-windows.ps1",
         "- scripts/verify-mh3g-save-converter-windows-source.py",
         "actions/setup-dotnet@v5",
         "python scripts/verify-mh3g-save-converter-windows-source.py",
-        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
-        "-p:Platform=x64",
-        "-p:WindowsAppSDKSelfContained=true",
-        '$stage = "artifacts/mh3g-save-convert-windows-x64"',
-        'Copy-Item "target/release/mh3g-save-convert.exe" "$stage/tools/mh3g-save-convert.exe"',
-        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/MH3GSaveConverter.exe"',
-        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe"',
-        "GUI executable is missing",
-        "GUI sidecar is missing",
+        "scripts/package-mh3g-save-converter-windows.ps1",
+        "mh3g-save-convert-windows-x64.zip",
+        "mh3g-save-convert-windows-x64.zip.sha256",
+        "if: failure()",
     ):
         require(expected in workflow, f"Windows release workflow is missing {expected}")
 
@@ -62,12 +59,87 @@ def verify_release_workflow() -> None:
         "& $packagedApp",
         "Start-Process $packagedApp",
         'Start-Process "$packagedApp"',
+        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
     ):
-        require(forbidden not in workflow, "release workflow must not launch the WinUI GUI during smoke verification")
+        require(forbidden not in workflow, "release workflow must delegate packaging without launching the WinUI GUI")
+
+
+def verify_local_packaging_script() -> None:
+    """Keep the documented Windows-local package path complete and deterministic."""
+    require(WINDOWS_PACKAGE_SCRIPT.is_file(), "Windows local packaging script is missing")
+    script = WINDOWS_PACKAGE_SCRIPT.read_text(encoding="utf-8")
+
+    for expected in (
+        "$PSScriptRoot",
+        "[Environment]::Is64BitOperatingSystem",
+        "[switch]$Bootstrap",
+        "winget",
+        "vswhere.exe",
+        "Get-AnyVisualStudioInstallation",
+        "setup.exe",
+        "--installPath",
+        "3010",
+        "1641",
+        "VsDevCmd.bat",
+        "Test-RustMinimumVersion",
+        "1.95.0",
+        "Test-WindowsSdk",
+        "Microsoft.VisualStudio.Component.Windows10SDK.19041",
+        "dotnet restore",
+        "cargo test --locked",
+        "cargo build --locked --release",
+        "x86_64-pc-windows-msvc",
+        "dotnet publish",
+        '"--self-contained", "true"',
+        "WindowsAppSDKSelfContained=true",
+        "mh3g-save-convert.exe",
+        "Run-Converter.ps1",
+        "Zone.Identifier",
+        "ReparsePoint",
+        "Start-Transcript -LiteralPath $transcript -Force",
+        "Get-FileHash",
+        "Compress-Archive",
+        "mh3g-save-convert-windows-x64.zip",
+        "& $FilePath @Arguments | Out-Host",
+    ):
+        require(expected in script, f"Windows local packaging script is missing {expected}")
+
+    for forbidden in (
+        "Invoke-Expression",
+        "IEX ",
+        ".Source",
+        "Start-Transcript -LiteralPath $transcript -Append",
+    ):
+        require(forbidden not in script, f"Windows local packaging script must not use {forbidden}")
+
+    parameter_block = script.split("Set-StrictMode", 1)[0]
+    require(
+        "Join-Path $PSScriptRoot" not in parameter_block,
+        "Windows PowerShell must not resolve $PSScriptRoot inside a parameter default",
+    )
+    require(
+        "$OutputDirectory = Join-Path $repoRoot" in script,
+        "Windows package output must resolve only after $PSScriptRoot is available",
+    )
+    require(
+        "reparse point" in script.lower(),
+        "Windows package output cleanup must reject junctions and symlinks",
+    )
+    visual_studio_modify = script.split("function Install-VisualStudioBuildComponents", 1)[1].split(
+        "function Install-MissingPrerequisites", 1
+    )[0]
+    component_arguments = visual_studio_modify.split("$components = @(", 1)[1].split(
+        ")\n    $existingInstallation", 1
+    )[0]
+    require(
+        '"--wait"' not in component_arguments,
+        "installed Visual Studio setup.exe modify must not receive bootstrapper-only --wait",
+    )
 
 
 def main() -> int:
     verify_release_workflow()
+    verify_local_packaging_script()
 
     for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
         element_tree.parse(APP / relative)

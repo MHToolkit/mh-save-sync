@@ -77,6 +77,23 @@ rollback. When Nemessix, Azahar, or Cemu is already running, it instead proves
 the CLI refuses the synthetic write and leaves the temporary target absent. It
 never launches Cemu or opens a real MLC.
 
+For a Windows 10 1809+/Windows 11 x64 local WinUI package, do not split the
+build into IDE/Qoder-specific manual commands. From the repository root, the
+single package script preflights .NET 8, Rust MSVC, and Visual Studio Build
+Tools/Windows SDK, then builds and self-checks the WinUI + Rust-sidecar ZIP:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
+```
+
+Append `-Bootstrap` only for a first machine with missing prerequisites; it uses
+`winget` to install missing components and can request administrator approval.
+Normal runs never clear NuGet/Cargo caches. Artifacts, SHA-256 files, and a
+failure transcript are written beneath `artifacts\`; the first compiler error
+in `mh3g-save-convert-windows-build-transcript.txt` is the evidence to return
+from a tester. See the complete Windows contract and optional switches in
+[`apps/mh3g-save-converter-windows/README.md`](apps/mh3g-save-converter-windows/README.md).
+
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
 > archives directly, and it does **not** search an arbitrary save directory for
 > a plausible file. Fully extract an archive to a normal local directory, then
