@@ -237,13 +237,11 @@ function Refresh-ProcessPath {
         Select-Object -Unique) -join ";"
 }
 
-function Add-RustupBinToProcessPath {
-    # Rustup normally uses %USERPROFILE%\.cargo\bin. Qoder and a PowerShell
-    # started before Rustup was installed can omit it from their inherited PATH,
-    # even though winget correctly sees the package as already installed.
-    # Wrap the pipeline in @() as a one-item pipeline would otherwise become a
-    # scalar String in Windows PowerShell; subsequent += would concatenate the
-    # default user location instead of appending a second candidate.
+function Get-CargoHomeCandidates {
+    # Rustup normally uses %USERPROFILE%\.cargo\bin. A caller can override
+    # that with CARGO_HOME at process, user, or machine scope. Keep the probe
+    # order stable because it is also the location used by the safe fallback
+    # installer below.
     $cargoHomes = @(
         @(
             [Environment]::GetEnvironmentVariable("CARGO_HOME", "Process"),
@@ -260,6 +258,73 @@ function Add-RustupBinToProcessPath {
     if (-not [string]::IsNullOrWhiteSpace($HOME)) {
         $cargoHomes += Join-Path $HOME ".cargo"
     }
+
+    return @($cargoHomes | Select-Object -Unique)
+}
+
+function Get-RustupHomeCandidates {
+    $rustupHomes = @(
+        @(
+            [Environment]::GetEnvironmentVariable("RUSTUP_HOME", "Process"),
+            [Environment]::GetEnvironmentVariable("RUSTUP_HOME", "User"),
+            [Environment]::GetEnvironmentVariable("RUSTUP_HOME", "Machine")
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) }
+    )
+
+    $userProfile = [Environment]::GetEnvironmentVariable("USERPROFILE", "Process")
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        $rustupHomes += Join-Path $userProfile ".rustup"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $rustupHomes += Join-Path $HOME ".rustup"
+    }
+
+    return @($rustupHomes | Select-Object -Unique)
+}
+
+function Get-RustupProbePaths {
+    $probes = @()
+    foreach ($cargoHome in @(Get-CargoHomeCandidates)) {
+        foreach ($proxy in @("rustup.exe", "cargo.exe", "rustc.exe")) {
+            $probes += Join-Path (Join-Path $cargoHome "bin") $proxy
+        }
+    }
+    return @($probes | Select-Object -Unique)
+}
+
+function Get-RustupRecoveryHomes {
+    $cargoHomes = @(Get-CargoHomeCandidates)
+    $rustupHomes = @(Get-RustupHomeCandidates)
+    if ($cargoHomes.Count -eq 0 -or $rustupHomes.Count -eq 0) {
+        throw "Could not resolve a CARGO_HOME/RUSTUP_HOME for Rustup recovery."
+    }
+
+    # CARGO_HOME and RUSTUP_HOME are independent Rustup settings. Respect the
+    # same process → user → machine → default precedence used by Rustup rather
+    # than silently choosing an older proxy from a different home.
+    return [PSCustomObject]@{
+        CargoHome = $cargoHomes[0]
+        RustupHome = $rustupHomes[0]
+    }
+}
+
+function Set-RustupHomesForCurrentProcess {
+    # This only affects the package script's PowerShell process. It lets a
+    # shell launched before a user-level CARGO_HOME/RUSTUP_HOME change execute
+    # the proxies from the same homes that Add-RustupBinToProcessPath probes.
+    $homes = Get-RustupRecoveryHomes
+    $env:CARGO_HOME = $homes.CargoHome
+    $env:RUSTUP_HOME = $homes.RustupHome
+    return $homes
+}
+
+function Add-RustupBinToProcessPath {
+    # Qoder and a PowerShell started before Rustup was installed can omit the
+    # current user's bin directory from inherited PATH. Wrap candidate results
+    # in @() because Windows PowerShell turns a one-item pipeline into a scalar
+    # String, and subsequent += would concatenate instead of append.
+    $cargoHomes = @(Get-CargoHomeCandidates)
 
     $pathSegments = @($env:Path -split ";") |
         ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) } |
@@ -297,6 +362,7 @@ function Install-WithWinget {
     param(
         [Parameter(Mandatory = $true)][string]$Id,
         [string]$Override,
+        [switch]$ForceReinstall,
         [int[]]$AcceptedExitCodes = @(0)
     )
 
@@ -315,7 +381,99 @@ function Install-WithWinget {
     if (-not [string]::IsNullOrWhiteSpace($Override)) {
         $arguments += @("--override", $Override)
     }
+    if ($ForceReinstall) {
+        # `--force` asks WinGet to execute the package installer even when its
+        # installed-package registry says the current version is present.
+        $arguments += "--force"
+    }
     return Invoke-External -FilePath $winget -Arguments $arguments -Description "winget install $Id" -AcceptedExitCodes $AcceptedExitCodes
+}
+
+function Repair-RustupWithWinget {
+    $winget = Get-ExternalCommand "winget.exe"
+    if ($null -eq $winget) {
+        $winget = Get-ExternalCommand "winget"
+    }
+    if ($null -eq $winget) {
+        Write-Warning "winget is unavailable, so Rustup repair will use the official HTTPS fallback with SHA-256 sidecar integrity check if needed."
+        return $false
+    }
+
+    $arguments = @(
+        "repair", "--id", "Rustlang.Rustup", "--exact", "--source", "winget", "--force", "--silent",
+        "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"
+    )
+    try {
+        Invoke-External -FilePath $winget -Arguments $arguments -Description "winget repair Rustlang.Rustup" | Out-Null
+        return $true
+    } catch {
+        # Older App Installer versions or a manifest without a repair action
+        # can reject this verb. The next recovery rung is intentionally tried.
+        Write-Warning ("winget repair Rustlang.Rustup did not restore the current user payload: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Install-RustupFromOfficialSource {
+    # Final recovery rung for a stale WinGet registration. Rustup publishes the
+    # Windows MSVC bootstrap executable and a SHA-256 sidecar at official HTTPS
+    # static URLs. The sidecar catches corrupted downloads; it is not a second
+    # independent source of provenance. Do not use this path until both WinGet
+    # repair paths failed.
+    $target = "x86_64-pc-windows-msvc"
+    $installerUrl = "https://static.rust-lang.org/rustup/dist/$target/rustup-init.exe"
+    $checksumUrl = "$installerUrl.sha256"
+    $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mh3g-save-convert-rustup-" + [Guid]::NewGuid().ToString("N"))
+    $installer = Join-Path $temporaryRoot "rustup-init.exe"
+    $checksum = Join-Path $temporaryRoot "rustup-init.exe.sha256"
+
+    $recoveryHomes = Get-RustupRecoveryHomes
+
+    $hadCargoHome = Test-Path -LiteralPath "Env:CARGO_HOME"
+    $hadRustupHome = Test-Path -LiteralPath "Env:RUSTUP_HOME"
+    $previousCargoHome = $env:CARGO_HOME
+    $previousRustupHome = $env:RUSTUP_HOME
+    try {
+        New-Item -ItemType Directory -Force $temporaryRoot | Out-Null
+        Write-Host "WinGet did not restore Rustup; downloading the official HTTPS Rustup bootstrapper with its SHA-256 sidecar."
+        $webClient = New-Object System.Net.WebClient
+        try {
+            $webClient.DownloadFile($installerUrl, $installer)
+            $webClient.DownloadFile($checksumUrl, $checksum)
+        } finally {
+            $webClient.Dispose()
+        }
+
+        if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or -not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+            throw "Official Rustup download did not create both installer and SHA-256 files."
+        }
+        $expectedHash = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0]
+        if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Official Rustup SHA-256 sidecar has an unexpected format."
+        }
+        $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+        if (-not [string]::Equals($actualHash, $expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Official Rustup SHA-256 verification failed."
+        }
+
+        # Rebuild rustup/cargo/rustc proxies in the same homes without deleting
+        # cached toolchains, selecting a default toolchain, or changing PATH.
+        $env:CARGO_HOME = $recoveryHomes.CargoHome
+        $env:RUSTUP_HOME = $recoveryHomes.RustupHome
+        Invoke-External -FilePath $installer -Arguments @("-y", "--no-update-default-toolchain", "--no-modify-path") -Description "official Rustup bootstrap" | Out-Null
+    } finally {
+        if ($hadCargoHome) {
+            $env:CARGO_HOME = $previousCargoHome
+        } else {
+            Remove-Item -LiteralPath "Env:CARGO_HOME" -ErrorAction SilentlyContinue
+        }
+        if ($hadRustupHome) {
+            $env:RUSTUP_HOME = $previousRustupHome
+        } else {
+            Remove-Item -LiteralPath "Env:RUSTUP_HOME" -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Install-VisualStudioBuildComponents {
@@ -343,6 +501,7 @@ function Install-VisualStudioBuildComponents {
 function Install-MissingPrerequisites {
     param([Parameter(Mandatory = $true)][string[]]$Missing)
 
+    Set-RustupHomesForCurrentProcess | Out-Null
     if ($Missing -contains ".NET 8 SDK") {
         Install-WithWinget -Id "Microsoft.DotNet.SDK.8"
     }
@@ -350,27 +509,82 @@ function Install-MissingPrerequisites {
         Refresh-ProcessPath
         Add-RustupBinToProcessPath
         $rustup = Get-RustToolCommand "rustup"
+        $cargo = Get-RustToolCommand "cargo"
+        $rustc = Get-RustToolCommand "rustc"
         if ($null -eq $rustup) {
             # 0x8A15002B (-1978335189) means winget recognizes an installed
             # package but has no applicable update. It is only non-fatal here;
             # the executable must still be found by the recheck below.
-            Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189) | Out-Null
+            try {
+                Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189) | Out-Null
+            } catch {
+                Write-Warning ("winget install Rustlang.Rustup did not restore the current user payload: {0}" -f $_.Exception.Message)
+            }
             Refresh-ProcessPath
             Add-RustupBinToProcessPath
             $rustup = Get-RustToolCommand "rustup"
+            $cargo = Get-RustToolCommand "cargo"
+            $rustc = Get-RustToolCommand "rustc"
         }
-        if ($null -eq $rustup) {
-            throw "Rustup is registered as installed but rustup.exe is unavailable to this user. Ensure %USERPROFILE%\\.cargo\\bin exists (or set CARGO_HOME), repair Rustup, reopen 64-bit PowerShell, then rerun this exact command."
+        if ($null -eq $rustup -or $null -eq $cargo -or $null -eq $rustc) {
+            # First prefer the package manager's own in-place repair. It keeps
+            # .cargo/.rustup and any downloaded toolchains intact.
+            Repair-RustupWithWinget | Out-Null
+            Refresh-ProcessPath
+            Add-RustupBinToProcessPath
+            $rustup = Get-RustToolCommand "rustup"
+            $cargo = Get-RustToolCommand "cargo"
+            $rustc = Get-RustToolCommand "rustc"
+        }
+        if ($null -eq $rustup -or $null -eq $cargo -or $null -eq $rustc) {
+            # A stale installed-package record can cause ordinary `install` to
+            # stop at 0x8A15002B. Force only this known Rustup package to run
+            # its installer again; do not uninstall or remove existing homes.
+            try {
+                Install-WithWinget -Id "Rustlang.Rustup" -ForceReinstall -Override "-y --no-update-default-toolchain --no-modify-path" | Out-Null
+            } catch {
+                Write-Warning ("winget force reinstall Rustlang.Rustup did not restore the current user payload: {0}" -f $_.Exception.Message)
+            }
+            Refresh-ProcessPath
+            Add-RustupBinToProcessPath
+            $rustup = Get-RustToolCommand "rustup"
+            $cargo = Get-RustToolCommand "cargo"
+            $rustc = Get-RustToolCommand "rustc"
+        }
+        if ($null -eq $rustup -or $null -eq $cargo -or $null -eq $rustc) {
+            try {
+                Install-RustupFromOfficialSource
+            } catch {
+                Write-Warning ("official HTTPS Rustup recovery with SHA-256 sidecar integrity check did not restore the current user payload: {0}" -f $_.Exception.Message)
+            }
+            Refresh-ProcessPath
+            Add-RustupBinToProcessPath
+            $rustup = Get-RustToolCommand "rustup"
+            $cargo = Get-RustToolCommand "cargo"
+            $rustc = Get-RustToolCommand "rustc"
+        }
+        if ($null -eq $rustup -or $null -eq $cargo -or $null -eq $rustc) {
+            $probePaths = @(Get-RustupProbePaths)
+            $probeSummary = if ($probePaths.Count -gt 0) { $probePaths -join "; " } else { "(CARGO_HOME and USERPROFILE could not be resolved)" }
+            $missingProxies = @()
+            if ($null -eq $rustup) { $missingProxies += "rustup.exe" }
+            if ($null -eq $cargo) { $missingProxies += "cargo.exe" }
+            if ($null -eq $rustc) { $missingProxies += "rustc.exe" }
+            throw "Rustup recovery failed: WinGet reports Rustlang.Rustup as installed, but this user's Rustup proxy payload is incomplete ($($missingProxies -join ', ')) after normal install, repair, force reinstall, and official HTTPS recovery with SHA-256 sidecar integrity check. Probed proxy paths: $probeSummary"
         }
         if ($Missing -contains "Rust cargo" -or $Missing -contains "Rust 1.95.0 or newer") {
-            Invoke-External -FilePath $rustup -Arguments @("update", "stable") -Description "Rust stable update"
-            Invoke-External -FilePath $rustup -Arguments @("default", "stable") -Description "Rust stable default"
+            # Build against the exact host needed by this package without
+            # changing the tester's persistent Rust default toolchain.
+            $buildToolchain = "stable-x86_64-pc-windows-msvc"
+            Invoke-External -FilePath $rustup -Arguments @("toolchain", "install", $buildToolchain, "--profile", "minimal") -Description "Rust MSVC x64 toolchain setup" | Out-Null
+            $env:RUSTUP_TOOLCHAIN = $buildToolchain
         }
     }
     if ($Missing -contains "Visual Studio 2022 C++ Build Tools with Windows SDK" -or $Missing -contains "Windows 10/11 SDK") {
         Install-VisualStudioBuildComponents
     }
     Refresh-ProcessPath
+    Set-RustupHomesForCurrentProcess | Out-Null
     Add-RustupBinToProcessPath
 }
 
@@ -576,6 +790,7 @@ try {
     $transcriptStarted = $true
 
     Refresh-ProcessPath
+    Set-RustupHomesForCurrentProcess | Out-Null
     Add-RustupBinToProcessPath
     $missing = @(Get-MissingPrerequisites)
     if ($missing.Count -gt 0) {

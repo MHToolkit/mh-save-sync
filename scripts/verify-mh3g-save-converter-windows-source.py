@@ -150,16 +150,58 @@ def verify_local_packaging_script() -> None:
         'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)' in rust_bootstrap,
         "Rustup bootstrap must treat WinGet's installed/no-update result as non-fatal",
     )
+    # WinGet can retain Rustlang.Rustup's installed registration after the
+    # current user's rustup/cargo proxy payload has disappeared.  A normal
+    # `winget install` then returns the documented no-update code, so the
+    # bootstrap must repair that payload in place before giving up.  Keep the
+    # recovery ladder deliberately narrow: no uninstall, no deletion of
+    # CARGO_HOME/RUSTUP_HOME, and no blind executable download.
+    for expected in (
+        "function Repair-RustupWithWinget",
+        "function Install-RustupFromOfficialSource",
+        "function Get-RustupProbePaths",
+        "function Get-RustupRecoveryHomes",
+        "function Set-RustupHomesForCurrentProcess",
+        "[switch]$ForceReinstall",
+        'Install-WithWinget -Id "Rustlang.Rustup" -ForceReinstall',
+        "Repair-RustupWithWinget",
+        "Install-RustupFromOfficialSource",
+        "--no-update-default-toolchain",
+        "--no-modify-path",
+        "rustup-init.exe.sha256",
+        "Get-FileHash",
+    ):
+        require(expected in script, f"Windows Rustup recovery ladder is missing {expected}")
     require(
-        "Rustup is registered as installed" in rust_bootstrap,
-        "Rustup bootstrap must diagnose an installed-but-unreachable toolchain",
+        "Rustup recovery failed" in rust_bootstrap,
+        "Rustup bootstrap must report a failed repair ladder only after the rechecks",
+    )
+    for forbidden in ("rustup self uninstall", "winget uninstall", "Remove-Item"):
+        require(
+            forbidden not in rust_bootstrap,
+            "Rustup bootstrap must repair in place without deleting an existing toolchain",
+        )
+    normal_rustup_install = rust_bootstrap.index(
+        'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)'
+    )
+    repair_rustup = rust_bootstrap.index("Repair-RustupWithWinget")
+    force_rustup = rust_bootstrap.index(
+        'Install-WithWinget -Id "Rustlang.Rustup" -ForceReinstall'
+    )
+    official_rustup = rust_bootstrap.index("Install-RustupFromOfficialSource")
+    recovery_error = rust_bootstrap.index("Rustup recovery failed")
+    require(
+        normal_rustup_install < repair_rustup < force_rustup < official_rustup < recovery_error,
+        "Rustup recovery order must be normal install, repair, force reinstall, verified official fallback, then fail closed",
     )
     first_preflight = script.split("Start-Transcript -LiteralPath $transcript -Force", 1)[1].split(
         "$missing = @(Get-MissingPrerequisites)", 1
     )[0]
     require(
-        "Refresh-ProcessPath" in first_preflight and "Add-RustupBinToProcessPath" in first_preflight,
-        "initial preflight must restore the current user's Rustup PATH before checking prerequisites",
+        "Refresh-ProcessPath" in first_preflight
+        and "Set-RustupHomesForCurrentProcess" in first_preflight
+        and "Add-RustupBinToProcessPath" in first_preflight,
+        "initial preflight must restore the current user's Rustup homes and PATH before checking prerequisites",
     )
     visual_studio_modify = script.split("function Install-VisualStudioBuildComponents", 1)[1].split(
         "function Install-MissingPrerequisites", 1

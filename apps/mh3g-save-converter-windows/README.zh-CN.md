@@ -74,8 +74,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 `-Bootstrap` 只会安装缺失的 .NET 8 SDK、Rustup 和 Visual Studio 2022 C++ Build
 Tools（含推荐的 Windows SDK 组件）；若电脑已有不完整的 Visual Studio/Build Tools，
 它会调用 `setup.exe modify --installPath` 补齐 VC Tools/SDK，而不是把已安装实例当作
-无变化的 `winget install`。安装器返回 3010/1641 时脚本会要求重启后原命令重跑。默认
-命令绝不会静默安装或更改系统。两种路径均不会清空 NuGet、Cargo 或 `target` 缓存，
+无变化的 `winget install`。
+
+如果 WinGet 显示 `Rustlang.Rustup` 已安装、但当前用户没有可用的
+`%USERPROFILE%\.cargo\bin\rustup.exe`，同一条命令会按顺序原地修复 Rustup 载荷：
+普通 WinGet 安装 → `winget repair` → 强制重新运行 Rustup 安装器 → 从官方 HTTPS 下载
+`rustup-init.exe` 并校验其 SHA-256 sidecar 完整性后兜底。它**不会**卸载 Rustup、删除 `.cargo` / `.rustup`、
+修改持久 PATH，也不会改写用户持久默认工具链；打包进程只在自身进程内选择
+`stable-x86_64-pc-windows-msvc`。安装器返回 3010/1641 时脚本会要求重启后原命令重跑。
+默认命令绝不会静默安装或更改系统。两种路径均不会清空 NuGet、Cargo 或 `target` 缓存，
 因此重复执行会复用已有下载。
 
 成功后会产生：

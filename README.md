@@ -88,6 +88,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 
 Append `-Bootstrap` only for a first machine with missing prerequisites; it uses
 `winget` to install missing components and can request administrator approval.
+If WinGet has a stale Rustup registration but the current user lacks
+`rustup.exe`, the same bootstrap repairs it in place and falls back to a
+official HTTPS bootstrapper with a SHA-256 sidecar integrity check, without
+deleting `.cargo` or `.rustup`.
 Normal runs never clear NuGet/Cargo caches. Artifacts, SHA-256 files, and a
 failure transcript are written beneath `artifacts\`; the first compiler error
 in `mh3g-save-convert-windows-build-transcript.txt` is the evidence to return

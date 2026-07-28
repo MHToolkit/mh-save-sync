@@ -66,7 +66,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 ```
 
 首次缺少依赖时才显式追加 `-Bootstrap`；它使用 `winget` 安装缺失组件，可能要求管理员批准。
-常规运行不会清 NuGet/Cargo 缓存。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
+若 WinGet 的 Rustup 安装登记残留、但当前用户缺少 `rustup.exe`，同一条 bootstrap 会原地修复，
+并以官方 HTTPS bootstrapper 与其 SHA-256 sidecar 完整性校验兜底，不会删除 `.cargo` 或 `.rustup`。常规运行不会清 NuGet/Cargo 缓存。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
 `mh3g-save-convert-windows-build-transcript.txt` 是测试员应回传的首个编译错误证据。完整的
 Windows 前置条件、行为和可选参数见
 [`apps/mh3g-save-converter-windows/README.zh-CN.md`](apps/mh3g-save-converter-windows/README.zh-CN.md)。

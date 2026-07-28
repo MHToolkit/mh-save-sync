@@ -82,11 +82,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 C++ Build Tools (with recommended Windows SDK components). If an existing
 Visual Studio/Build Tools instance is incomplete, it uses
 `setup.exe modify --installPath` to add VC Tools/SDK rather than treating an
-already-installed instance as a no-op `winget install`. A 3010/1641 installer
-result is reported as a required restart followed by the same command. The
-normal command never installs software or changes the system. Neither route
-clears NuGet, Cargo, or `target` caches, so repeat runs reuse downloaded
-dependencies.
+already-installed instance as a no-op `winget install`.
+
+If WinGet says `Rustlang.Rustup` is already installed but the current user has
+no usable `%USERPROFILE%\.cargo\bin\rustup.exe`, the same command repairs the
+Rustup payload in place: normal WinGet install → `winget repair` → forced
+Rustup installer → an official HTTPS `rustup-init.exe` fallback with a
+SHA-256 sidecar integrity check. It does **not** uninstall Rustup or delete
+`.cargo` / `.rustup`, does not change
+the persistent PATH, and does not select a new persistent default toolchain;
+the package build selects `stable-x86_64-pc-windows-msvc` only for its own
+process. A 3010/1641 installer result is reported as a required restart
+followed by the same command. The normal command never installs software or
+changes the system. Neither route clears NuGet, Cargo, or `target` caches, so
+repeat runs reuse downloaded dependencies.
 
 On success the package and its diagnostics are written to:
 
