@@ -51,6 +51,20 @@ function Invoke-External {
     return $exitCode
 }
 
+function Initialize-ConsoleUtf8Encoding {
+    # Windows PowerShell 5.1 otherwise decodes some UTF-8 native output (such
+    # as winget on a Chinese Windows install) through the legacy ANSI code
+    # page, which makes the transcript unreadable even though the command ran.
+    try {
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [Console]::InputEncoding = $utf8
+        [Console]::OutputEncoding = $utf8
+        $script:OutputEncoding = $utf8
+    } catch {
+        Write-Warning "Could not select UTF-8 console encoding: $($_.Exception.Message)"
+    }
+}
+
 function Get-ExternalCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
     $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue
@@ -161,20 +175,26 @@ function Test-WindowsSdk {
 }
 
 function Test-RustMinimumVersion {
-    $rustc = Get-ExternalCommand "rustc.exe"
-    if ($null -eq $rustc) {
-        $rustc = Get-ExternalCommand "rustc"
-    }
+    $rustc = Get-RustToolCommand "rustc"
     if ($null -eq $rustc) {
         return $false
     }
 
-    $versionLine = @(& $rustc --version | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or $versionLine.Count -eq 0 -or $versionLine[0] -notmatch '^rustc\s+(?<version>\d+\.\d+\.\d+)') {
+    # rustc --version emits one line. Do not pipe it through Select-Object
+    # because Windows PowerShell can stop an upstream native process early and
+    # overwrite its successful exit code with -1.
+    $versionLine = @(& $rustc --version)
+    $rustcExitCode = $LASTEXITCODE
+    if ($rustcExitCode -ne 0 -or $versionLine.Count -eq 0) {
+        return $false
+    }
+    if ($versionLine[0] -match '^rustc\s+(?<version>\d+\.\d+\.\d+)') {
+        $versionText = $Matches["version"]
+    } else {
         return $false
     }
     try {
-        $version = [Version]($Matches["version"])
+        $version = [Version]$versionText
         return $version -ge ([Version]"1.95.0")
     } catch {
         return $false
@@ -186,10 +206,10 @@ function Get-MissingPrerequisites {
     if (-not (Test-DotnetEightSdk)) {
         $missing += ".NET 8 SDK"
     }
-    if ($null -eq (Get-ExternalCommand "cargo.exe") -and $null -eq (Get-ExternalCommand "cargo")) {
+    if ($null -eq (Get-RustToolCommand "cargo")) {
         $missing += "Rust cargo"
     }
-    if ($null -eq (Get-ExternalCommand "rustup.exe") -and $null -eq (Get-ExternalCommand "rustup")) {
+    if ($null -eq (Get-RustToolCommand "rustup")) {
         $missing += "Rust rustup"
     }
     if (-not (Test-RustMinimumVersion)) {
@@ -212,8 +232,65 @@ function Refresh-ProcessPath {
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
     $env:Path = (($allSegments -join ";").Split(";") |
+        ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Select-Object -Unique) -join ";"
+}
+
+function Add-RustupBinToProcessPath {
+    # Rustup normally uses %USERPROFILE%\.cargo\bin. Qoder and a PowerShell
+    # started before Rustup was installed can omit it from their inherited PATH,
+    # even though winget correctly sees the package as already installed.
+    # Wrap the pipeline in @() as a one-item pipeline would otherwise become a
+    # scalar String in Windows PowerShell; subsequent += would concatenate the
+    # default user location instead of appending a second candidate.
+    $cargoHomes = @(
+        @(
+            [Environment]::GetEnvironmentVariable("CARGO_HOME", "Process"),
+            [Environment]::GetEnvironmentVariable("CARGO_HOME", "User"),
+            [Environment]::GetEnvironmentVariable("CARGO_HOME", "Machine")
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) }
+    )
+
+    $userProfile = [Environment]::GetEnvironmentVariable("USERPROFILE", "Process")
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        $cargoHomes += Join-Path $userProfile ".cargo"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $cargoHomes += Join-Path $HOME ".cargo"
+    }
+
+    $pathSegments = @($env:Path -split ";") |
+        ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    foreach ($cargoHome in $cargoHomes | Select-Object -Unique) {
+        $bin = Join-Path $cargoHome "bin"
+        if (-not (Test-Path -LiteralPath $bin -PathType Container)) {
+            continue
+        }
+        $hasRustTool = @("cargo.exe", "rustup.exe", "rustc.exe") |
+            Where-Object { Test-Path -LiteralPath (Join-Path $bin $_) -PathType Leaf } |
+            Select-Object -First 1
+        if ($null -eq $hasRustTool) {
+            continue
+        }
+        if ($pathSegments -notcontains $bin) {
+            $pathSegments = @($bin) + $pathSegments
+        }
+    }
+    $env:Path = $pathSegments -join ";"
+}
+
+function Get-RustToolCommand {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    Add-RustupBinToProcessPath
+    $command = Get-ExternalCommand "$Name.exe"
+    if ($null -eq $command) {
+        $command = Get-ExternalCommand $Name
+    }
+    return $command
 }
 
 function Install-WithWinget {
@@ -270,20 +347,31 @@ function Install-MissingPrerequisites {
         Install-WithWinget -Id "Microsoft.DotNet.SDK.8"
     }
     if ($Missing -contains "Rust cargo" -or $Missing -contains "Rust rustup" -or $Missing -contains "Rust 1.95.0 or newer") {
-        Install-WithWinget -Id "Rustlang.Rustup"
         Refresh-ProcessPath
-        $rustup = Get-ExternalCommand "rustup.exe"
+        Add-RustupBinToProcessPath
+        $rustup = Get-RustToolCommand "rustup"
         if ($null -eq $rustup) {
-            $rustup = Get-ExternalCommand "rustup"
+            # 0x8A15002B (-1978335189) means winget recognizes an installed
+            # package but has no applicable update. It is only non-fatal here;
+            # the executable must still be found by the recheck below.
+            Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189) | Out-Null
+            Refresh-ProcessPath
+            Add-RustupBinToProcessPath
+            $rustup = Get-RustToolCommand "rustup"
         }
-        if ($null -ne $rustup -and $Missing -contains "Rust 1.95.0 or newer") {
+        if ($null -eq $rustup) {
+            throw "Rustup is registered as installed but rustup.exe is unavailable to this user. Ensure %USERPROFILE%\\.cargo\\bin exists (or set CARGO_HOME), repair Rustup, reopen 64-bit PowerShell, then rerun this exact command."
+        }
+        if ($Missing -contains "Rust cargo" -or $Missing -contains "Rust 1.95.0 or newer") {
             Invoke-External -FilePath $rustup -Arguments @("update", "stable") -Description "Rust stable update"
+            Invoke-External -FilePath $rustup -Arguments @("default", "stable") -Description "Rust stable default"
         }
     }
     if ($Missing -contains "Visual Studio 2022 C++ Build Tools with Windows SDK" -or $Missing -contains "Windows 10/11 SDK") {
         Install-VisualStudioBuildComponents
     }
     Refresh-ProcessPath
+    Add-RustupBinToProcessPath
 }
 
 function Initialize-MsvcBuildEnvironment {
@@ -483,9 +571,12 @@ try {
     }
     Assert-StageWithinArtifacts
     New-Item -ItemType Directory -Force $artifactsRoot | Out-Null
+    Initialize-ConsoleUtf8Encoding
     Start-Transcript -LiteralPath $transcript -Force | Out-Null
     $transcriptStarted = $true
 
+    Refresh-ProcessPath
+    Add-RustupBinToProcessPath
     $missing = @(Get-MissingPrerequisites)
     if ($missing.Count -gt 0) {
         if (-not $Bootstrap) {
@@ -505,12 +596,9 @@ try {
     Initialize-MsvcBuildEnvironment
     $dotnet = Get-ExternalCommand "dotnet.exe"
     if ($null -eq $dotnet) { $dotnet = Get-ExternalCommand "dotnet" }
-    $cargo = Get-ExternalCommand "cargo.exe"
-    if ($null -eq $cargo) { $cargo = Get-ExternalCommand "cargo" }
-    $rustup = Get-ExternalCommand "rustup.exe"
-    if ($null -eq $rustup) { $rustup = Get-ExternalCommand "rustup" }
-    $rustc = Get-ExternalCommand "rustc.exe"
-    if ($null -eq $rustc) { $rustc = Get-ExternalCommand "rustc" }
+    $cargo = Get-RustToolCommand "cargo"
+    $rustup = Get-RustToolCommand "rustup"
+    $rustc = Get-RustToolCommand "rustc"
     if ($null -eq $dotnet -or $null -eq $cargo -or $null -eq $rustup -or $null -eq $rustc) {
         throw "A required executable disappeared after preflight. Reopen 64-bit PowerShell and rerun with -Bootstrap if needed."
     }

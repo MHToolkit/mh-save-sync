@@ -81,6 +81,11 @@ def verify_local_packaging_script() -> None:
         "3010",
         "1641",
         "VsDevCmd.bat",
+        "Add-RustupBinToProcessPath",
+        "Get-RustToolCommand",
+        "-1978335189",
+        "ExpandEnvironmentVariables",
+        "UTF8Encoding",
         "Test-RustMinimumVersion",
         "1.95.0",
         "Test-WindowsSdk",
@@ -124,6 +129,37 @@ def verify_local_packaging_script() -> None:
     require(
         "reparse point" in script.lower(),
         "Windows package output cleanup must reject junctions and symlinks",
+    )
+    require(
+        '$versionLine[0] -match \'^rustc\\s+(?<version>\\d+\\.\\d+\\.\\d+)\'' in script
+        and '$versionText = $Matches["version"]' in script
+        and '$rustcExitCode = $LASTEXITCODE' in script,
+        "Rust version preflight must capture a successful regex match before parsing it",
+    )
+    rust_version_body = script.split("function Test-RustMinimumVersion", 1)[1].split(
+        "function Get-MissingPrerequisites", 1
+    )[0]
+    require(
+        "Select-Object -First 1" not in rust_version_body,
+        "Rust version preflight must not stop the native rustc process through Select-Object -First 1",
+    )
+    rust_bootstrap = script.split("function Install-MissingPrerequisites", 1)[1].split(
+        "function Initialize-MsvcBuildEnvironment", 1
+    )[0]
+    require(
+        'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)' in rust_bootstrap,
+        "Rustup bootstrap must treat WinGet's installed/no-update result as non-fatal",
+    )
+    require(
+        "Rustup is registered as installed" in rust_bootstrap,
+        "Rustup bootstrap must diagnose an installed-but-unreachable toolchain",
+    )
+    first_preflight = script.split("Start-Transcript -LiteralPath $transcript -Force", 1)[1].split(
+        "$missing = @(Get-MissingPrerequisites)", 1
+    )[0]
+    require(
+        "Refresh-ProcessPath" in first_preflight and "Add-RustupBinToProcessPath" in first_preflight,
+        "initial preflight must restore the current user's Rustup PATH before checking prerequisites",
     )
     visual_studio_modify = script.split("function Install-VisualStudioBuildComponents", 1)[1].split(
         "function Install-MissingPrerequisites", 1
