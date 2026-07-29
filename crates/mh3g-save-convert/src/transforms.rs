@@ -43,6 +43,15 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
+// Cha-Cha and Kayamba have two adjacent, fixed-width companion records.  Each
+// has three u32 header fields followed by a contiguous 109-entry u16 scalar
+// table. The trailing bytes are packed/opaque state and must remain
+// byte-preserved.
+const SHAKALAKA_RECORD_START: usize = 0x6F44;
+const SHAKALAKA_RECORD_COUNT: usize = 2;
+const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
+const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const SHAKALAKA_U16_TABLE_END: usize = 0xE6;
 const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
@@ -71,6 +80,15 @@ const GUILD_CARD_WEAPON_USAGE_COUNT: usize = 36;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
+// The player record and each full guild-card slot have 110 arena values: the
+// original 62-row table plus the 48 rows handled by the official transfer fix.
+// They start at different offsets but share the packed four-byte layout. The
+// table must not run into the unrelated fields that follow it.
+const USER_ARENA_RECORD_START: usize = 0x83A8;
+const USER_ARENA_RECORD_COUNT: usize = 110;
+const GUILD_CARD_ARENA_RECORD_START: usize = 0x9B4;
+const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;
+const ARENA_RECORD_STRIDE: usize = 4;
 const GUILD_CARD_TRAILER_START: usize = GUILD_CARD_SLOT_COUNT * GUILD_CARD_SLOT_SIZE;
 const GUILD_CARD_SUMMARY_START: usize = GUILD_CARD_TRAILER_START + 0x0C;
 const GUILD_CARD_SUMMARY_RECORD_COUNT: usize = 33;
@@ -285,6 +303,27 @@ fn transform_arena4(
     Ok(())
 }
 
+/// Convert one complete contiguous arena-record table.
+///
+/// Arena times are packed as two linked u16 lanes, so a regular byte swap is
+/// not valid.  `transform_arena4` implements the official rotate/carry
+/// conversion for each four-byte row. This helper deliberately walks the
+/// declared schema rather than only the static offsets encountered in one
+/// body: zero rows and the same rows in later repeated guild-card slots need
+/// exactly the same conversion when they become non-zero in another player's
+/// save.
+fn apply_arena_record_table(
+    source: &[u8],
+    target: &mut [u8],
+    start: usize,
+    count: usize,
+) -> Result<(), ConversionError> {
+    for record in 0..count {
+        transform_arena4(source, target, start + record * ARENA_RECORD_STRIDE)?;
+    }
+    Ok(())
+}
+
 fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<(), ConversionError> {
     validate_range(source, offset, 1, "crown source")?;
     validate_range(target, offset, 1, "crown target")?;
@@ -313,6 +352,21 @@ fn apply_guild_card_monster_log_corrections(
         }
     }
 
+    Ok(())
+}
+
+fn apply_guild_card_arena_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        apply_arena_record_table(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE + GUILD_CARD_ARENA_RECORD_START,
+            GUILD_CARD_ARENA_RECORD_COUNT,
+        )?;
+    }
     Ok(())
 }
 
@@ -479,6 +533,13 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
     {
         transform_arena4(source, target, offset)?;
     }
+
+    apply_arena_record_table(
+        source,
+        target,
+        GUILD_CARD_ARENA_RECORD_START,
+        GUILD_CARD_ARENA_RECORD_COUNT,
+    )?;
     for &offset in MEOW_CARD_SWAP2
         .iter()
         .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
@@ -588,6 +649,7 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
         apply_guild_card_equipment_corrections(source, target)?;
         apply_guild_card_weapon_usage_corrections(source, target)?;
         apply_guild_card_monster_log_corrections(source, target)?;
+        apply_guild_card_arena_corrections(source, target)?;
         apply_guild_card_metadata_corrections(source, target)?;
     }
 
@@ -684,6 +746,24 @@ fn apply_confirmed_numeric_and_record_corrections(
     Ok(())
 }
 
+fn apply_shakalaka_companion_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for companion in 0..SHAKALAKA_RECORD_COUNT {
+        let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
+
+        for relative in (0..SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
+            copy_reversed(source, target, record_start + relative, 4)?;
+        }
+        for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_U16_TABLE_END).step_by(2) {
+            copy_reversed(source, target, record_start + relative, 2)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Complete the statically recovered Wii U record corrections.
 pub fn apply_japanese_wiiu_corrections(
     source: &[u8],
@@ -756,9 +836,23 @@ pub fn apply_japanese_wiiu_corrections(
     for offset in MEOW_USER_OFFICIAL_FIX_ARENA4 {
         transform_arena4(source, target, offset)?;
     }
+    apply_arena_record_table(
+        source,
+        target,
+        USER_ARENA_RECORD_START,
+        USER_ARENA_RECORD_COUNT,
+    )?;
     for offset in MEOW_USER_OFFICIAL_FIX_COPY1 {
         target[offset] = source[offset];
     }
+
+    // The compatibility operation list covers only a subset of the
+    // Cha-Cha/Kayamba scalar fields. The fixed companion schema is broader:
+    // all 109 u16 fields in each record need endian conversion, including a
+    // player's independently progressed mask-mastery values. Reassert the
+    // full bounded schema so valid values cannot remain in 3DS little-endian
+    // form.
+    apply_shakalaka_companion_corrections(source, target)?;
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5
     // copies them unchanged, while the 3DS body stores their logical values in

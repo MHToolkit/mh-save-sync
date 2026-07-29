@@ -297,6 +297,80 @@ mod tests {
     }
 
     #[test]
+    fn remaps_the_full_personal_arena_record_table() {
+        let mut source = synthetic_3ds_source();
+        // The user save has 110 four-byte arena rows, ending at 0x855C. The
+        // next four bytes are a separate field and must not be fed through
+        // the arena rotate/carry transform.
+        let final_arena_record = 0x855C;
+        let following_field = final_arena_record + 4;
+        let arena_source = [0x81, 0x72, 0x63, 0x54];
+        source[JP_3DS_HEADER.len() + final_arena_record
+            ..JP_3DS_HEADER.len() + final_arena_record + 4]
+            .copy_from_slice(&arena_source);
+        let following_source = [0x11, 0x22, 0x33, 0x44];
+        source[JP_3DS_HEADER.len() + following_field..JP_3DS_HEADER.len() + following_field + 4]
+            .copy_from_slice(&following_source);
+
+        let output = convert_3ds_to_cemu(&source).unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+        assert_eq!(
+            &payload[final_arena_record..final_arena_record + 4],
+            &u32::from_le_bytes(arena_source)
+                .rotate_left(17)
+                .to_be_bytes()
+        );
+        assert_eq!(
+            &payload[following_field..following_field + following_source.len()],
+            &following_source
+        );
+    }
+
+    #[test]
+    fn remaps_unobserved_shakalaka_scalar_fields_in_both_companion_records() {
+        let mut source = vec![0_u8; THREE_DS_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+
+        // Each Shakalaka record has three u32 header fields followed by a
+        // 0xDA-byte u16 scalar table. The compatibility operation list covered
+        // only a subset of this record, so a valid mask-mastery scalar deeper
+        // in either table could remain little-endian.
+        let cha_cha_scalar = 0x6F74;
+        let kayamba_scalar = 0x70C8;
+        let cha_cha_last_scalar = 0x7028;
+        let kayamba_last_scalar = 0x7170;
+        let cha_cha_opaque_byte = 0x702A;
+        let kayamba_opaque_byte = 0x7172;
+        source[JP_3DS_HEADER.len() + cha_cha_scalar..JP_3DS_HEADER.len() + cha_cha_scalar + 2]
+            .copy_from_slice(&[0x12, 0x34]);
+        source[JP_3DS_HEADER.len() + kayamba_scalar..JP_3DS_HEADER.len() + kayamba_scalar + 2]
+            .copy_from_slice(&[0xAB, 0xCD]);
+        source[JP_3DS_HEADER.len() + cha_cha_last_scalar
+            ..JP_3DS_HEADER.len() + cha_cha_last_scalar + 2]
+            .copy_from_slice(&[0x56, 0x78]);
+        source[JP_3DS_HEADER.len() + kayamba_last_scalar
+            ..JP_3DS_HEADER.len() + kayamba_last_scalar + 2]
+            .copy_from_slice(&[0xEF, 0x01]);
+        source[JP_3DS_HEADER.len() + cha_cha_opaque_byte] = 0xA5;
+        source[JP_3DS_HEADER.len() + kayamba_opaque_byte] = 0x5A;
+
+        let output = convert_3ds_to_cemu(&source).unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+        assert_eq!(&payload[cha_cha_scalar..cha_cha_scalar + 2], &[0x34, 0x12]);
+        assert_eq!(&payload[kayamba_scalar..kayamba_scalar + 2], &[0xCD, 0xAB]);
+        assert_eq!(
+            &payload[cha_cha_last_scalar..cha_cha_last_scalar + 2],
+            &[0x78, 0x56]
+        );
+        assert_eq!(
+            &payload[kayamba_last_scalar..kayamba_last_scalar + 2],
+            &[0x01, 0xEF]
+        );
+        assert_eq!(payload[cha_cha_opaque_byte], 0xA5);
+        assert_eq!(payload[kayamba_opaque_byte], 0x5A);
+    }
+
+    #[test]
     fn rejects_non_japanese_3ds_sources_and_existing_cemu_saves() {
         let mut western_source = synthetic_3ds_source();
         western_source[0] = 0x2C;
@@ -343,7 +417,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "857e91f9f7ec6adf1399480fe4409c1d29ec7b376be6d8f6b28dda3032d965f1"
+            "9fce84bec2ff99d998747078228941e5dec2f18198ed4931b82b8a30efc00efb"
         );
     }
 
@@ -372,6 +446,50 @@ mod tests {
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
             "60d246ee5ff639cd0f67109e82e167a4b0126bc0160da1ab3dc82e440905c877"
+        );
+    }
+
+    #[test]
+    fn remaps_all_guild_card_slot_arena_records_without_overreaching_the_table() {
+        let arena_transform =
+            |source: [u8; 4]| u32::from_le_bytes(source).rotate_left(17).to_be_bytes();
+
+        let mut card_source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        card_source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let card_body = &mut card_source[JP_3DS_HEADER.len()..];
+
+        // A full card body has 98 repeated 0xE00 slots. The complete card
+        // arena table is 110 rows; use the final row in the final slot, which
+        // was absent from the static offset list but is used by received cards
+        // shown in the guild-card list and offline hall.
+        let last_card_arena = 97 * 0xE00 + 0x9B4 + 109 * 4;
+        let last_card_source = [0x81, 0x72, 0x63, 0x54];
+        card_body[last_card_arena..last_card_arena + 4].copy_from_slice(&last_card_source);
+
+        let following_card_field = last_card_arena + 4;
+        let following_card_source = [0x11, 0x22, 0x33, 0x44];
+        card_body[following_card_field..following_card_field + 4]
+            .copy_from_slice(&following_card_source);
+
+        // The trailer following 98 card slots is metadata, not a card-shaped
+        // record.  A schema fix must not reinterpret it as arena data.
+        let metadata_offset = 98 * 0xE00 + 0x08;
+        let metadata_bytes = [0x11, 0x22, 0x33, 0x44];
+        card_body[metadata_offset..metadata_offset + 4].copy_from_slice(&metadata_bytes);
+
+        let card_output = convert_external_component_to_cemu_named(&card_source, "card1").unwrap();
+        let card_payload = &card_output[JP_CEMU_HEADER.len()..];
+        assert_eq!(
+            &card_payload[last_card_arena..last_card_arena + 4],
+            &arena_transform(last_card_source)
+        );
+        assert_eq!(
+            &card_payload[metadata_offset..metadata_offset + 4],
+            &metadata_bytes
+        );
+        assert_eq!(
+            &card_payload[following_card_field..following_card_field + 4],
+            &following_card_source
         );
     }
 
