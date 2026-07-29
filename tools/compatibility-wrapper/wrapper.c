@@ -106,7 +106,6 @@ void *memcpy(void *dst, const void *src, SIZE_T n) { BYTE *d=(BYTE*)dst; const B
 
 static SIZE_T wslen(LPCWSTR s){ SIZE_T n=0; if(s) while(s[n]) n++; return n; }
 static BOOL wseq(LPCWSTR a,LPCWSTR b){ SIZE_T i=0; if(!a||!b) return FALSE; while(a[i]&&b[i]&&a[i]==b[i]) i++; return a[i]==b[i]; }
-static BOOL wstarts(LPCWSTR a,LPCWSTR p){ SIZE_T i=0; while(p[i]){ if(a[i]!=p[i]) return FALSE; i++; } return TRUE; }
 static void wcopy(LPWSTR d,LPCWSTR s){ while((*d++=*s++)); }
 static void wcat(LPWSTR d,LPCWSTR s){ d+=wslen(d); wcopy(d,s); }
 static BOOL is_dot(LPCWSTR s){ return (s[0]==L'.'&&s[1]==0)||(s[0]==L'.'&&s[1]==L'.'&&s[2]==0); }

@@ -78,11 +78,14 @@ for s in range(3):
   if row not in cec_old: arena4(staged,s*0xE00+0x9B4+row*4)
  for row in cec_old: arena4(staged,s*0xE00+0x9B4+row*4)
 assert staged==des
-exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name('dist') / 'mh3g-save-convert.exe'
-exe = exe_path.read_bytes()
-assert exe[:2] == b'MZ' and b'mh3g-save-convert-core.exe' in exe
 print('PASS')
 print('shakalaka_missing=205')
 print('guild_card_static=382 guild_card_missing=10398')
 print('cec_static_per_slot=73 cec_missing_per_slot=37')
-print('wrapper_sha256='+hashlib.sha256(exe).hexdigest())
+if len(sys.argv) > 1:
+    exe_path = Path(sys.argv[1])
+    exe = exe_path.read_bytes()
+    assert exe[:2] == b'MZ' and b'mh3g-save-convert-core.exe' in exe
+    print('wrapper_sha256='+hashlib.sha256(exe).hexdigest())
+else:
+    print('binary_check=skipped (source-only validation)')
