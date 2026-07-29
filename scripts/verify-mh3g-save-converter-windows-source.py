@@ -160,6 +160,11 @@ def verify_local_packaging_script() -> None:
         "Windows package output cleanup must reject junctions and symlinks",
     )
     require(
+        "Assert-NativeConverterSidecar" in script
+        and "mh3g-save-convert-core.exe" in script,
+        "Windows packaging must reject the legacy compatibility wrapper before publishing",
+    )
+    require(
         '$versionLine[0] -match \'^rustc\\s+(?<version>\\d+\\.\\d+\\.\\d+)\'' in script
         and '$versionText = $Matches["version"]' in script
         and '$rustcExitCode = $LASTEXITCODE' in script,
@@ -270,7 +275,13 @@ def main() -> int:
         require((APP / "assets" / "Artwork" / artwork).is_file(), f"missing packaged artwork {artwork}")
 
     bridge = read("Services/ConverterCliClient.cs")
-    for expected in ("UseShellExecute = false", "startInfo.ArgumentList.Add(argument)", "JsonDocument.Parse(candidate)"):
+    for expected in (
+        "UseShellExecute = false",
+        "startInfo.ArgumentList.Add(argument)",
+        "JsonDocument.Parse(candidate)",
+        "mh3g-save-convert-core.exe",
+        "Legacy compatibility wrapper",
+    ):
         require(expected in bridge, f"argv/JSON bridge is missing {expected}")
     require("startInfo.Arguments" not in bridge, "CLI bridge must not build a command-string argument list")
     require("cmd.exe" not in bridge and "powershell" not in bridge.lower(), "CLI bridge must not invoke a shell")
