@@ -122,6 +122,15 @@ after that test, the disposable synthetic `write -> rollback` smoke is skipped
 rather than touching it. Do not use `-SkipTests` or `-SkipTransactionSmoke` for
 a normal distribution build.
 
+If the UI reports `Unable to prepare patched user save`,
+`tools\mh3g-save-convert.exe` came from the temporary v0.0.3 compatibility
+wrapper rather than the native Rust CLI used by 0.0.4 and newer. Do not copy
+`tools\compatibility-wrapper\dist\mh3g-save-convert.exe` into a WinUI package.
+Delete the old `artifacts\mh3g-save-convert-windows-x64` directory and ZIP,
+then rerun the exact `package-mh3g-save-converter-windows.ps1 -Bootstrap`
+command above. Current packaging and the WinUI runtime both reject that legacy
+wrapper before it can surface a misleading JSON error.
+
 If it fails, send the **first failed command block** from
 `artifacts\mh3g-save-convert-windows-build-transcript.txt`: begin at its `>>`
 line and include the failure lines below it. Do not switch to a different manual

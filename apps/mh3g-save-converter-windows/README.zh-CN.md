@@ -104,6 +104,15 @@ Cemu_release、Nemessix 和 Azahar，发现仍在运行就列出进程名并提�
 这些进程。若测试之后模拟器才启动，则只跳过临时目录中的合成 `write -> rollback` smoke，
 不会触碰真实数据。常规发包不要使用 `-SkipTests` 或 `-SkipTransactionSmoke`。
 
+如果界面报告 `Unable to prepare patched user save`，当前包中的
+`tools\mh3g-save-convert.exe` 是仅供 v0.0.3 临时更新使用的旧兼容包装器，不是
+0.0.4 之后的原生 Rust CLI。不要把
+`tools\compatibility-wrapper\dist\mh3g-save-convert.exe` 复制进 WinUI 包；
+删除旧的 `artifacts\mh3g-save-convert-windows-x64` 和 ZIP 后，使用上面的
+`package-mh3g-save-converter-windows.ps1 -Bootstrap` 原命令重新打包。新版
+打包脚本和 WinUI 运行时都会识别并拒绝旧包装器，不再把它的 stderr 误报成 JSON
+解析故障。
+
 若仍失败，请提供
 `artifacts\mh3g-save-convert-windows-build-transcript.txt` 中**首个失败命令的完整输出块**：
 从对应的 `>>` 行开始，连同其下方的失败信息一起发回；不要改用另一组手工构建命令。

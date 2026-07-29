@@ -11,6 +11,9 @@ namespace MHToolkit.MH3GSaveConverter.Windows.Services;
 /// </summary>
 public sealed class ConverterCliClient
 {
+    private static readonly byte[] LegacyWrapperMarker =
+        "mh3g-save-convert-core.exe"u8.ToArray();
+
     public async Task<CliExecutionResult> ExecuteAsync(
         string executable,
         IEnumerable<string> arguments,
@@ -35,6 +38,22 @@ public sealed class ConverterCliClient
                 StandardError = $"The converter CLI was not found: {executable}",
                 JsonParseError = "CLI sidecar is missing.",
             };
+        }
+
+        try
+        {
+            var executableBytes = await File.ReadAllBytesAsync(executable, cancellationToken);
+            if (ContainsLegacyWrapperMarker(executableBytes))
+            {
+                return LaunchFailure(
+                    executable,
+                    argumentList,
+                    "Legacy compatibility wrapper detected. Rebuild the Windows package from 0.0.4 or newer so tools\\mh3g-save-convert.exe is the native Rust CLI. / 检测到旧版兼容包装器，请使用 0.0.4 或更高版本源码重新打包，确保 tools\\mh3g-save-convert.exe 为原生 Rust CLI。");
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return LaunchFailure(executable, argumentList, $"The converter CLI could not be inspected: {exception.Message}");
         }
 
         var startInfo = new ProcessStartInfo
@@ -95,6 +114,24 @@ public sealed class ConverterCliClient
             StandardError = message,
             JsonParseError = "The converter process could not be launched.",
         };
+    }
+
+    private static bool ContainsLegacyWrapperMarker(byte[] bytes)
+    {
+        if (bytes.Length < LegacyWrapperMarker.Length)
+        {
+            return false;
+        }
+
+        for (var offset = 0; offset <= bytes.Length - LegacyWrapperMarker.Length; offset++)
+        {
+            if (bytes.AsSpan(offset, LegacyWrapperMarker.Length).SequenceEqual(LegacyWrapperMarker))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static JsonElement? TryParseLastJsonLine(string stdout, out string? parseError)

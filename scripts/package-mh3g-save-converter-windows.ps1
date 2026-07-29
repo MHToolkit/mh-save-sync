@@ -703,6 +703,18 @@ function Write-Sha256File {
     return $hash
 }
 
+function Assert-NativeConverterSidecar {
+    param([Parameter(Mandatory = $true)][string]$FilePath)
+
+    $legacyMarker = "mh3g-save-convert-core.exe"
+    $binaryText = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes($FilePath)
+    )
+    if ($binaryText.Contains($legacyMarker)) {
+        throw "Refusing the legacy MH3G compatibility wrapper: $FilePath. Build and package the native Rust converter from 0.0.4 or newer."
+    }
+}
+
 function Get-RunningSupportedEmulators {
     # The Rust integration suite intentionally exercises guarded writes against
     # synthetic files. Its process probe must see no real emulator, just as a
@@ -748,6 +760,7 @@ function Test-PackagedLayout {
         if ($actualSidecarHash -ne $expectedSidecarHash) {
             throw "Package self-check found a sidecar checksum mismatch."
         }
+        Assert-NativeConverterSidecar -FilePath $sidecar
 
         $powershell = Get-ExternalCommand "powershell.exe"
         if ($null -eq $powershell) {
@@ -906,6 +919,7 @@ try {
         if (-not (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
             throw "Rust x64 sidecar is missing after cargo build: $sidecar"
         }
+        Assert-NativeConverterSidecar -FilePath $sidecar
         Invoke-External -FilePath $sidecar -Arguments @("--help") -Description "release sidecar smoke"
 
         # Recheck directly before recursive deletion in case an existing stage
