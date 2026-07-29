@@ -4,7 +4,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 native_transforms = (ROOT / 'crates/mh3g-save-convert/src/transforms.rs').read_text(encoding='utf-8')
 native_markers = (
-    'const SHAKALAKA_U16_TABLE_END: usize = 0xE6;',
+    'const SHAKALAKA_MASK_STATE_START: usize = 0xDE;',
     'const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;',
     'fn apply_shakalaka_companion_corrections(',
     'fn apply_guild_card_arena_corrections(',
@@ -25,15 +25,15 @@ card_a=arr('MEOW_CARD_ARENA4'); card_s2=set(arr('MEOW_CARD_SWAP2')); card_s4=set
 expected_old=[]
 for c in range(2):
  st=0x6F44+c*0x148
- vals=sorted(o-st for o in user_s2 if st+0x0C<=o<st+0xE6)
+ vals=sorted(o-st for o in user_s2 if st+0x0C<=o<st+0xDE)
  expected_old.append(vals)
 assert expected_old==[[0x0C,0x0E,0x10,0x14,0x18,0x1C],[0x0C,0x0E,0x12,0x18,0x1C,0x24,0x2C]], expected_old
 missing_shaka=[]
 for c in range(2):
  st=0x6F44+c*0x148
- for rel in range(0x0C,0xE6,2):
+ for rel in range(0x0C,0xDE,2):
   if st+rel not in user_s2: missing_shaka.append(st+rel)
-assert len(missing_shaka)==205
+assert len(missing_shaka)==197
 # no old 4-byte transform overlaps any missing 2-byte field
 for o in missing_shaka:
  assert not any(x < o+2 and o < x+4 for x in user_s4)
@@ -65,14 +65,14 @@ base=bytearray(rnd.randbytes(0x8A00))
 des=base[:]; staged=base[:]
 for c in range(2):
  st=0x6F44+c*0x148
- for rel in range(0x0C,0xE6,2): swap2(des,st+rel)
- for rel in range(0x0C,0xE6,2):
+ for rel in range(0x0C,0xDE,2): swap2(des,st+rel)
+ for rel in range(0x0C,0xDE,2):
   if st+rel not in user_s2: swap2(staged,st+rel)
 for o in user_s2:
- if any(0x6F44+c*0x148+0x0C<=o<0x6F44+c*0x148+0xE6 for c in range(2)): swap2(staged,o)
+ if any(0x6F44+c*0x148+0x0C<=o<0x6F44+c*0x148+0xDE for c in range(2)): swap2(staged,o)
 for c in range(2):
  st=0x6F44+c*0x148
- assert staged[st+0x0C:st+0xE6]==des[st+0x0C:st+0xE6]
+ assert staged[st+0x0C:st+0xDE]==des[st+0x0C:st+0xDE]
 # card equivalence only arena table
 base=bytearray(rnd.randbytes(98*0xE00))
 des=base[:]; staged=base[:]
@@ -92,7 +92,7 @@ for s in range(3):
  for row in cec_old: arena4(staged,s*0xE00+0x9B4+row*4)
 assert staged==des
 print('PASS')
-print('shakalaka_missing=205')
+print('shakalaka_missing=197')
 print('guild_card_static=382 guild_card_missing=10398')
 print('cec_static_per_slot=73 cec_missing_per_slot=37')
 if len(sys.argv) > 1:

@@ -2,7 +2,7 @@
 
 > **Only for the legacy `mh3g-save-convert-v0.0.3` converter core.** The core after PR #17 already performs these conversions natively. Do not layer this wrapper on a newer core, or the affected fields will be converted twice.
 
-This directory preserves the tester-provided Windows hotfix build path. The v0.0.3 WinUI package calls `tools/mh3g-save-convert.exe`; this wrapper patches a temporary copy of the input for the missing companion-mask proficiency, guild-card arena, and CEC arena conversions, then delegates all remaining work to `mh3g-save-convert-core.exe`.
+This directory preserves the tester-provided Windows hotfix build path. The v0.0.3 WinUI package calls `tools/mh3g-save-convert.exe`; this wrapper patches a temporary copy of the input for the missing companion numeric-prefix, guild-card arena, and CEC arena conversions while preserving byte-packed mask mastery state, then delegates all remaining work to `mh3g-save-convert-core.exe`.
 
 ## Build on Windows
 

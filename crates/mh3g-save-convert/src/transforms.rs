@@ -43,15 +43,15 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
-// Cha-Cha and Kayamba have two adjacent, fixed-width companion records.  Each
-// has three u32 header fields followed by a contiguous 109-entry u16 scalar
-// table. The trailing bytes are packed/opaque state and must remain
-// byte-preserved.
+// Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Each
+// starts with three u32 header fields and endian-sensitive u16 scalars. The
+// tail beginning at relative 0xDE is byte-packed mask/mastery state: it has
+// the same byte order on 3DS and Wii U and must remain byte-preserved.
 const SHAKALAKA_RECORD_START: usize = 0x6F44;
 const SHAKALAKA_RECORD_COUNT: usize = 2;
 const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
 const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
-const SHAKALAKA_U16_TABLE_END: usize = 0xE6;
+const SHAKALAKA_MASK_STATE_START: usize = 0xDE;
 const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
@@ -756,7 +756,7 @@ fn apply_shakalaka_companion_corrections(
         for relative in (0..SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
             copy_reversed(source, target, record_start + relative, 4)?;
         }
-        for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_U16_TABLE_END).step_by(2) {
+        for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
             copy_reversed(source, target, record_start + relative, 2)?;
         }
     }
@@ -846,12 +846,9 @@ pub fn apply_japanese_wiiu_corrections(
         target[offset] = source[offset];
     }
 
-    // The compatibility operation list covers only a subset of the
-    // Cha-Cha/Kayamba scalar fields. The fixed companion schema is broader:
-    // all 109 u16 fields in each record need endian conversion, including a
-    // player's independently progressed mask-mastery values. Reassert the
-    // full bounded schema so valid values cannot remain in 3DS little-endian
-    // form.
+    // The compatibility operation list covers only a subset of the numeric
+    // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix, stopping
+    // before the platform-invariant byte-packed mask/mastery state.
     apply_shakalaka_companion_corrections(source, target)?;
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5

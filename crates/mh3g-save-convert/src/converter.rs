@@ -327,20 +327,21 @@ mod tests {
     }
 
     #[test]
-    fn remaps_unobserved_shakalaka_scalar_fields_in_both_companion_records() {
+    fn remaps_shakalaka_scalars_without_swapping_mask_state_bytes() {
         let mut source = vec![0_u8; THREE_DS_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
 
-        // Each Shakalaka record has three u32 header fields followed by a
-        // 0xDA-byte u16 scalar table. The compatibility operation list covered
-        // only a subset of this record, so a valid mask-mastery scalar deeper
-        // in either table could remain little-endian.
+        // Each Shakalaka record starts with endian-sensitive numeric fields,
+        // but its mask/mastery state at relative 0xDE is byte-packed and has
+        // the same byte order on 3DS and Wii U. Treating that tail as u16
+        // changes Cha-Cha's observed `01 09` state to `09 01`, which makes the
+        // Wii U dialogue path consume an invalid mastery value.
         let cha_cha_scalar = 0x6F74;
         let kayamba_scalar = 0x70C8;
-        let cha_cha_last_scalar = 0x7028;
-        let kayamba_last_scalar = 0x7170;
-        let cha_cha_opaque_byte = 0x702A;
-        let kayamba_opaque_byte = 0x7172;
+        let cha_cha_last_scalar = 0x7020;
+        let kayamba_last_scalar = 0x7168;
+        let cha_cha_mask_state = 0x7022;
+        let kayamba_mask_state = 0x716A;
         source[JP_3DS_HEADER.len() + cha_cha_scalar..JP_3DS_HEADER.len() + cha_cha_scalar + 2]
             .copy_from_slice(&[0x12, 0x34]);
         source[JP_3DS_HEADER.len() + kayamba_scalar..JP_3DS_HEADER.len() + kayamba_scalar + 2]
@@ -351,8 +352,12 @@ mod tests {
         source[JP_3DS_HEADER.len() + kayamba_last_scalar
             ..JP_3DS_HEADER.len() + kayamba_last_scalar + 2]
             .copy_from_slice(&[0xEF, 0x01]);
-        source[JP_3DS_HEADER.len() + cha_cha_opaque_byte] = 0xA5;
-        source[JP_3DS_HEADER.len() + kayamba_opaque_byte] = 0x5A;
+        source[JP_3DS_HEADER.len() + cha_cha_mask_state
+            ..JP_3DS_HEADER.len() + cha_cha_mask_state + 2]
+            .copy_from_slice(&[0x01, 0x09]);
+        source[JP_3DS_HEADER.len() + kayamba_mask_state
+            ..JP_3DS_HEADER.len() + kayamba_mask_state + 2]
+            .copy_from_slice(&[0x02, 0x05]);
 
         let output = convert_3ds_to_cemu(&source).unwrap();
         let payload = &output[JP_CEMU_HEADER.len()..];
@@ -366,8 +371,14 @@ mod tests {
             &payload[kayamba_last_scalar..kayamba_last_scalar + 2],
             &[0x01, 0xEF]
         );
-        assert_eq!(payload[cha_cha_opaque_byte], 0xA5);
-        assert_eq!(payload[kayamba_opaque_byte], 0x5A);
+        assert_eq!(
+            &payload[cha_cha_mask_state..cha_cha_mask_state + 2],
+            &[0x01, 0x09]
+        );
+        assert_eq!(
+            &payload[kayamba_mask_state..kayamba_mask_state + 2],
+            &[0x02, 0x05]
+        );
     }
 
     #[test]

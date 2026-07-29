@@ -4,7 +4,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 native_transforms = (ROOT / 'crates/mh3g-save-convert/src/transforms.rs').read_text(encoding='utf-8')
 native_markers = (
-    'const SHAKALAKA_U16_TABLE_END: usize = 0xE6;',
+    'const SHAKALAKA_MASK_STATE_START: usize = 0xDE;',
     'const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;',
     'fn apply_shakalaka_companion_corrections(',
     'fn apply_guild_card_arena_corrections(',
@@ -176,7 +176,7 @@ static BOOL old_shaka_u16(int companion,int rel){
     const WORD *a=companion?c1:c0; int n=companion?7:6,i; for(i=0;i<n;i++)if(a[i]==rel)return TRUE; return FALSE;
 }
 static BOOL patch_user_file(LPCWSTR path){ BYTE *b; SIZE_T sz; int c,rel; if(!read_all(path,&b,&sz))return FALSE; if(sz<4+0x8A00||b[0]!=0x2B||b[1]||b[2]||b[3]){HeapFree(GetProcessHeap(),0,b);return FALSE;}
-    for(c=0;c<2;c++)for(rel=0x0C;rel<0xE6;rel+=2)if(!old_shaka_u16(c,rel))swap2(b+4+0x6F44+c*0x148+rel);
+    for(c=0;c<2;c++)for(rel=0x0C;rel<0xDE;rel+=2)if(!old_shaka_u16(c,rel))swap2(b+4+0x6F44+c*0x148+rel);
     if(!write_all(path,b,sz)){HeapFree(GetProcessHeap(),0,b);return FALSE;} HeapFree(GetProcessHeap(),0,b); return TRUE; }
 
 static const WORD CARD_STATIC_KEYS[382]={
