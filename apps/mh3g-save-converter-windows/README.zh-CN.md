@@ -25,7 +25,8 @@
   失败关闭。选择核心槽位不会自动打开 CEC。
 - `system` 与 ExtData（`card*`、`cardbox`、`quest*`）仍属于独立 CLI
   事务。当前首版 Windows 外壳不会猜测 Cemu MLC 目录，也不会静默安装
-  ExtData 组件组。
+  ExtData 组件组。在 Windows 上，ExtData 转换可以预览并生成暂存文件，
+  但在后端具备等价的持久目录元数据和原子交换事务前，多文件安装与回滚会保持不可用。
 
 执行写入或回滚前，必须退出 Nemessix、Azahar 和 Cemu。准确源文件、目标范围
 及事务边界参见根目录的
@@ -49,25 +50,63 @@ Run-Converter.ps1
 参数。开发场景可以显式选择另一个 CLI 路径，或设置 `MH3G_CONVERTER_CLI`。若
 sidecar 不存在或没有输出 JSON，应用会将该操作标记为失败。
 
-## 在 Windows 上构建
+## 在 Windows x64 上一键打包
 
-安装带有 **.NET desktop development** 工作负载、Windows 10/11 SDK 与 .NET 8
-SDK 的 Visual Studio 2022。然后在仓库根目录执行：
+不要让 IDE、Qoder 或人工命令分别构建 Rust 与 WinUI：从仓库根目录只运行这一条
+**唯一权威命令**：
 
 ```powershell
-dotnet restore apps\mh3g-save-converter-windows\MH3GSaveConverter.Windows.csproj
-cargo build --locked --release -p mh3g-save-convert --bin mh3g-save-convert
-$publish = "artifacts\mh3g-save-convert-windows-x64"
-dotnet publish apps\mh3g-save-converter-windows\MH3GSaveConverter.Windows.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -o $publish
-New-Item -ItemType Directory -Force "$publish\tools"
-Copy-Item target\release\mh3g-save-convert.exe "$publish\tools\mh3g-save-convert.exe"
-$sidecarHash = (Get-FileHash -Algorithm SHA256 "$publish\tools\mh3g-save-convert.exe").Hash.ToLowerInvariant()
-"$sidecarHash  mh3g-save-convert.exe" | Set-Content -NoNewline -Encoding ascii "$publish\tools\mh3g-save-convert.exe.sha256"
-Copy-Item scripts\mh3g-windows-launcher.ps1 "$publish\Run-Converter.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
 ```
 
-本地组包前应生成并核验 sidecar 的 SHA-256。GitHub Windows workflow 会完成此
-组包流程，并在 UI 包中保留 Rust 二进制的来源链路。
+脚本会预检 Windows 10 1809+/Windows 11 x64、.NET 8 SDK、Rust 1.95+ 的
+`cargo`/`rustup`，以及
+带 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` 和 Windows SDK 的 Visual
+Studio 2022 Build Tools；随后它通过 `VsDevCmd.bat` 导入 x64 MSVC 环境，不依赖启动
+Qoder 的 shell。Rust 测试和 sidecar 构建固定使用
+`x86_64-pc-windows-msvc`，不会错误地沿用测试员的 GNU 默认 target。
+
+首次机器缺少依赖时，才显式允许脚本使用 `winget` 安装；这一步可能需要管理员批准：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1 -Bootstrap
+```
+
+`-Bootstrap` 只会安装缺失的 .NET 8 SDK、Rustup 和 Visual Studio 2022 C++ Build
+Tools（含推荐的 Windows SDK 组件）；若电脑已有不完整的 Visual Studio/Build Tools，
+它会调用 `setup.exe modify --installPath` 补齐 VC Tools/SDK，而不是把已安装实例当作
+无变化的 `winget install`。
+
+如果 WinGet 显示 `Rustlang.Rustup` 已安装、但当前用户没有可用的
+`%USERPROFILE%\.cargo\bin\rustup.exe`，同一条命令会按顺序原地修复 Rustup 载荷：
+普通 WinGet 安装 → `winget repair` → 强制重新运行 Rustup 安装器 → 从官方 HTTPS 下载
+`rustup-init.exe` 并校验其 SHA-256 sidecar 完整性后兜底。它**不会**卸载 Rustup、删除 `.cargo` / `.rustup`、
+修改持久 PATH，也不会改写用户持久默认工具链；打包进程只在自身进程内选择
+`stable-x86_64-pc-windows-msvc`。安装器返回 3010/1641 时脚本会要求重启后原命令重跑。
+默认命令绝不会静默安装或更改系统。若旧版脚本曾以 `-NoPath` 将私有 .NET 8 SDK
+安装到 `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`，新脚本会
+直接复用，不会重复下载。两种路径均不会清空 NuGet、Cargo 或 `target` 缓存，因此重复
+执行会复用已有下载。
+
+成功后会产生：
+
+```text
+artifacts\mh3g-save-convert-windows-x64.zip
+artifacts\mh3g-save-convert-windows-x64.zip.sha256
+artifacts\mh3g-save-convert.exe.sha256
+artifacts\mh3g-save-convert-windows-build-transcript.txt
+```
+
+脚本会依次执行 `dotnet restore`、固定 MSVC target 的 Rust 测试/发布、self-contained
+WinUI `dotnet publish`、sidecar SHA-256、ZIP SHA-256 及解压后的布局/sidecar
+自检。它不会启动 GUI、Cemu 或读取真实存档；强制 Rust 测试前会检查 Cemu、
+Cemu_release、Nemessix 和 Azahar，发现仍在运行就列出进程名并提前失败，绝不会结束
+这些进程。若测试之后模拟器才启动，则只跳过临时目录中的合成 `write -> rollback` smoke，
+不会触碰真实数据。常规发包不要使用 `-SkipTests` 或 `-SkipTransactionSmoke`。
+
+若仍失败，请提供
+`artifacts\mh3g-save-convert-windows-build-transcript.txt` 中**首个失败命令的完整输出块**：
+从对应的 `>>` 行开始，连同其下方的失败信息一起发回；不要改用另一组手工构建命令。
 
 ## 非 Windows 主机上的源级检查
 

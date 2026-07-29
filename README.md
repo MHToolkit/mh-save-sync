@@ -26,22 +26,41 @@ not convert Cemu back to 3DS. It preserves bytes outside documented conversion
 ranges, but preserved bytes are not proof that every in-game field has the same
 meaning on both platforms.
 
-### Native macOS workbench (development)
+### Native macOS and Windows workbenches (development)
 
-`apps/mh3g-save-converter-macos` is a separate foreground SwiftUI app, not the
-existing MH Save Sync menu-bar client. It uses the bundled
-`mh3g-save-convert` executable through an argv array and its JSON reports; it
-does not implement byte conversion, backup, manifest, process checks, or
-rollback itself. The window appears in the Dock and Cmd-Tab, starts in the
-four-stage workbench, follows the system language by default, and can switch
-between Simplified Chinese and English in Settings.
+`apps/mh3g-save-converter-macos` is a separate foreground SwiftUI app, and
+`apps/mh3g-save-converter-windows` is its WinUI companion; neither is the
+existing MH Save Sync menu-bar client. They use the bundled
+`mh3g-save-convert` executable through argv arrays and its JSON reports. The
+apps do not implement byte conversion, backup, manifest, process checks, or
+rollback themselves. The macOS window appears in the Dock and Cmd-Tab, follows
+the system language by default, and can switch between Simplified Chinese and
+English in Settings.
 
-The app accepts only explicitly selected `user1`, `user2`, `user3`, `system`,
-ExtData, and CEC paths. It does not discover an MLC root, scan a directory, or
-accept archive files. A core write remains disabled until its current Dry Run
-fingerprint matches the selected source SHA-256, target SHA-256, and component
-scope. CEC is a separate collapsed experimental page and is never needed for
-the normal guild-card/offline-partner group.
+The workbenches provide four **guided but non-blocking** stages: input and
+inspection, optional shared data, Dry Run, then write or rollback. Completing
+one stage reveals the recommended next action (for example, inspect then
+optional data), while still allowing a player to revisit a prior stage or skip
+optional groups. The guidance is not a separate conversion operation.
+
+For a core slot, the GUI may select either one exact `user1`, `user2`, or
+`user3` file or its direct parent directory, then resolves only the selected
+slot's direct child. A target selection may be an existing same-name Cemu
+`user#` file or an explicit export directory; an export directory resolves to
+`<directory>/user#` without creating it during selection. The GUI never
+recursively scans, searches an SD card, discovers an MLC root, or accepts an
+archive. These directory conveniences are **GUI-only**: the CLI still requires
+the exact source and output files documented below.
+
+The optional ExtData picker accepts either the precise `user` directory or its
+normal direct `00000481` parent and resolves only that parent's `user` child.
+CEC is an independent, collapsed experimental page and is never needed for the
+normal guild-card/offline-partner group. A core write remains disabled until its
+current Dry Run fingerprint matches the selected source, target, and component
+scope. For an existing target, that includes its target SHA-256. For a new
+export, the GUI records that the target was absent and writes with
+`--expected-target-absent`; if that path appears after Dry Run, the write is
+refused rather than overwriting it.
 
 On an arm64 macOS development host, build and exercise only synthetic fixtures:
 
@@ -58,12 +77,36 @@ rollback. When Nemessix, Azahar, or Cemu is already running, it instead proves
 the CLI refuses the synthetic write and leaves the temporary target absent. It
 never launches Cemu or opens a real MLC.
 
+For a Windows 10 1809+/Windows 11 x64 local WinUI package, do not split the
+build into IDE/Qoder-specific manual commands. From the repository root, the
+single package script preflights .NET 8, Rust MSVC, and Visual Studio Build
+Tools/Windows SDK, then builds and self-checks the WinUI + Rust-sidecar ZIP:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
+```
+
+Append `-Bootstrap` only for a first machine with missing prerequisites; it uses
+`winget` to install missing components and can request administrator approval.
+If WinGet has a stale Rustup registration but the current user lacks
+`rustup.exe`, the same bootstrap repairs it in place and falls back to a
+official HTTPS bootstrapper with a SHA-256 sidecar integrity check, without
+deleting `.cargo` or `.rustup`.
+Normal runs never clear NuGet/Cargo caches. They also reuse a valid private
+.NET 8 SDK from an earlier package version at
+`%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`, so an SDK
+installed with `-NoPath` is not downloaded again. Artifacts, SHA-256 files, and
+a failure transcript are written beneath `artifacts\`; return the first failed
+command block in `mh3g-save-convert-windows-build-transcript.txt` from a tester. See the complete Windows contract and optional switches in
+[`apps/mh3g-save-converter-windows/README.md`](apps/mh3g-save-converter-windows/README.md).
+
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR
 > archives directly, and it does **not** search an arbitrary save directory for
 > a plausible file. Fully extract an archive to a normal local directory, then
-> give the command the exact file or exact directory shown below. Do not run a
-> program from a QQ/browser archive preview. Quote every path that contains a
-> space.
+> give the command the exact file or exact directory shown below. The core
+> directory shortcuts described for the GUI do **not** apply to CLI commands.
+> Do not run a program from a QQ/browser archive preview. Quote every path that
+> contains a space.
 
 Before any `--write`, `rollback`, `rollback-extras`, or `rollback-cec`, fully quit Nemessix,
 Azahar, and Cemu and wait for their processes to stop. `inspect`,
@@ -104,11 +147,12 @@ local emulator example:
     OutBox__/...                           <- local outgoing broadcast
 ```
 
-If an extracted folder contains `user2`, choose that **file** for a core slot
-conversion. If it contains `card1` through `quest4`, choose that folder only
-for `convert-extras`. If it contains an extra wrapper directory, enter it first;
-the expected filenames must be immediate children of the path passed to the
-command.
+If an extracted folder contains `user2`, pass that **file** to the CLI for a
+core slot conversion. In a native workbench, selecting that folder with
+`user2` chosen resolves only its direct `user2` child. If it contains `card1`
+through `quest4`, pass that folder only to `convert-extras`. If it contains an
+extra wrapper directory, enter it first; the expected filenames must be
+immediate children of the CLI path or the narrow GUI selection described above.
 
 ### Before you write: paths, inspection, and dry-run
 
@@ -152,20 +196,22 @@ an arbitrary renamed file. With no `--write`, conversion remains a dry-run;
 pass `--dry-run` explicitly in scripts to make that intention visible. `--write`
 and `--dry-run` conflict.
 
-For GUI and automation clients, `convert` and `convert-system` also expose
-optional write preconditions: `--expected-source-sha256` and
-`--expected-target-sha256`. Each flag is accepted only together with `--write`.
-Take their values only from `hashes.source` and `hashes.target_before` in the
-JSON emitted by the **same** immediately preceding Dry Run for the same source
-and output paths. This makes the write fail closed if either file changed; the
-target hash is rechecked after the per-slot installation lock is acquired.
-Do not reuse an older report or calculate replacement values separately.
+For GUI and automation clients, `convert` and `convert-system` expose guarded
+write preconditions: `--expected-source-sha256` plus exactly one target
+condition, either `--expected-target-sha256` or `--expected-target-absent`.
+They are accepted only together with `--write`. Take hash values only from
+`hashes.source` and `hashes.target_before` in the JSON emitted by the **same**
+immediately preceding Dry Run for the same source and output paths. This makes
+the write fail closed if an existing source or target changed; the target hash
+is rechecked after the per-slot installation lock is acquired. Do not reuse an
+older report or calculate replacement values separately.
 
 `hashes.target_before` is present only when the target file already exists. If
 it is absent, do not invent a sentinel hash or pass
-`--expected-target-sha256`: a supplied target expectation intentionally rejects
-a missing target. A first install may still use the source expectation alone,
-according to the caller's policy.
+`--expected-target-sha256`. For a guarded new export, pass the Dry Run source
+hash with `--expected-target-absent` instead. The transaction checks again
+after acquiring its lock and refuses the write if the new target appeared in
+the meantime. The two target conditions are mutually exclusive.
 
 ### Complete command reference
 
@@ -218,7 +264,7 @@ It writes nothing:
 #### `convert` — convert one character slot
 
 ```text
-mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` and `<OUTPUT>` must have the same `user#` basename. Read-only use:
@@ -250,9 +296,28 @@ TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
   --write
 ```
 
-`jq -e` stops this guarded path if the target was absent or the report did not
-contain both hashes. The two `--expected-...` flags must not be supplied to a
-Dry Run or without `--write`.
+`jq -e` stops this **existing-target** guarded path if the target was absent or
+the report did not contain both hashes. The two `--expected-...` flags must not
+be supplied to a Dry Run or without `--write`.
+
+For a guarded first export, the target must be absent in that Dry Run. Bind the
+source hash and absence condition instead of fabricating a target hash:
+
+```bash
+EXPORT_DIR="$HOME/Downloads/mh3g-cemu-export"
+TARGET="$EXPORT_DIR/user2"
+NEW_DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+NEW_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$NEW_DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$NEW_SOURCE_SHA256" \
+  --expected-target-absent \
+  --write
+```
+
+Do not create `"$TARGET"` between the Dry Run and write. If another process
+creates it, the transaction intentionally refuses the write rather than
+overwriting a newly appeared save.
 
 If a target existed, `--write` creates
 `.user2.mh3g-backup-<previous-sha256>` beside it, plus
@@ -263,7 +328,7 @@ Cemu validation succeeds.
 #### `convert-system` — convert shared system data
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
 ```
 
 Use explicit `system` files only; it never reads a `user#` or ExtData:
@@ -289,6 +354,11 @@ SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
   --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
   --write
 ```
+
+For a new `system` export, use its immediate Dry Run's source hash with
+`--expected-target-absent` by the same rule as a new `user#` export. It is
+mutually exclusive with `--expected-target-sha256` and rejects a target that
+appears before the write acquires its lock.
 
 #### `convert-extras` — stage shared ExtData
 
@@ -330,6 +400,14 @@ contain all eight generated files, while `--groups` chooses only whole groups:
 directory containing the selected named components. A write creates a
 manifest-bound recovery transaction and retains the previous target bytes; it
 never installs one `card#` or `quest#` file by itself.
+
+> **Windows limitation:** Windows supports `convert-extras` staging and
+> `install-extras --dry-run` review, but intentionally refuses
+> `install-extras --write` and `rollback-extras` before changing any ExtData
+> files. A safe multi-file install requires this converter's durable
+> directory-metadata protocol and a two-name atomic exchange; use a supported platform for that guarded
+> install/rollback step. Core-slot and shared-`system` conversion remain
+> available on Windows.
 
 Run the installation Dry Run immediately before writing, and bind both reported
 set hashes to the write:

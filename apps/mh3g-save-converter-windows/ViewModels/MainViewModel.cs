@@ -12,11 +12,20 @@ namespace MHToolkit.MH3GSaveConverter.Windows.ViewModels;
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
+    // The Rust sidecar deliberately refuses the multi-file ExtData install and
+    // rollback path on Windows: it has no safe two-name atomic-exchange
+    // backend there. Conversion of the complete ExtData set to an explicitly
+    // selected staging directory and a read-only target preflight remain
+    // available, but the UI must never imply that a staged card/quest group
+    // can be safely installed from this platform.
+    private static bool SupportsSafeExtrasInstall => false;
+
     private readonly ConverterCliClient _cliClient;
     private readonly FileFingerprintService _fingerprints;
     private readonly LanguagePreferenceStore _languageStore;
 
     private AppLanguageOverride _languageOverride;
+    private string _selectedSlot = SavePathResolver.AvailableSlots[1];
     private string _sourcePath = string.Empty;
     private string _targetPath = string.Empty;
     private string _cliPath;
@@ -43,11 +52,15 @@ public sealed class MainViewModel : ObservableObject
     private string _latestError = string.Empty;
     private bool _sourceInspected;
     private bool _targetInspected;
+    private FileFingerprint? _inspectedSource;
+    private FileFingerprint? _inspectedTarget;
     private DryRunAuthorization? _coreAuthorization;
     private SystemDryRunAuthorization? _systemAuthorization;
     private ExtrasStageDryRunAuthorization? _extrasStageAuthorization;
     private ExtrasInstallDryRunAuthorization? _extrasInstallAuthorization;
     private CecDryRunAuthorization? _cecAuthorization;
+    private bool _systemWriteCompleted;
+    private WorkflowGuidance _workflowGuidance;
 
     private enum AuthorizationDomain
     {
@@ -55,6 +68,16 @@ public sealed class MainViewModel : ObservableObject
         System,
         Extras,
         Cec,
+    }
+
+    private enum WorkflowGuidance
+    {
+        None,
+        CoreInspected,
+        CoreDryRunAuthorized,
+        CoreWritten,
+        OptionalStepComplete,
+        RolledBack,
     }
 
     public MainViewModel(
@@ -73,6 +96,7 @@ public sealed class MainViewModel : ObservableObject
 
     public ConverterCopy Copy { get; }
     public ObservableCollection<OperationHistoryItem> History { get; } = new();
+    public IReadOnlyList<string> SaveSlots => SavePathResolver.AvailableSlots;
 
     public AppLanguageOverride LanguageOverride
     {
@@ -88,6 +112,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _sourcePath, value))
             {
                 InvalidateCoreAuthorization();
+                OnPropertyChanged(nameof(SourcePathPreview));
             }
         }
     }
@@ -100,7 +125,52 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _targetPath, value))
             {
                 InvalidateCoreAuthorization();
+                OnPropertyChanged(nameof(TargetPathPreview));
             }
+        }
+    }
+
+    public string SelectedSlot
+    {
+        get => _selectedSlot;
+        set
+        {
+            if (SetProperty(ref _selectedSlot, value))
+            {
+                InvalidateCoreAuthorization();
+                OnPropertyChanged(nameof(SourcePathPreview));
+                OnPropertyChanged(nameof(TargetPathPreview));
+            }
+        }
+    }
+
+    public string SourcePathPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(SourcePath))
+            {
+                return string.Empty;
+            }
+
+            return SavePathResolver.TryResolveSource(SourcePath, SelectedSlot, out var source, out var error)
+                ? Copy.DescribeResolvedSource(source)
+                : Copy.DescribePathError(error);
+        }
+    }
+
+    public string TargetPathPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(TargetPath))
+            {
+                return string.Empty;
+            }
+
+            return SavePathResolver.TryResolveTarget(TargetPath, SelectedSlot, out var target, out var error)
+                ? Copy.DescribeResolvedTarget(target)
+                : Copy.DescribePathError(error);
         }
     }
 
@@ -203,7 +273,23 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _extrasSourceDirectory, value))
             {
                 InvalidateExtrasAuthorization();
+                OnPropertyChanged(nameof(ExtrasSourcePathPreview));
             }
+        }
+    }
+
+    public string ExtrasSourcePathPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(ExtrasSourceDirectory))
+            {
+                return string.Empty;
+            }
+
+            return SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out var source, out var error)
+                ? Copy.DescribeResolvedExtData(source)
+                : Copy.DescribePathError(error);
         }
     }
 
@@ -251,6 +337,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _isCecEnabled, value))
             {
                 _cecAuthorization = null;
+                ClearOptionalGuidance();
                 OnPropertyChanged(nameof(CanInspectCec));
                 OnPropertyChanged(nameof(CanRunCecDryRun));
                 OnPropertyChanged(nameof(CanWriteCec));
@@ -278,6 +365,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _cecSourceDirectory, value))
             {
                 _cecAuthorization = null;
+                ClearOptionalGuidance();
                 OnPropertyChanged(nameof(CanInspectCec));
                 OnPropertyChanged(nameof(CanRunCecDryRun));
                 OnPropertyChanged(nameof(CanWriteCec));
@@ -293,6 +381,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _cecTargetPath, value))
             {
                 _cecAuthorization = null;
+                ClearOptionalGuidance();
                 OnPropertyChanged(nameof(CanInspectCec));
                 OnPropertyChanged(nameof(CanRunCecDryRun));
                 OnPropertyChanged(nameof(CanWriteCec));
@@ -379,20 +468,41 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasLatestReport => !string.IsNullOrWhiteSpace(LatestReport);
     public bool HasLatestError => !string.IsNullOrWhiteSpace(LatestError);
+    public bool ShowPostInspectGuidance => _workflowGuidance == WorkflowGuidance.CoreInspected;
+    public bool ShowPostDryRunGuidance => _workflowGuidance == WorkflowGuidance.CoreDryRunAuthorized;
+    public bool ShowPostWriteGuidance => _workflowGuidance == WorkflowGuidance.CoreWritten;
+    public bool ShowPostOptionalGuidance => _workflowGuidance == WorkflowGuidance.OptionalStepComplete;
+    public bool ShowPostRollbackGuidance => _workflowGuidance == WorkflowGuidance.RolledBack;
+    public bool SelectedOptionalDataIsConfigured => (!IsSystemEnabled || HasSystemPaths())
+        && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
+    public bool HasPendingSelectedOptionalWork => IsSystemEnabled && !_systemWriteCompleted;
+    public string PostWriteGuidanceMessage => HasPendingSelectedOptionalWork
+        ? Copy.NextAfterCoreWriteWithOptionalData
+        : Copy.NextAfterWrite;
+    public string PostWriteGuidanceAction => HasPendingSelectedOptionalWork
+        ? Copy.ContinueOptionalData
+        : Copy.ReviewTransaction;
     public bool CanInspectCore => !IsBusy && HasValidCorePaths();
     public bool CanInspectProgress => !IsBusy && HasValidCorePaths();
     public bool CanInspectEvents => !IsBusy && HasValidCorePaths();
-    public bool CanRunCoreDryRun => !IsBusy && _sourceInspected && _targetInspected && HasValidCorePaths();
-    public bool CanWriteCore => !IsBusy && _coreAuthorization is not null && HasValidCorePaths();
+    public bool CanRunCoreDryRun => !IsBusy
+        && _sourceInspected
+        && _targetInspected
+        && SelectedOptionalDataIsConfigured
+        && HasValidCorePaths();
+    public bool CanWriteCore => !IsBusy
+        && SelectedOptionalDataIsConfigured
+        && _coreAuthorization is not null
+        && HasValidCorePaths();
     public bool CanRollbackCore => !IsBusy && !string.IsNullOrWhiteSpace(RollbackManifestPath);
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
     public bool CanWriteSystem => !IsBusy && IsSystemEnabled && _systemAuthorization is not null && HasSystemPaths();
     public bool CanRollbackSystem => !IsBusy && IsSystemEnabled && !string.IsNullOrWhiteSpace(SystemRollbackManifestPath);
-    public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasPaths();
-    public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasPaths();
-    public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasPaths();
-    public bool CanInstallExtras => !IsBusy && _extrasInstallAuthorization is not null && HasExtrasPaths();
-    public bool CanRollbackExtras => !IsBusy && HasSelectedExtraGroups() && !string.IsNullOrWhiteSpace(ExtrasRollbackManifestPath);
+    public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();
+    public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();
+    public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasInstallPaths();
+    public bool CanInstallExtras => SupportsSafeExtrasInstall && !IsBusy && _extrasInstallAuthorization is not null && HasExtrasInstallPaths();
+    public bool CanRollbackExtras => SupportsSafeExtrasInstall && !IsBusy && HasSelectedExtraGroups() && !string.IsNullOrWhiteSpace(ExtrasRollbackManifestPath);
     public bool CanInspectCec => !IsBusy && IsCecEnabled && HasCecPaths();
     public bool CanRunCecDryRun => !IsBusy && IsCecEnabled && HasCecPaths();
     public bool CanWriteCec => !IsBusy && IsCecEnabled && IsCecAcknowledged && _cecAuthorization is not null && HasCecPaths();
@@ -428,39 +538,57 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task InspectCoreAsync()
     {
-        if (!TryRequireCorePaths())
+        if (!TryRequireCorePaths(out var paths))
         {
             return;
         }
 
+        InvalidateCoreAuthorization();
         await RunOperationAsync("inspect", async cancellationToken =>
         {
-            var source = await ExecuteAsync("inspect", new[] { "inspect", SourcePath }, cancellationToken);
-            RequireSuccess(source, "inspect source");
-            var target = await ExecuteAsync("inspect", new[] { "inspect", TargetPath }, cancellationToken);
-            RequireSuccess(target, "inspect target");
+            var sourceAtInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var targetAtInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
+            var sourceReport = await ExecuteAsync("inspect", new[] { "inspect", paths.Source }, cancellationToken);
+            RequireSuccess(sourceReport, "inspect source");
+            if (targetAtInspection.Exists)
+            {
+                var targetReport = await ExecuteAsync("inspect", new[] { "inspect", paths.Target }, cancellationToken);
+                RequireSuccess(targetReport, "inspect target");
+            }
+            var sourceAfterInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var targetAfterInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
+            if (!sourceAtInspection.Matches(sourceAfterInspection) || !targetAtInspection.Matches(targetAfterInspection))
+            {
+                throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+            }
             _sourceInspected = true;
             _targetInspected = true;
+            _inspectedSource = sourceAfterInspection;
+            _inspectedTarget = targetAfterInspection;
             _coreAuthorization = null;
             Stage = WorkflowStage.Inspected;
             StatusText = Copy.Inspected;
+            SetWorkflowGuidance(WorkflowGuidance.CoreInspected);
             RaiseCoreActionAvailability();
         }, AuthorizationDomain.Core);
     }
 
     public async Task InspectProgressAsync()
     {
-        if (!TryRequireCorePaths())
+        if (!TryRequireCorePaths(out var paths))
         {
             return;
         }
 
         await RunOperationAsync("inspect-progress", async cancellationToken =>
         {
-            var result = await ExecuteAsync(
-                "inspect-progress",
-                new[] { "inspect-progress", SourcePath, "--target", TargetPath },
-                cancellationToken);
+            var arguments = new List<string> { "inspect-progress", paths.Source };
+            if (File.Exists(paths.Target))
+            {
+                arguments.Add("--target");
+                arguments.Add(paths.Target);
+            }
+            var result = await ExecuteAsync("inspect-progress", arguments, cancellationToken);
             RequireSuccess(result, "inspect progress");
             StatusText = Copy.Inspected;
         }, AuthorizationDomain.Core);
@@ -468,17 +596,20 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task InspectEventsAsync()
     {
-        if (!TryRequireCorePaths())
+        if (!TryRequireCorePaths(out var paths))
         {
             return;
         }
 
         await RunOperationAsync("inspect-events", async cancellationToken =>
         {
-            var result = await ExecuteAsync(
-                "inspect-events",
-                new[] { "inspect-events", SourcePath, "--target", TargetPath },
-                cancellationToken);
+            var arguments = new List<string> { "inspect-events", paths.Source };
+            if (File.Exists(paths.Target))
+            {
+                arguments.Add("--target");
+                arguments.Add(paths.Target);
+            }
+            var result = await ExecuteAsync("inspect-events", arguments, cancellationToken);
             RequireSuccess(result, "inspect events");
             StatusText = Copy.Inspected;
         }, AuthorizationDomain.Core);
@@ -486,7 +617,23 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RunCoreDryRunAsync()
     {
+        if (!SelectedOptionalDataIsConfigured)
+        {
+            Fail(Copy.OptionalDataNeedsConfiguration);
+            return;
+        }
         if (!CanRunCoreDryRun)
+        {
+            Fail(Copy.WriteUnavailable);
+            return;
+        }
+        if (!TryRequireCorePaths(out var paths))
+        {
+            return;
+        }
+        var inspectedSource = _inspectedSource;
+        var inspectedTarget = _inspectedTarget;
+        if (inspectedSource is null || inspectedTarget is null)
         {
             Fail(Copy.WriteUnavailable);
             return;
@@ -496,65 +643,95 @@ public sealed class MainViewModel : ObservableObject
 
         await RunOperationAsync("convert --dry-run", async cancellationToken =>
         {
+            var sourceBefore = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var targetBefore = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
+            if (!inspectedSource.Matches(sourceBefore) || !inspectedTarget.Matches(targetBefore))
+            {
+                InvalidateCoreAuthorization();
+                throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+            }
             var result = await ExecuteAsync(
                 "convert --dry-run",
-                new[] { "convert", SourcePath, "--output", TargetPath, "--dry-run" },
+                new[] { "convert", paths.Source, "--output", paths.Target, "--dry-run" },
                 cancellationToken);
             RequireSuccess(result, "core Dry Run");
             RequireStatus(result, "dry-run", "core Dry Run");
 
-            var source = await _fingerprints.CaptureAsync(SourcePath, cancellationToken);
-            var target = await _fingerprints.CaptureAsync(TargetPath, cancellationToken);
+            var sourceAfter = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var targetAfter = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
             var reportSourceHash = result.TryGetHash("source");
             var reportTargetHash = result.TryGetHash("target_before");
-            if (!source.Exists || !target.Exists
+            var targetMatchesDryRun = targetAfter.Exists
+                ? !string.IsNullOrWhiteSpace(targetAfter.Sha256)
+                    && !string.IsNullOrWhiteSpace(reportTargetHash)
+                    && string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)
+                : string.IsNullOrWhiteSpace(reportTargetHash);
+            if (!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter)
+                || !sourceAfter.Exists
                 || string.IsNullOrWhiteSpace(reportSourceHash)
-                || string.IsNullOrWhiteSpace(target.Sha256)
-                || string.IsNullOrWhiteSpace(reportTargetHash)
-                || !string.Equals(source.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(target.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase))
+                || !string.Equals(sourceAfter.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase)
+                || !targetMatchesDryRun)
             {
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
 
-            _coreAuthorization = new DryRunAuthorization(source, target, reportSourceHash, DateTimeOffset.UtcNow);
+            _coreAuthorization = new DryRunAuthorization(sourceAfter, targetAfter, reportSourceHash, DateTimeOffset.UtcNow);
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.CoreDryRunAuthorized);
             RaiseCoreActionAvailability();
         }, AuthorizationDomain.Core);
     }
 
     public async Task WriteCoreAsync()
     {
+        if (!SelectedOptionalDataIsConfigured)
+        {
+            Fail(Copy.OptionalDataNeedsConfiguration);
+            return;
+        }
         var authorization = _coreAuthorization;
         if (authorization is null)
         {
             Fail(Copy.WriteUnavailable);
             return;
         }
+        if (!TryRequireCorePaths(out var paths))
+        {
+            return;
+        }
 
         await RunOperationAsync("convert --write", async cancellationToken =>
         {
-            var currentSource = await _fingerprints.CaptureAsync(SourcePath, cancellationToken);
-            var currentTarget = await _fingerprints.CaptureAsync(TargetPath, cancellationToken);
+            var currentSource = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentTarget = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
             if (!authorization.Source.Matches(currentSource) || !authorization.Target.Matches(currentTarget))
             {
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
 
-            var expectedTargetSha256 = authorization.Target.Sha256
-                ?? throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             Stage = WorkflowStage.Writing;
+            var arguments = new List<string>
+            {
+                "convert", paths.Source, "--output", paths.Target,
+                "--expected-source-sha256", authorization.SourceReportHash,
+            };
+            if (authorization.Target.Exists)
+            {
+                var expectedTargetSha256 = authorization.Target.Sha256
+                    ?? throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                arguments.Add("--expected-target-sha256");
+                arguments.Add(expectedTargetSha256);
+            }
+            else
+            {
+                arguments.Add("--expected-target-absent");
+            }
+            arguments.Add("--write");
             var result = await ExecuteAsync(
                 "convert --write",
-                new[]
-                {
-                    "convert", SourcePath, "--output", TargetPath,
-                    "--expected-source-sha256", authorization.SourceReportHash,
-                    "--expected-target-sha256", expectedTargetSha256,
-                    "--write",
-                },
+                arguments,
                 cancellationToken);
             RequireSuccess(result, "write core slot");
             RequireStatus(result, "written", "write core slot");
@@ -562,7 +739,9 @@ public sealed class MainViewModel : ObservableObject
             _coreAuthorization = null;
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.CoreWritten);
             RaiseCoreActionAvailability();
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.Core);
     }
 
@@ -584,6 +763,8 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "rolled-back", "rollback");
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
+            SetWorkflowGuidance(WorkflowGuidance.RolledBack);
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.Core);
     }
 
@@ -621,6 +802,7 @@ public sealed class MainViewModel : ObservableObject
             _systemAuthorization = new SystemDryRunAuthorization(source, target, sourceHash, DateTimeOffset.UtcNow);
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             RaiseSystemActionAvailability();
         }, AuthorizationDomain.System);
     }
@@ -662,9 +844,12 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "written", "write system");
             SystemRollbackManifestPath = result.TryGetString("manifest") ?? SystemRollbackManifestPath;
             _systemAuthorization = null;
+            _systemWriteCompleted = true;
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             RaiseSystemActionAvailability();
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.System);
     }
 
@@ -684,14 +869,17 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback system");
             RequireStatus(result, "rolled-back", "rollback system");
+            _systemWriteCompleted = false;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
+            SetWorkflowGuidance(WorkflowGuidance.RolledBack);
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.System);
     }
 
     public async Task RunExtrasStageDryRunAsync()
     {
-        if (!TryRequireExtrasPaths())
+        if (!TryRequireExtrasStagePaths())
         {
             return;
         }
@@ -710,14 +898,20 @@ public sealed class MainViewModel : ObservableObject
             var fingerprint = result.TryGetExtrasComponentFingerprint()
                 ?? throw new InvalidOperationException(Copy.ExtrasFingerprintMissing);
 
+            if (!SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out var sourceDirectory, out var sourceError))
+            {
+                throw new InvalidOperationException(Copy.DescribePathError(sourceError));
+            }
+
             _extrasStageAuthorization = new ExtrasStageDryRunAuthorization(
-                Path.GetFullPath(ExtrasSourceDirectory),
+                Path.GetFullPath(sourceDirectory),
                 Path.GetFullPath(ExtrasStagingDirectory),
                 SelectedExtraGroups(),
                 fingerprint,
                 DateTimeOffset.UtcNow);
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             RaiseExtrasActionAvailability();
         }, AuthorizationDomain.Extras);
     }
@@ -754,12 +948,13 @@ public sealed class MainViewModel : ObservableObject
             InvalidateExtrasAuthorization();
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
         }, AuthorizationDomain.Extras);
     }
 
     public async Task RunExtrasInstallDryRunAsync()
     {
-        if (!TryRequireExtrasPaths())
+        if (!TryRequireExtrasInstallPaths())
         {
             return;
         }
@@ -793,12 +988,18 @@ public sealed class MainViewModel : ObservableObject
                 DateTimeOffset.UtcNow);
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             RaiseExtrasActionAvailability();
         }, AuthorizationDomain.Extras);
     }
 
     public async Task InstallExtrasAsync()
     {
+        if (!SupportsSafeExtrasInstall)
+        {
+            Fail(Copy.ExtDataInstallUnavailable);
+            return;
+        }
         var authorization = _extrasInstallAuthorization;
         if (authorization is null || !MatchesExtrasInstallAuthorization(authorization))
         {
@@ -820,11 +1021,18 @@ public sealed class MainViewModel : ObservableObject
             InvalidateExtrasAuthorization();
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.Extras);
     }
 
     public async Task RollbackExtrasAsync()
     {
+        if (!SupportsSafeExtrasInstall)
+        {
+            Fail(Copy.ExtDataInstallUnavailable);
+            return;
+        }
         if (!CanRollbackExtras)
         {
             return;
@@ -841,6 +1049,8 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "rolled-back", "rollback ExtData");
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
+            SetWorkflowGuidance(WorkflowGuidance.RolledBack);
+            RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.Extras);
     }
 
@@ -859,16 +1069,17 @@ public sealed class MainViewModel : ObservableObject
                 arguments.Add("--target");
                 arguments.Add(CecTargetPath);
             }
-            if (File.Exists(SourcePath))
+            if (SavePathResolver.TryResolveSource(SourcePath, SelectedSlot, out var sourceSlot, out _))
             {
                 arguments.Add("--source-slot");
-                arguments.Add(SourcePath);
+                arguments.Add(sourceSlot);
             }
 
             var result = await ExecuteAsync("inspect-cec", arguments, cancellationToken);
             RequireSuccess(result, "inspect CEC");
             Stage = WorkflowStage.Inspected;
             StatusText = Copy.Inspected;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
         }, AuthorizationDomain.Cec);
     }
 
@@ -899,6 +1110,7 @@ public sealed class MainViewModel : ObservableObject
             _cecAuthorization = new CecDryRunAuthorization(sourceRecordSet, targetBefore, DateTimeOffset.UtcNow);
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             OnPropertyChanged(nameof(CanWriteCec));
         }, AuthorizationDomain.Cec);
     }
@@ -959,6 +1171,7 @@ public sealed class MainViewModel : ObservableObject
             _cecAuthorization = null;
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
             OnPropertyChanged(nameof(CanWriteCec));
         }, AuthorizationDomain.Cec);
     }
@@ -981,6 +1194,7 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "rolled-back", "rollback CEC");
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
+            SetWorkflowGuidance(WorkflowGuidance.RolledBack);
         }, AuthorizationDomain.Cec);
     }
 
@@ -1052,14 +1266,15 @@ public sealed class MainViewModel : ObservableObject
         return string.Join(Environment.NewLine, details);
     }
 
-    private bool TryRequireCorePaths()
+    private bool TryRequireCorePaths(out CoreSavePaths paths)
     {
-        if (HasValidCorePaths())
+        if (TryResolveCorePaths(out paths, out var error))
         {
             return true;
         }
 
-        Fail(Copy.InvalidCorePaths);
+        Fail(Copy.DescribePathError(error));
+        paths = null!;
         return false;
     }
 
@@ -1074,11 +1289,36 @@ public sealed class MainViewModel : ObservableObject
         return false;
     }
 
-    private bool TryRequireExtrasPaths()
+    private bool TryRequireExtrasStagePaths()
     {
-        if (HasExtrasPaths())
+        if (HasExtrasStagePaths())
         {
             return true;
+        }
+
+        if (HasSelectedExtraGroups()
+            && !SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out var error))
+        {
+            Fail(Copy.DescribePathError(error));
+            return false;
+        }
+
+        Fail(Copy.ExtrasPathsRequired);
+        return false;
+    }
+
+    private bool TryRequireExtrasInstallPaths()
+    {
+        if (HasExtrasInstallPaths())
+        {
+            return true;
+        }
+
+        if (HasSelectedExtraGroups()
+            && !SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out var error))
+        {
+            Fail(Copy.DescribePathError(error));
+            return false;
         }
 
         Fail(Copy.ExtrasPathsRequired);
@@ -1103,15 +1343,19 @@ public sealed class MainViewModel : ObservableObject
 
     private bool HasValidCorePaths()
     {
-        if (string.IsNullOrWhiteSpace(SourcePath) || string.IsNullOrWhiteSpace(TargetPath))
+        return TryResolveCorePaths(out _, out _);
+    }
+
+    private bool TryResolveCorePaths(out CoreSavePaths paths, out SavePathResolutionError error)
+    {
+        if (SavePathResolver.TryResolveCore(SourcePath, TargetPath, SelectedSlot, out var resolved, out error))
         {
-            return false;
+            paths = resolved!;
+            return true;
         }
 
-        var sourceName = Path.GetFileName(SourcePath);
-        var targetName = Path.GetFileName(TargetPath);
-        return sourceName is "user1" or "user2" or "user3"
-            && string.Equals(sourceName, targetName, StringComparison.Ordinal);
+        paths = null!;
+        return false;
     }
 
     private bool HasSystemPaths()
@@ -1125,11 +1369,16 @@ public sealed class MainViewModel : ObservableObject
 
     private bool HasSelectedExtraGroups() => IncludeGuildCards || IncludeQuests;
 
-    private bool HasExtrasPaths()
+    private bool HasExtrasStagePaths()
     {
         return HasSelectedExtraGroups()
-            && !string.IsNullOrWhiteSpace(ExtrasSourceDirectory)
-            && !string.IsNullOrWhiteSpace(ExtrasStagingDirectory)
+            && SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out _)
+            && !string.IsNullOrWhiteSpace(ExtrasStagingDirectory);
+    }
+
+    private bool HasExtrasInstallPaths()
+    {
+        return HasExtrasStagePaths()
             && !string.IsNullOrWhiteSpace(ExtrasTargetDirectory);
     }
 
@@ -1149,10 +1398,15 @@ public sealed class MainViewModel : ObservableObject
 
     private string[] ExtrasStageArguments(bool write)
     {
+        if (!SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out var sourceDirectory, out var error))
+        {
+            throw new InvalidOperationException(Copy.DescribePathError(error));
+        }
+
         return new[]
         {
             "convert-extras",
-            "--source-dir", ExtrasSourceDirectory,
+            "--source-dir", sourceDirectory,
             "--output-dir", ExtrasStagingDirectory,
             write ? "--write" : "--dry-run",
         };
@@ -1180,15 +1434,20 @@ public sealed class MainViewModel : ObservableObject
 
     private bool MatchesExtrasStageAuthorization(ExtrasStageDryRunAuthorization authorization)
     {
-        return HasExtrasPaths()
-            && string.Equals(authorization.SourceDirectory, Path.GetFullPath(ExtrasSourceDirectory), StringComparison.OrdinalIgnoreCase)
+        if (!SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out var sourceDirectory, out _))
+        {
+            return false;
+        }
+
+        return HasExtrasStagePaths()
+            && string.Equals(authorization.SourceDirectory, Path.GetFullPath(sourceDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.StagingDirectory, Path.GetFullPath(ExtrasStagingDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.Groups, SelectedExtraGroups(), StringComparison.Ordinal);
     }
 
     private bool MatchesExtrasInstallAuthorization(ExtrasInstallDryRunAuthorization authorization)
     {
-        return HasExtrasPaths()
+        return HasExtrasInstallPaths()
             && string.Equals(authorization.StagingDirectory, Path.GetFullPath(ExtrasStagingDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.TargetDirectory, Path.GetFullPath(ExtrasTargetDirectory), StringComparison.OrdinalIgnoreCase)
             && string.Equals(authorization.Groups, SelectedExtraGroups(), StringComparison.Ordinal);
@@ -1204,7 +1463,15 @@ public sealed class MainViewModel : ObservableObject
     {
         _sourceInspected = false;
         _targetInspected = false;
+        _inspectedSource = null;
+        _inspectedTarget = null;
         _coreAuthorization = null;
+        if (_workflowGuidance is WorkflowGuidance.CoreInspected
+            or WorkflowGuidance.CoreDryRunAuthorized
+            or WorkflowGuidance.CoreWritten)
+        {
+            SetWorkflowGuidance(WorkflowGuidance.None);
+        }
         if (!IsBusy && Stage is not WorkflowStage.Written and not WorkflowStage.RolledBack)
         {
             Stage = WorkflowStage.Input;
@@ -1216,14 +1483,19 @@ public sealed class MainViewModel : ObservableObject
     private void InvalidateSystemAuthorization()
     {
         _systemAuthorization = null;
+        _systemWriteCompleted = false;
+        ClearOptionalGuidance();
         RaiseSystemActionAvailability();
+        RaiseOptionalConfigurationAvailability();
     }
 
     private void InvalidateExtrasAuthorization()
     {
         _extrasStageAuthorization = null;
         _extrasInstallAuthorization = null;
+        ClearOptionalGuidance();
         RaiseExtrasActionAvailability();
+        RaiseOptionalConfigurationAvailability();
     }
 
     private void ClearWriteAuthorization(AuthorizationDomain domain)
@@ -1261,6 +1533,41 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanWriteCore));
     }
 
+    private void RaiseOptionalConfigurationAvailability()
+    {
+        OnPropertyChanged(nameof(SelectedOptionalDataIsConfigured));
+        OnPropertyChanged(nameof(HasPendingSelectedOptionalWork));
+        OnPropertyChanged(nameof(PostWriteGuidanceMessage));
+        OnPropertyChanged(nameof(PostWriteGuidanceAction));
+        OnPropertyChanged(nameof(CanRunCoreDryRun));
+        OnPropertyChanged(nameof(CanWriteCore));
+    }
+
+    private void SetWorkflowGuidance(WorkflowGuidance guidance)
+    {
+        if (_workflowGuidance == guidance)
+        {
+            return;
+        }
+
+        _workflowGuidance = guidance;
+        OnPropertyChanged(nameof(ShowPostInspectGuidance));
+        OnPropertyChanged(nameof(ShowPostDryRunGuidance));
+        OnPropertyChanged(nameof(ShowPostWriteGuidance));
+        OnPropertyChanged(nameof(ShowPostOptionalGuidance));
+        OnPropertyChanged(nameof(ShowPostRollbackGuidance));
+        OnPropertyChanged(nameof(PostWriteGuidanceMessage));
+        OnPropertyChanged(nameof(PostWriteGuidanceAction));
+    }
+
+    private void ClearOptionalGuidance()
+    {
+        if (_workflowGuidance == WorkflowGuidance.OptionalStepComplete)
+        {
+            SetWorkflowGuidance(WorkflowGuidance.None);
+        }
+    }
+
     private void RaiseSystemActionAvailability()
     {
         OnPropertyChanged(nameof(CanRunSystemDryRun));
@@ -1279,6 +1586,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void Fail(string message, string? operation = null)
     {
+        SetWorkflowGuidance(WorkflowGuidance.None);
         LatestError = message;
         StatusText = Copy.Failed;
         Stage = WorkflowStage.Failed;

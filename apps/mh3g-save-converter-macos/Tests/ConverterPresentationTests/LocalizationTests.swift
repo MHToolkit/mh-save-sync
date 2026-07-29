@@ -33,6 +33,20 @@ final class LocalizationTests: XCTestCase {
             "WorkflowState.Writing",
             "WorkflowState.Success",
             "WorkflowState.Failure",
+            "Guide.InputComplete",
+            "Guide.ComponentsReady",
+            "Guide.OptionalDataNeedsConfiguration",
+            "Guide.OptionalDataReadyForTransaction",
+            "Guide.DryRunComplete",
+            "Guide.CoreDryRunCompleteWithOptionals",
+            "Guide.SelectedWorkPending",
+            "Guide.WriteComplete",
+            "Guide.ToComponents",
+            "Guide.ToDryRun",
+            "Guide.ToWrite",
+            "Guide.ToWriteAndOptionals",
+            "Guide.ToHistory",
+            "Guide.NextStep",
         ] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing \(key)")
             let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any])
@@ -47,6 +61,13 @@ final class LocalizationTests: XCTestCase {
             XCTAssertFalse(ConverterCopy.text(phase.titleKey, language: .english).isEmpty)
             XCTAssertFalse(phase.accessibilityIdentifier.isEmpty)
         }
+    }
+
+    func testGuidedRouteKeepsThePrimaryConversionOrderVisible() {
+        XCTAssertEqual(ConverterNavigation.guidedSuccessor(after: .componentSelection), .components)
+        XCTAssertEqual(ConverterNavigation.guidedSuccessor(after: .dryRun), .writeRollback)
+        XCTAssertEqual(ConverterNavigation.guidedSuccessor(after: .success), .history)
+        XCTAssertNil(ConverterNavigation.guidedSuccessor(after: .failure))
     }
 
     func testAllVisibleCopyHasChineseAndEnglishValues() {

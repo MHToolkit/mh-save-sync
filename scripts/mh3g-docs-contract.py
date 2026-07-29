@@ -34,6 +34,7 @@ COMMANDS = (
 EXTDATA_SUFFIX = "extdata/00000000/00000481/user/"
 CEC_SUFFIX = "CEC/00048100/"
 WINDOWS_TEMPLATE = "packaging/mh3g-save-convert/README-Windows.txt"
+WINDOWS_PACKAGE_SCRIPT = "scripts/package-mh3g-save-converter-windows.ps1"
 DIRECT_ZIP_CLAIMS = (
     "ZIP input is supported",
     "ZIP archives are supported directly",
@@ -73,8 +74,10 @@ def main() -> int:
         relative_path: read_required(relative_path, failures)
         for relative_path in CONTRACT_DOCS
     }
-    for relative_path in PACKAGE_DOCS:
-        read_required(relative_path, failures)
+    package_docs = {
+        relative_path: read_required(relative_path, failures)
+        for relative_path in PACKAGE_DOCS
+    }
 
     english = root_docs["README.md"]
     chinese = root_docs["README.zh-CN.md"]
@@ -154,9 +157,41 @@ def main() -> int:
             failures,
             workflow_path,
             workflow,
-            WINDOWS_TEMPLATE,
-            "tracked Windows package README template",
+            WINDOWS_PACKAGE_SCRIPT,
+            "canonical Windows package script",
         )
+
+    package_script = read_required(WINDOWS_PACKAGE_SCRIPT, failures)
+    if package_script is not None:
+        if (
+            WINDOWS_TEMPLATE not in package_script
+            and WINDOWS_TEMPLATE.replace("/", "\\") not in package_script
+        ):
+            failures.append(
+                f"{WINDOWS_PACKAGE_SCRIPT}: missing tracked Windows package README template: {WINDOWS_TEMPLATE}"
+            )
+
+    windows_package = package_docs[WINDOWS_TEMPLATE]
+    if windows_package is not None:
+        for token, purpose in (
+            ("`install-extras --dry-run`", "read-only ExtData preview"),
+            ("`install-extras --write`", "explicit Windows ExtData write refusal"),
+            ("`rollback-extras`", "explicit Windows ExtData rollback refusal"),
+            ("Windows package deliberately refuses", "English Windows ExtData safety boundary"),
+            ("此 Windows 包会", "Chinese Windows ExtData safety boundary"),
+            ("全部八个", "Chinese complete ExtData staging disclosure"),
+            ("**all eight**", "English complete ExtData staging disclosure"),
+        ):
+            require_contains(failures, WINDOWS_TEMPLATE, windows_package, token, purpose)
+        for stale in (
+            "$ExtrasWrite",
+            "$ExtrasManifest",
+            'rollback-extras --manifest "$ExtrasManifest"',
+        ):
+            if stale in windows_package:
+                failures.append(
+                    f"{WINDOWS_TEMPLATE}: stale Windows ExtData write/rollback recipe: {stale}"
+                )
 
     if failures:
         for failure in failures:

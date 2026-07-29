@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "apps" / "mh3g-save-converter-windows"
 WINDOWS_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-windows.yml"
+WINDOWS_PACKAGE_SCRIPT = ROOT / "scripts" / "package-mh3g-save-converter-windows.ps1"
 
 
 def require(condition: bool, message: str) -> None:
@@ -43,18 +44,14 @@ def verify_release_workflow() -> None:
 
     for expected in (
         "- apps/mh3g-save-converter-windows/**",
+        "- scripts/package-mh3g-save-converter-windows.ps1",
         "- scripts/verify-mh3g-save-converter-windows-source.py",
         "actions/setup-dotnet@v5",
         "python scripts/verify-mh3g-save-converter-windows-source.py",
-        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
-        "-p:Platform=x64",
-        "-p:WindowsAppSDKSelfContained=true",
-        '$stage = "artifacts/mh3g-save-convert-windows-x64"',
-        'Copy-Item "target/release/mh3g-save-convert.exe" "$stage/tools/mh3g-save-convert.exe"',
-        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/MH3GSaveConverter.exe"',
-        'Test-Path "$verifyDir/mh3g-save-convert-windows-x64/tools/mh3g-save-convert.exe"',
-        "GUI executable is missing",
-        "GUI sidecar is missing",
+        "scripts/package-mh3g-save-converter-windows.ps1",
+        "mh3g-save-convert-windows-x64.zip",
+        "mh3g-save-convert-windows-x64.zip.sha256",
+        "if: failure()",
     ):
         require(expected in workflow, f"Windows release workflow is missing {expected}")
 
@@ -62,12 +59,194 @@ def verify_release_workflow() -> None:
         "& $packagedApp",
         "Start-Process $packagedApp",
         'Start-Process "$packagedApp"',
+        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
     ):
-        require(forbidden not in workflow, "release workflow must not launch the WinUI GUI during smoke verification")
+        require(forbidden not in workflow, "release workflow must delegate packaging without launching the WinUI GUI")
+
+
+def verify_local_packaging_script() -> None:
+    """Keep the documented Windows-local package path complete and deterministic."""
+    require(WINDOWS_PACKAGE_SCRIPT.is_file(), "Windows local packaging script is missing")
+    script = WINDOWS_PACKAGE_SCRIPT.read_text(encoding="utf-8")
+
+    for expected in (
+        "$PSScriptRoot",
+        "[Environment]::Is64BitOperatingSystem",
+        "[switch]$Bootstrap",
+        "winget",
+        "vswhere.exe",
+        "Get-AnyVisualStudioInstallation",
+        "setup.exe",
+        "--installPath",
+        "3010",
+        "1641",
+        "VsDevCmd.bat",
+        "Add-RustupBinToProcessPath",
+        "Get-RustToolCommand",
+        "-1978335189",
+        "ExpandEnvironmentVariables",
+        "UTF8Encoding",
+        "Test-RustMinimumVersion",
+        "Get-DotnetEightSdkCommand",
+        "MH3GSaveConverter\\BuildTools\\dotnet8\\dotnet.exe",
+        "1.95.0",
+        "Test-WindowsSdk",
+        "Microsoft.VisualStudio.Component.Windows10SDK.19041",
+        "dotnet restore",
+        "cargo test --locked",
+        "cargo build --locked --release",
+        "x86_64-pc-windows-msvc",
+        "dotnet publish",
+        '"--self-contained", "true"',
+        "WindowsAppSDKSelfContained=true",
+        "mh3g-save-convert.exe",
+        "Run-Converter.ps1",
+        "Zone.Identifier",
+        "ReparsePoint",
+        "Start-Transcript -LiteralPath $transcript -Force",
+        "Get-FileHash",
+        "Compress-Archive",
+        "mh3g-save-convert-windows-x64.zip",
+        "Get-RunningSupportedEmulators",
+        "Assert-EmulatorsStoppedForRustTests",
+        "$packageDirectoryName",
+        "& $FilePath @Arguments | Out-Host",
+    ):
+        require(expected in script, f"Windows local packaging script is missing {expected}")
+
+    for forbidden in (
+        "Invoke-Expression",
+        "IEX ",
+        ".Source",
+        "Start-Transcript -LiteralPath $transcript -Append",
+    ):
+        require(forbidden not in script, f"Windows local packaging script must not use {forbidden}")
+
+    parameter_block = script.split("Set-StrictMode", 1)[0]
+    require(
+        "Join-Path $PSScriptRoot" not in parameter_block,
+        "Windows PowerShell must not resolve $PSScriptRoot inside a parameter default",
+    )
+    require(
+        "$OutputDirectory = Join-Path $repoRoot" in script,
+        "Windows package output must resolve only after $PSScriptRoot is available",
+    )
+    require(
+        "$dotnet = Get-DotnetEightSdkCommand" in script,
+        "Windows package build must reuse the same .NET 8 SDK resolver as preflight",
+    )
+    dotnet_resolver = script.split("function Get-DotnetEightSdkCommand", 1)[1].split(
+        "function Test-DotnetEightSdk", 1
+    )[0]
+    require(
+        "BuildTools\\dotnet8\\dotnet.exe" in dotnet_resolver
+        and "LocalApplicationData" in dotnet_resolver
+        and "--list-sdks" in dotnet_resolver,
+        "Windows .NET resolver must reuse a valid private MH3G .NET 8 SDK instead of downloading it again",
+    )
+    package_layout = script.split("function Test-PackagedLayout", 1)[1].split("try {", 1)[0]
+    require(
+        "PackageDirectoryName" in package_layout
+        and "$packageRoot = Join-Path $verifyRoot $PackageDirectoryName" in script
+        and "Test-PackagedLayout -ArchivePath $archive -PackageDirectoryName $packageDirectoryName" in script,
+        "Windows package self-check must follow a custom staging directory leaf rather than a hard-coded archive root",
+    )
+    require(
+        "if (-not $SkipTests) {\n        Assert-EmulatorsStoppedForRustTests\n    }\n\n    Write-Host \"=== Toolchain ===\"" in script,
+        "Windows package tests must fail before toolchain work with a clear emulator-process explanation instead of leaking a synthetic test failure",
+    )
+    require(
+        "reparse point" in script.lower(),
+        "Windows package output cleanup must reject junctions and symlinks",
+    )
+    require(
+        '$versionLine[0] -match \'^rustc\\s+(?<version>\\d+\\.\\d+\\.\\d+)\'' in script
+        and '$versionText = $Matches["version"]' in script
+        and '$rustcExitCode = $LASTEXITCODE' in script,
+        "Rust version preflight must capture a successful regex match before parsing it",
+    )
+    rust_version_body = script.split("function Test-RustMinimumVersion", 1)[1].split(
+        "function Get-MissingPrerequisites", 1
+    )[0]
+    require(
+        "Select-Object -First 1" not in rust_version_body,
+        "Rust version preflight must not stop the native rustc process through Select-Object -First 1",
+    )
+    rust_bootstrap = script.split("function Install-MissingPrerequisites", 1)[1].split(
+        "function Initialize-MsvcBuildEnvironment", 1
+    )[0]
+    require(
+        'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)' in rust_bootstrap,
+        "Rustup bootstrap must treat WinGet's installed/no-update result as non-fatal",
+    )
+    # WinGet can retain Rustlang.Rustup's installed registration after the
+    # current user's rustup/cargo proxy payload has disappeared.  A normal
+    # `winget install` then returns the documented no-update code, so the
+    # bootstrap must repair that payload in place before giving up.  Keep the
+    # recovery ladder deliberately narrow: no uninstall, no deletion of
+    # CARGO_HOME/RUSTUP_HOME, and no blind executable download.
+    for expected in (
+        "function Repair-RustupWithWinget",
+        "function Install-RustupFromOfficialSource",
+        "function Get-RustupProbePaths",
+        "function Get-RustupRecoveryHomes",
+        "function Set-RustupHomesForCurrentProcess",
+        "[switch]$ForceReinstall",
+        'Install-WithWinget -Id "Rustlang.Rustup" -ForceReinstall',
+        "Repair-RustupWithWinget",
+        "Install-RustupFromOfficialSource",
+        "--no-update-default-toolchain",
+        "--no-modify-path",
+        "rustup-init.exe.sha256",
+        "Get-FileHash",
+    ):
+        require(expected in script, f"Windows Rustup recovery ladder is missing {expected}")
+    require(
+        "Rustup recovery failed" in rust_bootstrap,
+        "Rustup bootstrap must report a failed repair ladder only after the rechecks",
+    )
+    for forbidden in ("rustup self uninstall", "winget uninstall", "Remove-Item"):
+        require(
+            forbidden not in rust_bootstrap,
+            "Rustup bootstrap must repair in place without deleting an existing toolchain",
+        )
+    normal_rustup_install = rust_bootstrap.index(
+        'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)'
+    )
+    repair_rustup = rust_bootstrap.index("Repair-RustupWithWinget")
+    force_rustup = rust_bootstrap.index(
+        'Install-WithWinget -Id "Rustlang.Rustup" -ForceReinstall'
+    )
+    official_rustup = rust_bootstrap.index("Install-RustupFromOfficialSource")
+    recovery_error = rust_bootstrap.index("Rustup recovery failed")
+    require(
+        normal_rustup_install < repair_rustup < force_rustup < official_rustup < recovery_error,
+        "Rustup recovery order must be normal install, repair, force reinstall, verified official fallback, then fail closed",
+    )
+    first_preflight = script.split("Start-Transcript -LiteralPath $transcript -Force", 1)[1].split(
+        "$missing = @(Get-MissingPrerequisites)", 1
+    )[0]
+    require(
+        "Refresh-ProcessPath" in first_preflight
+        and "Set-RustupHomesForCurrentProcess" in first_preflight
+        and "Add-RustupBinToProcessPath" in first_preflight,
+        "initial preflight must restore the current user's Rustup homes and PATH before checking prerequisites",
+    )
+    visual_studio_modify = script.split("function Install-VisualStudioBuildComponents", 1)[1].split(
+        "function Install-MissingPrerequisites", 1
+    )[0]
+    component_arguments = visual_studio_modify.split("$components = @(", 1)[1].split(
+        ")\n    $existingInstallation", 1
+    )[0]
+    require(
+        '"--wait"' not in component_arguments,
+        "installed Visual Studio setup.exe modify must not receive bootstrapper-only --wait",
+    )
 
 
 def main() -> int:
     verify_release_workflow()
+    verify_local_packaging_script()
 
     for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
         element_tree.parse(APP / relative)
@@ -104,7 +283,7 @@ def main() -> int:
 
     workflow = read("ViewModels/MainViewModel.cs")
     for expected in (
-        '"convert", SourcePath, "--output", TargetPath, "--dry-run"',
+        '"convert", paths.Source, "--output", paths.Target, "--dry-run"',
         '"rollback", "--manifest", RollbackManifestPath',
         '"convert-cec", "--source-dir", CecSourceDirectory, "--target", CecTargetPath, "--dry-run"',
         '"--write", "--experimental"',
@@ -114,6 +293,16 @@ def main() -> int:
     ):
         require(expected in workflow, f"workflow is missing {expected}")
 
+    resolver = read("Models/SavePathResolution.cs")
+    for expected in (
+        "TryResolveSource",
+        "TryResolveTarget",
+        "TryResolveExtDataUserDirectory",
+        "Path.Combine(fullPath, slot)",
+        "Path.GetFileName(fullPath)",
+    ):
+        require(expected in resolver, f"Windows path resolver is missing {expected}")
+
     core_dry_run = workflow.split("public async Task RunCoreDryRunAsync()", 1)[1].split(
         "public async Task WriteCoreAsync()", 1
     )[0]
@@ -121,23 +310,83 @@ def main() -> int:
         "_coreAuthorization = null;",
         'var reportSourceHash = result.TryGetHash("source");',
         'var reportTargetHash = result.TryGetHash("target_before");',
-        "!source.Exists || !target.Exists",
-        "string.IsNullOrWhiteSpace(target.Sha256)",
+        "var targetMatchesDryRun = targetAfter.Exists",
+        "? !string.IsNullOrWhiteSpace(targetAfter.Sha256)",
+        "string.IsNullOrWhiteSpace(targetAfter.Sha256)",
         "string.IsNullOrWhiteSpace(reportTargetHash)",
-        "string.Equals(target.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
-        "new DryRunAuthorization(source, target, reportSourceHash",
+        "string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
+        "new DryRunAuthorization(sourceAfter, targetAfter, reportSourceHash",
     ):
         require(expected in core_dry_run, f"core Dry Run is missing target hash validation {expected}")
+
+    # A directory export is deliberately a new-file transaction. The target
+    # state observed by Inspect is part of that intent: an absent target must
+    # not turn into an in-place overwrite merely because another process
+    # creates the selected user# before Dry Run starts.
+    inspect_core = public_method_body(workflow, "InspectCoreAsync")
+    for expected in (
+        "var sourceAtInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);",
+        "var targetAtInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);",
+        "if (!sourceAtInspection.Matches(sourceAfterInspection) || !targetAtInspection.Matches(targetAfterInspection))",
+        "_inspectedSource = sourceAfterInspection;",
+        "_inspectedTarget = targetAfterInspection;",
+    ):
+        require(expected in inspect_core, f"core Inspect is missing stable target intent validation {expected}")
+    for expected in (
+        "var inspectedSource = _inspectedSource",
+        "var inspectedTarget = _inspectedTarget",
+        "if (!inspectedSource.Matches(sourceBefore) || !inspectedTarget.Matches(targetBefore))",
+        "!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter)",
+    ):
+        require(expected in core_dry_run, f"core Dry Run must preserve inspected target intent {expected}")
 
     core_write = workflow.split("public async Task WriteCoreAsync()", 1)[1].split(
         "public async Task RollbackCoreAsync()", 1
     )[0]
     for expected in (
         '"--expected-source-sha256", authorization.SourceReportHash',
-        '"--expected-target-sha256", expectedTargetSha256',
         "var expectedTargetSha256 = authorization.Target.Sha256",
+        "if (authorization.Target.Exists)",
+        'arguments.Add("--expected-target-sha256");',
+        "arguments.Add(expectedTargetSha256);",
+        'arguments.Add("--expected-target-absent");',
     ):
         require(expected in core_write, f"core write is missing dry-run hash binding {expected}")
+
+    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows core workflow must gate selected optional setup")
+    require("public bool HasPendingSelectedOptionalWork" in workflow, "Windows core workflow must retain selected optional work")
+    require("!SelectedOptionalDataIsConfigured" in core_dry_run, "core Dry Run must not bypass incomplete optional setup")
+    require(
+        "SelectedOptionalDataIsConfigured" in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
+        "core write availability must not bypass incomplete optional setup",
+    )
+    require(
+        "!SelectedOptionalDataIsConfigured" in core_write,
+        "core write entry point must reject incomplete optional setup",
+    )
+    optional_availability = workflow.split("private void RaiseOptionalConfigurationAvailability()", 1)[1].split(
+        "private void SetWorkflowGuidance", 1
+    )[0]
+    require(
+        "OnPropertyChanged(nameof(CanWriteCore));" in optional_availability,
+        "changing optional setup must refresh core write availability",
+    )
+    system_write = public_method_body(workflow, "WriteSystemAsync")
+    require("_systemWriteCompleted = true;" in system_write, "system completion must be tracked independently")
+    require(
+        "_extrasInstallCompleted" not in workflow,
+        "Windows must not track a completed ExtData install while that capability is unavailable",
+    )
+
+    window = read("MainWindow.xaml")
+    require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
+    require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
+    require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
+    require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
+    code_behind = read("MainWindow.xaml.cs")
+    require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
+    require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
+    require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")
 
     cec_write = workflow.split("public async Task WriteCecAsync()", 1)[1].split(
         "public async Task RollbackCecAsync()", 1
@@ -216,6 +465,40 @@ def main() -> int:
         "a failed operation must not revoke unrelated authorization domains",
     )
 
+    # The CLI deliberately fail-closes automatic multi-file ExtData install
+    # and rollback on Windows until it has a safe two-name exchange backend.
+    # The native shell may still expose the genuinely read-only install Dry
+    # Run, but must never guide a user to a sidecar write/rollback that is
+    # specified to refuse. Staging always converts the complete ExtData set
+    # into the explicitly selected staging directory.
+    for expected in (
+        "private static bool SupportsSafeExtrasInstall => false;",
+        "!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths()",
+        "public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();",
+        "public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();",
+        "public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasInstallPaths();",
+        "SupportsSafeExtrasInstall && !IsBusy && _extrasInstallAuthorization is not null && HasExtrasInstallPaths()",
+        "SupportsSafeExtrasInstall && !IsBusy && HasSelectedExtraGroups()",
+        "private bool HasExtrasStagePaths()",
+        "private bool HasExtrasInstallPaths()",
+        "private bool TryRequireExtrasStagePaths()",
+    ):
+        require(expected in workflow, f"Windows ExtData safety capability is missing {expected}")
+    for method in ("InstallExtrasAsync", "RollbackExtrasAsync"):
+        body = public_method_body(workflow, method)
+        require(
+            "if (!SupportsSafeExtrasInstall)" in body
+            and "Fail(Copy.ExtDataInstallUnavailable);" in body,
+            f"{method} must report the Windows ExtData install capability boundary before invoking the sidecar",
+        )
+    extras_install_preview = public_method_body(workflow, "RunExtrasInstallDryRunAsync")
+    require(
+        "if (!SupportsSafeExtrasInstall)" not in extras_install_preview
+        and "TryRequireExtrasInstallPaths()" in extras_install_preview
+        and '"install-extras --dry-run"' in extras_install_preview,
+        "Windows may offer only the read-only ExtData install preview; it must not be blocked by the write capability gate",
+    )
+
     # Every failed CLI operation must revoke only the authorization which
     # supplied that operation's guarded write. This keeps the other domains
     # fail-closed without forcing users to repeat unrelated Dry Runs.
@@ -282,6 +565,15 @@ def main() -> int:
         "QuestsCheckBox",
     ):
         require(expected in window, f"WinUI optional transaction controls are missing {expected}")
+    require(
+        "Copy.ExtDataInstallUnavailable" in window,
+        "Windows ExtData controls must explain why automatic install is unavailable",
+    )
+    require(
+        "<InfoBar " not in window
+        and '<controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />' in window,
+        "every WinUI InfoBar must use the Microsoft.UI.Xaml.Controls namespace prefix",
+    )
 
     code_behind = read("MainWindow.xaml.cs")
     for expected in (
@@ -302,6 +594,7 @@ def main() -> int:
         "共享 system",
         "Optional ExtData",
         "可选 ExtData",
+        "ExtDataInstallUnavailable",
     ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")
@@ -309,6 +602,25 @@ def main() -> int:
     window = read("MainWindow.xaml")
     for expected in ("StageArtwork", "DryRun_Click", "CecToggle", "RollbackCore_Click"):
         require(expected in window, f"main surface is missing {expected}")
+    for expected in (
+        "ShowPostInspectGuidance",
+        "ShowPostDryRunGuidance",
+        "ShowPostWriteGuidance",
+        "ShowPostOptionalGuidance",
+        "ShowPostRollbackGuidance",
+        "GoToPostWriteDestination_Click",
+        "GoToCoreWorkflow_Click",
+        "GoToOptionalConfiguration_Click",
+    ):
+        require(expected in window, f"main surface is missing guided continuation {expected}")
+    for expected in (
+        "WorkflowGuidance.CoreInspected",
+        "WorkflowGuidance.CoreDryRunAuthorized",
+        "WorkflowGuidance.CoreWritten",
+        "WorkflowGuidance.OptionalStepComplete",
+        "WorkflowGuidance.RolledBack",
+    ):
+        require(expected in workflow, f"workflow is missing guided continuation {expected}")
     stage_artwork = read("Controls/StageArtwork.xaml.cs")
     require("SceneImage.Source" in stage_artwork, "stage artwork must change with workflow state")
 

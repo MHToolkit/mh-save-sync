@@ -26,6 +26,139 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(workflow.dryRunFingerprint?.targetSHA256, fixtureTargetInspection.sha256)
     }
 
+    func testNewExportAuthorizesAnAbsentTargetAndWritesWithAbsencePrecondition() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(newExportDryRunResult()),
+            .success(writtenResult(operation: ConverterOperation.convert.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: nil)
+
+        XCTAssertTrue(workflow.canStartDryRun)
+        try await workflow.runCoreDryRun()
+
+        XCTAssertTrue(workflow.canWrite)
+        XCTAssertNil(workflow.dryRunFingerprint?.targetSHA256)
+
+        let plan = try workflow.writePlan()
+        XCTAssertEqual(plan.count, 1)
+        XCTAssertTrue(plan[0].arguments.contains("--expected-target-absent"))
+        XCTAssertFalse(plan[0].arguments.contains("--expected-target-sha256"))
+
+        try await workflow.writeCore()
+        let commands = await executor.recordedCommands()
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertTrue(commands[1].arguments.contains("--expected-target-absent"))
+        XCTAssertFalse(commands[1].arguments.contains("--expected-target-sha256"))
+    }
+
+    func testNewExportIsPresentedAsAReadyPlannedOutput() {
+        let workflow = ConversionWorkflow(executable: fixtureExecutable)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: nil)
+
+        XCTAssertTrue(workflow.isNewTargetExport)
+    }
+
+    func testSelectedOptionalDataMustBeFullyConfiguredBeforeItsContinuationIsReady() {
+        let workflow = ConversionWorkflow(executable: fixtureExecutable)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        workflow.setComponents(ComponentSelection(includeGuildCards: true))
+        XCTAssertFalse(workflow.selectedOptionalDataIsConfigured)
+
+        workflow.setComponents(
+            ComponentSelection(
+                includeGuildCards: true,
+                extraSourceDirectory: URL(fileURLWithPath: "/tmp/extdata/user"),
+                extraStagingDirectory: URL(fileURLWithPath: "/tmp/mh3g-staging"),
+                extraTargetDirectory: URL(fileURLWithPath: "/tmp/cemu")
+            )
+        )
+        XCTAssertTrue(workflow.selectedOptionalDataIsConfigured)
+    }
+
+    func testIncompleteSelectedOptionalDataBlocksCoreDryRunAcrossNavigation() async throws {
+        let executor = FakeConverterCommandExecutor(results: [.success(dryRunResult())])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.setComponents(ComponentSelection(includeGuildCards: true))
+
+        XCTAssertFalse(workflow.selectedOptionalDataIsConfigured)
+        XCTAssertFalse(workflow.canStartDryRun)
+
+        do {
+            try await workflow.runCoreDryRun()
+            XCTFail("selected optional data must be configured before the core Dry Run")
+        } catch {
+            XCTAssertEqual(error as? ConversionWorkflowError, .missingExtraDirectories)
+        }
+    }
+
+    func testIncompleteSelectedOptionalDataBlocksAnExistingCoreWriteAuthorization() async throws {
+        let executor = FakeConverterCommandExecutor(results: [.success(dryRunResult())])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        try await workflow.runCoreDryRun()
+        XCTAssertTrue(workflow.canWrite)
+
+        workflow.setComponents(ComponentSelection(includeGuildCards: true))
+        XCTAssertFalse(workflow.selectedOptionalDataIsConfigured)
+        XCTAssertFalse(workflow.canWrite)
+
+        do {
+            try await workflow.writeCore()
+            XCTFail("an incomplete optional selection must block an existing core write authorization")
+        } catch {
+            XCTAssertEqual(error as? ConversionWorkflowError, .missingExtraDirectories)
+        }
+    }
+
+    func testCoreWriteDoesNotMarkSelectedOptionalDataAsComplete() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(dryRunResult()),
+            .success(writtenResult(operation: ConverterOperation.convert.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.setComponents(
+            ComponentSelection(
+                includeSystem: true,
+                systemSource: fixtureSystemSource,
+                systemTarget: fixtureSystemTarget
+            )
+        )
+
+        try await workflow.runCoreDryRun()
+        try await workflow.writeCore()
+
+        XCTAssertTrue(workflow.hasPendingSelectedOptionalWork)
+        XCTAssertTrue(workflow.hasPendingSelectedConversionWork)
+    }
+
+    func testNewExportRefusesDryRunWhenTargetAppearsAfterInspection() async throws {
+        let executor = FakeConverterCommandExecutor(results: [.success(dryRunResult())])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: nil)
+
+        do {
+            try await workflow.runCoreDryRun()
+            XCTFail("a newly appeared target must invalidate an export Dry Run")
+        } catch {
+            XCTAssertEqual(
+                error as? ConversionWorkflowError,
+                .invalidReport("target appeared during Dry Run; refuse export")
+            )
+        }
+        XCTAssertFalse(workflow.canWrite)
+    }
+
     func testCoreDryRunRequiresBothReportedHashesAndClearsPriorAuthorization() async throws {
         let incompleteDryRun = ConverterCommandResult(
             exitCode: 0,
@@ -535,6 +668,13 @@ private let fixtureCECTargetSHA256 = "g".repeated(64)
 private func dryRunResult() -> ConverterCommandResult {
     let json = """
     {"operation":"convert","status":"dry-run","hashes":{"source":"\(fixtureSourceInspection.sha256)","target_before":"\(fixtureTargetInspection.sha256)","output":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func newExportDryRunResult() -> ConverterCommandResult {
+    let json = """
+    {"operation":"convert","status":"dry-run","hashes":{"source":"\(fixtureSourceInspection.sha256)","output":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }

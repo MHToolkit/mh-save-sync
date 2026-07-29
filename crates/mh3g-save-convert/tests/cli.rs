@@ -742,6 +742,82 @@ fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
 }
 
 #[test]
+fn convert_write_creates_a_new_export_only_when_the_target_stays_absent() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert!(dry_run["hashes"].get("target_before").is_none());
+
+    let written = run_json_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-absent".into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(written["status"], "written");
+    assert!(target.is_file());
+    assert!(written["backup"].is_null());
+}
+
+#[test]
+fn convert_write_refuses_an_export_target_that_appeared_after_dry_run() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let dry_run = run_json(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    let appeared = vec![0xA5; CEMU_SIZE];
+    fs::write(&target, &appeared).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "convert".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-absent".into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target appeared after Dry Run and was expected to remain absent")
+    );
+    assert_eq!(fs::read(&target).unwrap(), appeared);
+    assert!(
+        !target
+            .parent()
+            .unwrap()
+            .join(".user2.mh3g-install.json")
+            .exists()
+    );
+}
+
+#[test]
 fn convert_write_rejects_a_stale_expected_source_hash_without_replacing_target() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
@@ -930,6 +1006,7 @@ fn install_extras_dry_run_reports_one_complete_group_without_writing() {
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
 }
 
+#[cfg(not(windows))]
 #[test]
 fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group() {
     #[cfg(target_os = "macos")]
@@ -1003,6 +1080,71 @@ fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group()
             .contains("mh3g-extra-backup-")
     }));
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
+}
+
+#[cfg(windows)]
+#[test]
+fn install_extras_write_is_refused_before_mutating_the_complete_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let staging_dir = staged_extras_fixture(&temp);
+    let target_dir = initialized_extra_target(&temp, &staging_dir);
+    let guild_card_before = ["card1", "card2", "card3", "cardbox"]
+        .into_iter()
+        .map(|component| {
+            (
+                component.to_owned(),
+                fs::read(target_dir.join(component)).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let target_entries_before = fs::read_dir(&target_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+
+    let dry_run = run_json(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry_run["status"], "dry-run");
+
+    let output = run_output_with_stopped_emulators(&[
+        "install-extras".into(),
+        "--staging-dir".into(),
+        staging_dir.to_string_lossy().into_owned(),
+        "--target-dir".into(),
+        target_dir.to_string_lossy().into_owned(),
+        "--groups".into(),
+        "guild-cards".into(),
+        "--expected-staging-set-sha256".into(),
+        dry_run["staging_set_sha256"].as_str().unwrap().into(),
+        "--expected-target-set-sha256".into(),
+        dry_run["target_set_sha256_before"].as_str().unwrap().into(),
+        "--write".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("multi-file ExtData installation is unavailable on Windows"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (component, before) in guild_card_before {
+        assert_eq!(fs::read(target_dir.join(component)).unwrap(), before);
+    }
+    let target_entries_after = fs::read_dir(&target_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(target_entries_after, target_entries_before);
 }
 
 #[test]

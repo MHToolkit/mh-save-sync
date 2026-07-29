@@ -81,7 +81,72 @@
                     Title="{Binding Copy.Failed}"
                     Message="{Binding LatestError}" />
 
-                <Grid ColumnSpacing="24">
+                <controls:InfoBar
+                    IsOpen="{Binding ShowPostInspectGuidance}"
+                    IsClosable="True"
+                    Severity="Informational"
+                    Title="{Binding Copy.NextStep}"
+                    Message="{Binding Copy.NextAfterInspect}">
+                    <controls:InfoBar.ActionButton>
+                        <Button Click="GoToOptionalConfiguration_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Setting" /><TextBlock Text="{Binding Copy.ConfigureOptionalData}" /></StackPanel>
+                        </Button>
+                    </controls:InfoBar.ActionButton>
+                </controls:InfoBar>
+
+                <controls:InfoBar
+                    IsOpen="{Binding ShowPostDryRunGuidance}"
+                    IsClosable="True"
+                    Severity="Success"
+                    Title="{Binding Copy.NextStep}"
+                    Message="{Binding Copy.NextAfterDryRun}">
+                    <controls:InfoBar.ActionButton>
+                        <Button Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.ConfirmAndWrite}" /></StackPanel>
+                        </Button>
+                    </controls:InfoBar.ActionButton>
+                </controls:InfoBar>
+
+                <controls:InfoBar
+                    IsOpen="{Binding ShowPostWriteGuidance}"
+                    IsClosable="True"
+                    Severity="Success"
+                    Title="{Binding Copy.NextStep}"
+                    Message="{Binding PostWriteGuidanceMessage}">
+                    <controls:InfoBar.ActionButton>
+                        <Button Click="GoToPostWriteDestination_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding PostWriteGuidanceAction}" /></StackPanel>
+                        </Button>
+                    </controls:InfoBar.ActionButton>
+                </controls:InfoBar>
+
+                <controls:InfoBar
+                    IsOpen="{Binding ShowPostOptionalGuidance}"
+                    IsClosable="True"
+                    Severity="Informational"
+                    Title="{Binding Copy.NextStep}"
+                    Message="{Binding Copy.NextAfterOptional}">
+                    <controls:InfoBar.ActionButton>
+                        <Button Click="GoToOptionalConfiguration_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding Copy.ContinueOptionalData}" /></StackPanel>
+                        </Button>
+                    </controls:InfoBar.ActionButton>
+                </controls:InfoBar>
+
+                <controls:InfoBar
+                    IsOpen="{Binding ShowPostRollbackGuidance}"
+                    IsClosable="True"
+                    Severity="Informational"
+                    Title="{Binding Copy.NextStep}"
+                    Message="{Binding Copy.NextAfterRollback}">
+                    <controls:InfoBar.ActionButton>
+                        <Button Click="GoToCoreWorkflow_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Back" /><TextBlock Text="{Binding Copy.ReturnToCoreFlow}" /></StackPanel>
+                        </Button>
+                    </controls:InfoBar.ActionButton>
+                </controls:InfoBar>
+
+                <Grid x:Name="CoreWorkflowAnchor" ColumnSpacing="24">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="1.15*" />
                         <ColumnDefinition Width="0.85*" />
@@ -91,27 +156,41 @@
                         <TextBlock Text="{Binding Copy.CoreSectionDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
 
                         <StackPanel Spacing="7">
+                            <TextBlock Text="{Binding Copy.SaveSlot}" FontWeight="SemiBold" />
+                            <ComboBox ItemsSource="{Binding SaveSlots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}" HorizontalAlignment="Left" MinWidth="150" />
+                            <TextBlock Text="{Binding Copy.SaveSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="7">
                             <TextBlock Text="{Binding Copy.SourceSlot}" FontWeight="SemiBold" />
                             <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <TextBox x:Name="SourcePathBox" Text="{Binding SourcePath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="user1 / user2 / user3" />
-                                <Button Grid.Column="1" Click="ChooseSource_Click" Style="{StaticResource QuietButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.Browse}" /></StackPanel>
+                                <Button Grid.Column="1" Click="ChooseSourceFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
+                                </Button>
+                                <Button Grid.Column="2" Click="ChooseSourceFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
                                 </Button>
                             </Grid>
                             <TextBlock Text="{Binding Copy.SourceSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding SourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                         </StackPanel>
 
                         <StackPanel Spacing="7">
                             <TextBlock Text="{Binding Copy.TargetSlot}" FontWeight="SemiBold" />
                             <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <TextBox x:Name="TargetPathBox" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="matching Cemu user#" />
-                                <Button Grid.Column="1" Click="ChooseTarget_Click" Style="{StaticResource QuietButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.Browse}" /></StackPanel>
+                                <Button Grid.Column="1" Click="ChooseTargetFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
+                                </Button>
+                                <Button Grid.Column="2" Click="ChooseTargetFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
                                 </Button>
                             </Grid>
                             <TextBlock Text="{Binding Copy.TargetSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding TargetPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                         </StackPanel>
 
                         <StackPanel Spacing="7">
@@ -197,7 +276,7 @@
                     </Border>
                 </Grid>
 
-                <Border Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
+                <Border x:Name="OptionalConfigurationAnchor" Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
                     <StackPanel Spacing="16">
                         <ToggleSwitch x:Name="SystemToggle" Header="{Binding Copy.SharedSystem}" IsOn="{Binding IsSystemEnabled, Mode=TwoWay}" Toggled="SystemToggle_Toggled" />
                         <Grid x:Name="SystemControls" Visibility="Collapsed" ColumnSpacing="20">
@@ -231,6 +310,7 @@
 
                         <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
                         <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />
+                        <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />
                         <StackPanel Orientation="Horizontal" Spacing="16">
                             <CheckBox x:Name="GuildCardsCheckBox" Content="{Binding Copy.GuildCards}" IsChecked="{Binding IncludeGuildCards, Mode=TwoWay}" />
                             <CheckBox x:Name="QuestsCheckBox" Content="{Binding Copy.Quests}" IsChecked="{Binding IncludeQuests, Mode=TwoWay}" />
@@ -240,6 +320,8 @@
                             <StackPanel Spacing="7">
                                 <TextBlock Text="{Binding Copy.ExtDataSource}" FontWeight="SemiBold" />
                                 <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../extdata/.../user" /><Button Grid.Column="1" Click="ChooseExtrasSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                <TextBlock Text="{Binding Copy.ExtDataSourceHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                <TextBlock Text="{Binding ExtrasSourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="7">
                                 <TextBlock Text="{Binding Copy.StagingDirectory}" FontWeight="SemiBold" />
@@ -264,6 +346,9 @@
                                 <Button Click="RollbackExtras_Click" IsEnabled="{Binding CanRollbackExtras}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
                             </StackPanel>
                         </Grid>
+                        <Button Click="GoToCoreWorkflow_Click" Style="{StaticResource QuietButtonStyle}" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding Copy.GoToCoreDryRun}" /></StackPanel>
+                        </Button>
                     </StackPanel>
                 </Border>
 
@@ -280,12 +365,14 @@
                                     <TextBox x:Name="CecSourceBox" Text="{Binding CecSourceDirectory, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../CEC/00048100" />
                                     <Button Grid.Column="1" Click="ChooseCecDirectory_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button>
                                 </Grid>
+                                <TextBlock Text="{Binding Copy.CecSourceDirectoryHint}" Style="{StaticResource SectionCaptionTextStyle}" />
                                 <TextBlock Text="{Binding Copy.CecTargetCache}" FontWeight="SemiBold" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                     <TextBox x:Name="CecTargetBox" Text="{Binding CecTargetPath, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../cec" />
                                     <Button Grid.Column="1" Click="ChooseCecTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
                                 </Grid>
+                                <TextBlock Text="{Binding Copy.CecTargetCacheHint}" Style="{StaticResource SectionCaptionTextStyle}" />
                                 <StackPanel Orientation="Horizontal" Spacing="10">
                                     <Button Click="InspectCec_Click" IsEnabled="{Binding CanInspectCec}"><TextBlock Text="{Binding Copy.InspectCec}" /></Button>
                                     <Button Click="CecDryRun_Click" IsEnabled="{Binding CanRunCecDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RunCecDryRun}" /></Button>
@@ -313,7 +400,7 @@
                     </StackPanel>
                 </Border>
 
-                <Grid ColumnSpacing="24">
+                <Grid x:Name="ResultAnchor" ColumnSpacing="24">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.15*" /><ColumnDefinition Width="0.85*" /></Grid.ColumnDefinitions>
                     <StackPanel Spacing="10">
                         <TextBlock Text="{Binding Copy.ResultTitle}" Style="{StaticResource SectionTitleTextStyle}" />

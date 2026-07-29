@@ -19,18 +19,30 @@
 
 `mh3g-save-convert` 用于把**一个日版 MH3G 3DS 角色槽位**转换到编号相同的日版 MH3G HD Cemu 槽位。它是仅在本地执行的单向工具：不会上传存档、不会修改 3DS 源文件、不支持其他地区版本，也不能把 Cemu 存档反向转换成 3DS 存档。转换器会保留已记录转换范围以外的字节，但字节得到保留并不能证明两个平台中所有游戏字段的含义完全相同。
 
-### 原生 macOS 工作台（开发中）
+### 原生 macOS 与 Windows 工作台（开发中）
 
-`apps/mh3g-save-converter-macos` 是独立的前台 SwiftUI App，不是已有的 MH Save
-Sync 菜单栏客户端。它只通过 argv 数组调用随包的 `mh3g-save-convert` 并读取其
+`apps/mh3g-save-converter-macos` 是独立的前台 SwiftUI App，
+`apps/mh3g-save-converter-windows` 是对应的 WinUI App；两者都不是已有的 MH Save
+Sync 菜单栏客户端。它们只通过 argv 数组调用随包的 `mh3g-save-convert` 并读取其
 JSON 报告；不会在 UI 内重写字节转换、备份、manifest、模拟器进程检查或回滚规则。
-窗口会正常出现于 Dock 和 Cmd-Tab，首屏就是四阶段工作台；默认跟随系统语言，也可在
-设置中切换简体中文或 English。
+macOS 窗口会正常出现于 Dock 和 Cmd-Tab；默认跟随系统语言，也可在设置中切换简体中文或
+English。
 
-App 只接受用户明确选择的 `user1`、`user2`、`user3`、`system`、ExtData 与 CEC
-路径。它不会推断 MLC 根目录、递归扫描目录，也不接受压缩包。核心角色写入只有在当前
-Dry Run 指纹仍与所选源 SHA-256、目标 SHA-256 和组件范围一致时才会启用。CEC 位于
-单独、默认折叠的实验性页面；正常的公会名片/离线伙伴组不依赖它。
+工作台提供四个**有引导、但不强制**的阶段：输入与检查、可选共享数据、Dry Run、写入或
+回滚。完成一个阶段后会显示推荐的下一步操作（例如检查完成后配置可选数据），但玩家仍可
+返回前一阶段，或跳过可选组件。该引导不会额外执行任何转换。
+
+核心槽位在 GUI 中可以选择一个准确的 `user1`、`user2`、`user3` 文件，或选择它的直接父
+目录；然后只解析用户所选槽位对应的直接子文件。目标可以选择已有且同名的 Cemu `user#`
+文件，也可以选择明确的导出目录；选择导出目录只会解析为 `<目录>/user#`，不会在选择时
+创建文件。GUI 不会递归扫描、搜索 SD 卡、推断 MLC 根目录，也不接受压缩包。这些目录便利
+**只属于 GUI**：CLI 仍要求下文说明的准确源文件与准确输出文件。
+
+可选 ExtData 选择器接受准确的 `user` 目录，也接受常见的直接父目录 `00000481`，并且只解析
+该父目录下的 `user` 子目录。CEC 位于独立、默认折叠的实验性页面；正常的公会名片/离线伙伴
+组不依赖它。核心角色写入只有在当前 Dry Run 指纹仍与所选源、目标和组件范围一致时才会启用。
+已有目标会纳入目标 SHA-256；新的导出目标则记录为“目标不存在”，写入时传入
+`--expected-target-absent`。若目标在 Dry Run 后出现，写入会被拒绝，绝不会覆盖新出现的文件。
 
 在 arm64 macOS 开发主机上，可只使用合成 fixture 构建并验证：
 
@@ -45,7 +57,22 @@ hash 不变。没有模拟器运行时，它还会验证事务写入和 manifest
 或 Cemu 已在运行，则会验证 CLI 拒绝合成写入且临时目标未创建。它不会启动 Cemu，也不会打开
 真实 MLC。
 
-> **使用前必读：**当前 CLI **不能直接读取 ZIP、7z 或 RAR**，也不会在任意存档目录中递归搜索可能的文件。必须先把压缩包完整解压到普通本地目录，然后按照下文要求传入准确的文件或准确层级的目录。不要从 QQ 或浏览器的压缩包预览界面直接运行程序。路径中包含空格时必须加引号。
+Windows 10 1809+/Windows 11 x64 的本地 WinUI 发包不要拆成 IDE/Qoder 的多条手工命令。
+从仓库根目录运行唯一脚本即可预检 .NET 8、Rust MSVC 和 Visual Studio Build Tools/Windows
+SDK，构建并自检 WinUI + Rust sidecar ZIP：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
+```
+
+首次缺少依赖时才显式追加 `-Bootstrap`；它使用 `winget` 安装缺失组件，可能要求管理员批准。
+若 WinGet 的 Rustup 安装登记残留、但当前用户缺少 `rustup.exe`，同一条 bootstrap 会原地修复，
+并以官方 HTTPS bootstrapper 与其 SHA-256 sidecar 完整性校验兜底，不会删除 `.cargo` 或 `.rustup`。常规运行不会清 NuGet/Cargo 缓存；若旧版脚本曾以 `-NoPath` 把私有 .NET 8 SDK 安装到 `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`，新脚本会直接复用，避免重复下载。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
+`mh3g-save-convert-windows-build-transcript.txt` 需回传首个失败命令的完整输出块。完整的
+Windows 前置条件、行为和可选参数见
+[`apps/mh3g-save-converter-windows/README.zh-CN.md`](apps/mh3g-save-converter-windows/README.zh-CN.md)。
+
+> **使用前必读：**当前 CLI **不能直接读取 ZIP、7z 或 RAR**，也不会在任意存档目录中递归搜索可能的文件。必须先把压缩包完整解压到普通本地目录，然后按照下文要求传入准确的文件或准确层级的目录。上文为 GUI 提供的核心目录选择便利**不适用于 CLI**。不要从 QQ 或浏览器的压缩包预览界面直接运行程序。路径中包含空格时必须加引号。
 
 执行任何 `--write`、`rollback`、`rollback-extras` 或 `rollback-cec` 前，必须完全退出 Nemessix、Azahar 和 Cemu，并等待相应进程结束。`inspect`、`inspect-progress`、`inspect-events`、`inspect-cec` 以及所有 `--dry-run` 操作都只读。
 
@@ -79,7 +106,7 @@ hash 不变。没有模拟器运行时，它还会验证事务写入和 manifest
     OutBox__/...                           <- 本机猎人的发出广播
 ```
 
-如果解压后的目录中直接包含 `user2`，核心槽位转换时请选择这个**文件**。如果目录中直接包含 `card1` 到 `quest4`，该目录只能作为 `convert-extras` 输入。如果解压结果外面还有一层包装目录，需要先进入这一层；上述预期文件必须是传入路径的直接子文件。
+如果解压后的目录中直接包含 `user2`，使用 CLI 转换核心槽位时必须传入这个**文件**。在原生工作台中，选择该目录并选中 `user2` 时，只会解析其直接子文件 `user2`。如果目录中直接包含 `card1` 到 `quest4`，该目录只能作为 `convert-extras` 输入。如果解压结果外面还有一层包装目录，需要先进入这一层；上述预期文件必须是 CLI 路径或上述受限 GUI 选择的直接子项。
 
 ### 写入前：设置路径、检查和 dry-run
 
@@ -111,9 +138,9 @@ CEMU_CEC="$CEMU_DIR/cec"
 
 `convert` 接收一个源 `user#` 文件和 `--output <同名-user#>`。`user2` 只能写入名为 `user2` 的目标，不能覆盖 `user1` 或任意改名文件。不传 `--write` 时转换保持 dry-run；在脚本中建议显式传入 `--dry-run`，以便清楚表达只读意图。`--write` 与 `--dry-run` 互斥。
 
-对于 GUI 和自动化调用，`convert` 与 `convert-system` 还提供可选的写入前置条件：`--expected-source-sha256` 和 `--expected-target-sha256`。这两个参数都只能与 `--write` 一起使用。它们的值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样只要任一文件在 dry-run 后发生变化，写入就会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
+对于 GUI 和自动化调用，`convert` 与 `convert-system` 提供受保护的写入前置条件：`--expected-source-sha256`，再加上二选一的目标条件 `--expected-target-sha256` 或 `--expected-target-absent`。它们都只能与 `--write` 一起使用。哈希值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样已有的源或目标在 dry-run 后发生变化时，写入会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
 
-仅当目标文件已存在时，JSON 才会提供 `hashes.target_before`。如果它不存在，不要伪造哨兵哈希或传入 `--expected-target-sha256`：已提供目标前置条件时，目标缺失会被刻意拒绝。首次安装仍可按调用方策略只使用源哈希前置条件。
+仅当目标文件已存在时，JSON 才会提供 `hashes.target_before`。如果它不存在，不要伪造哨兵哈希或传入 `--expected-target-sha256`。对于受保护的新导出，请传入本次 Dry Run 的源哈希和 `--expected-target-absent`。事务在取得锁后会再次检查；若新目标在此期间出现，则拒绝写入。两种目标条件互斥。
 
 ### 完整命令参考
 
@@ -159,7 +186,7 @@ mh3g-save-convert inspect-events [--target <TARGET>] [--all] <SOURCE>
 #### `convert`：转换一个角色槽位
 
 ```text
-mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
 ```
 
 `<SOURCE>` 与 `<OUTPUT>` 必须拥有相同的 `user#` 文件名。只读执行：
@@ -189,14 +216,31 @@ TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$DRY_RUN_JSON")
   --write
 ```
 
-当目标不存在或报告不包含这两个哈希时，`jq -e` 会使这个受保护流程停止。两个 `--expected-...` 参数不能用于 dry-run，也不能脱离 `--write` 单独传入。
+当目标不存在或报告不包含这两个哈希时，`jq -e` 会使这个**已有目标**的受保护流程停止。两个 `--expected-...` 参数不能用于 dry-run，也不能脱离 `--write` 单独传入。
+
+对于受保护的首次导出，目标必须在该次 Dry Run 时不存在。请绑定源哈希和“不存在”条件，而不是伪造目标哈希：
+
+```bash
+EXPORT_DIR="$HOME/Downloads/mh3g-cemu-export"
+TARGET="$EXPORT_DIR/user2"
+NEW_DRY_RUN_JSON=$("${CLI[@]}" convert "$SOURCE" --output "$TARGET" --dry-run)
+NEW_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$NEW_DRY_RUN_JSON")
+
+"${CLI[@]}" convert "$SOURCE" --output "$TARGET" \
+  --expected-source-sha256 "$NEW_SOURCE_SHA256" \
+  --expected-target-absent \
+  --write
+```
+
+不要在 Dry Run 与写入之间自行创建 `"$TARGET"`。若其他进程创建了它，事务会刻意拒绝写入，
+而不是覆盖一个刚出现的存档。
 
 如果目标原本存在，`--write` 会在同目录创建 `.user2.mh3g-backup-<previous-sha256>` 和 `.user2.mh3g-install.json`；重复安装还可能生成 `.user2.mh3g-install-history-<sha256>.json`。在 Cemu 中手动验证成功前，请保留 manifest。
 
 #### `convert-system`：转换共享 system 数据
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256>]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
 ```
 
 只能使用明确的 `system` 文件；它不会读取 `user#` 或 ExtData：
@@ -219,6 +263,10 @@ SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
   --expected-target-sha256 "$SYSTEM_TARGET_SHA256" \
   --write
 ```
+
+新的 `system` 导出也按相同规则：使用该次紧邻 Dry Run 的源哈希与
+`--expected-target-absent`。它和 `--expected-target-sha256` 互斥；如果目标在写入
+取得锁前出现，写入会被拒绝。
 
 #### `convert-extras`：生成共享 ExtData 暂存文件
 
@@ -250,6 +298,12 @@ mh3g-save-convert install-extras [--dry-run | --write] \
 表示 `quest1` 到 `quest4`。目标必须是已初始化的 MH3G Cemu 存档目录，并且已经包含被选择的
 同名组件。写入会创建绑定 manifest 的恢复事务并保留目标原始字节；不会单独安装某一个 `card#`
 或 `quest#` 文件。
+
+> **Windows 限制：**Windows 支持 `convert-extras` 生成暂存文件和
+> `install-extras --dry-run` 预览，但会在尚未改动任何 ExtData 文件前，主动拒绝
+> `install-extras --write` 与 `rollback-extras`。安全的多文件安装需要当前转换器完整的持久目录元数据协议和
+> 双名称原子交换；请在受支持的平台完成该受保护的安装/回滚步骤。核心 `user#` 与共享 `system`
+> 转换仍可在 Windows 使用。
 
 安装前应紧接着执行 Dry Run，并把两组报告哈希绑定到写入：
 
