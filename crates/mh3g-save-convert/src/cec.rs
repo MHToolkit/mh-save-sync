@@ -1491,6 +1491,40 @@ mod tests {
     }
 
     #[test]
+    fn converts_every_packed_guild_card_arena_record_before_cec_insertion() {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("InBox___");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
+
+        // CEC carries three packed 0xE00 guild-card slots. Pick the final
+        // (110th) arena row of the final slot: it is the path rendered by
+        // offline-hall partners.
+        let arena_field = 2 * GUILD_CARD_SLOT_SIZE + 0x9B4 + 109 * 4;
+        let arena_source = [0x81, 0x72, 0x63, 0x54];
+        let following_field = arena_field + 4;
+        let following_source = [0x11, 0x22, 0x33, 0x44];
+        let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        record[arena_field..arena_field + 4].copy_from_slice(&arena_source);
+        record[following_field..following_field + 4].copy_from_slice(&following_source);
+        fs::write(inbox.join("_A"), received_message_with_record(&record)).unwrap();
+
+        let conversion =
+            convert_cec_records(temp.path(), &empty_cemu_cec().unwrap(), None).unwrap();
+        let converted = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + arena_field;
+        assert_eq!(
+            &conversion.bytes[converted..converted + 4],
+            &u32::from_le_bytes(arena_source)
+                .rotate_left(17)
+                .to_be_bytes()
+        );
+        assert_eq!(
+            &conversion.bytes[converted + 4..converted + 8],
+            &following_source
+        );
+    }
+
+    #[test]
     fn install_refuses_a_target_changed_after_conversion_planning() {
         let temp = tempdir().unwrap();
         let target = temp.path().join("cec");

@@ -1,6 +1,19 @@
 import re
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
+
+native_transforms = (ROOT / 'crates/mh3g-save-convert/src/transforms.rs').read_text(encoding='utf-8')
+native_markers = (
+    'const SHAKALAKA_U16_TABLE_END: usize = 0xE6;',
+    'const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;',
+    'fn apply_shakalaka_companion_corrections(',
+    'fn apply_guild_card_arena_corrections(',
+)
+if all(marker in native_transforms for marker in native_markers):
+    raise SystemExit(
+        'legacy compatibility wrapper disabled: the Rust core already contains '
+        'the complete arena and Shakalaka conversion'
+    )
 src = (ROOT / 'crates/mh3g-save-convert/src/meow_transform_table.rs').read_text(encoding='utf-8')
 
 def arr(name):
