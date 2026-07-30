@@ -45,13 +45,15 @@ const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
 // Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Each
 // starts with three u32 header fields and endian-sensitive u16 scalars. The
-// tail beginning at relative 0xDE is byte-packed mask/mastery state: it has
-// the same byte order on 3DS and Wii U and must remain byte-preserved.
+// six bytes at relative 0xDE are packed mask state and must retain their byte
+// order. The immediately following relative 0xE4 Lamp Mask mastery is still a
+// u16 scalar, then the byte-packed tail resumes at 0xE6.
 const SHAKALAKA_RECORD_START: usize = 0x6F44;
 const SHAKALAKA_RECORD_COUNT: usize = 2;
 const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
 const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
 const SHAKALAKA_MASK_STATE_START: usize = 0xDE;
+const SHAKALAKA_LAMP_MASK_MASTERY_START: usize = 0xE4;
 const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
@@ -808,6 +810,12 @@ fn apply_shakalaka_companion_corrections(
         for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
             copy_reversed(source, target, record_start + relative, 2)?;
         }
+        copy_reversed(
+            source,
+            target,
+            record_start + SHAKALAKA_LAMP_MASK_MASTERY_START,
+            2,
+        )?;
     }
 
     Ok(())
@@ -896,8 +904,8 @@ pub fn apply_japanese_wiiu_corrections(
     }
 
     // The compatibility operation list covers only a subset of the numeric
-    // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix, stopping
-    // before the platform-invariant byte-packed mask/mastery state.
+    // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix and the
+    // isolated Lamp Mask mastery scalar while preserving the packed state.
     apply_shakalaka_companion_corrections(source, target)?;
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5
