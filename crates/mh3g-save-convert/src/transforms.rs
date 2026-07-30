@@ -338,17 +338,50 @@ fn apply_guild_card_monster_log_corrections(
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
     for slot in 0..GUILD_CARD_SLOT_COUNT {
-        let slot_start = slot * GUILD_CARD_SLOT_SIZE;
-        for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
-            let record_start =
-                slot_start + GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE;
-            // A monster-log row is four adjacent u16 values (slays, captures,
-            // maximum size, minimum size), followed by crown/discovery bytes.
-            // The static MEOW table treats a subset of these bytes as broader
-            // scalar spans. Reassert the confirmed field boundaries after it.
-            for relative in [0, 2, 4, 6] {
-                copy_reversed(source, target, record_start + relative, 2)?;
-            }
+        apply_guild_card_monster_log_slot_corrections(source, target, slot * GUILD_CARD_SLOT_SIZE)?;
+    }
+
+    Ok(())
+}
+
+/// Reapply the complete Hunter's Notes schema to one received-card slot.
+///
+/// Card files and experimental CEC records store the same 0xE00-byte card
+/// shape. Keeping this correction slot-relative makes their monster names and
+/// crown bits agree with the personal guild-card view.
+fn apply_guild_card_monster_log_slot_corrections(
+    source: &[u8],
+    target: &mut [u8],
+    slot_start: usize,
+) -> Result<(), ConversionError> {
+    for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
+        let record_start =
+            slot_start + GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE;
+        // A monster-log row is four adjacent u16 values (slays, captures,
+        // maximum size, minimum size), followed by crown/discovery bytes.
+        // The static MEOW table treats a subset of these bytes as broader
+        // scalar spans. Reassert the confirmed field boundaries after it.
+        for relative in [0, 2, 4, 6] {
+            copy_reversed(source, target, record_start + relative, 2)?;
+        }
+
+        // Wii U uses bit 0x80 to decide whether to show a monster name, while
+        // 3DS writes the equivalent discovery bit as 0x01. Reapply the same
+        // conversion and non-zero hunt fallback used by the personal Hunter's
+        // Notes for all received-card rows, including offline-hall partners.
+        transform_crown(source, target, record_start + 8)?;
+        let slays = u16::from_le_bytes(
+            source[record_start..record_start + 2]
+                .try_into()
+                .expect("validated card monster-log slay range"),
+        );
+        let captures = u16::from_le_bytes(
+            source[record_start + 2..record_start + 4]
+                .try_into()
+                .expect("validated card monster-log capture range"),
+        );
+        if slays != 0 || captures != 0 {
+            target[record_start + 8] |= 0x80;
         }
     }
 
@@ -577,15 +610,7 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         copy_reversed(source, target, offset, 4)?;
     }
 
-    // The static table has irregular coverage of the 50-row monster log. The
-    // confirmed row schema is four independent u16 values plus crown bytes;
-    // reassert those field boundaries for every packed card slot.
-    for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
-        let record_start = GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE;
-        for relative in [0, 2, 4, 6] {
-            copy_reversed(source, target, record_start + relative, 2)?;
-        }
-    }
+    apply_guild_card_monster_log_slot_corrections(source, target, 0)?;
 
     Ok(())
 }

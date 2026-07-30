@@ -1405,6 +1405,10 @@ mod tests {
         let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
         let record_field = slot_start + 0x7C0 + 32 * 10;
+        // Row 45 is intentionally beyond the sparse MEOW crown entries.  A
+        // non-zero hunt count with no 3DS discovery bit must still become a
+        // displayable Wii U Hunter's Notes row inside a packed CEC card.
+        let late_record_field = slot_start + 0x7C0 + 45 * 10;
         let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
         for equipment in 0_u8..5 {
             let equipment_field = slot_start + 0x4C + usize::from(equipment) * 0x10;
@@ -1428,6 +1432,8 @@ mod tests {
         record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
         record[record_field..record_field + 10]
             .copy_from_slice(&[0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0x00, 0x03, 0x00]);
+        record[late_record_field..late_record_field + 10]
+            .copy_from_slice(&[0x09, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00, 0x00]);
 
         let body_size = CEC_SOURCE_RECORD_PREFIX_SIZE + CEMU_RECORD_SLOT_SIZE;
         let header_size = MESSAGE_HEADER_SIZE;
@@ -1448,6 +1454,7 @@ mod tests {
             CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + weapon_usage_field;
         let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
         let converted_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + record_field;
+        let converted_late_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + late_record_field;
 
         for equipment in 0_u8..5 {
             let equipment_field = slot_start + 0x4C + usize::from(equipment) * 0x10;
@@ -1487,6 +1494,10 @@ mod tests {
         assert_eq!(
             &conversion.bytes[converted_offset..converted_offset + 10],
             &[0x00, 0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0xA0, 0x00]
+        );
+        assert_eq!(
+            &conversion.bytes[converted_late_offset..converted_late_offset + 10],
+            &[0x00, 0x09, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
         );
     }
 
