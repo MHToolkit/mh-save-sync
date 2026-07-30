@@ -428,7 +428,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "9fce84bec2ff99d998747078228941e5dec2f18198ed4931b82b8a30efc00efb"
+            "0cb299de141dfe9c47e15c7329536c534222ae4d719d947f3f7405c4cf368363"
         );
     }
 
@@ -552,6 +552,40 @@ mod tests {
         assert_eq!(
             &payload[second_card_row..second_card_row + 8],
             &[0x00, 0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65]
+        );
+    }
+
+    #[test]
+    fn remaps_discovery_bits_for_every_received_card_monster_record() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+
+        // The personal hunter record maps its low discovery bit to the Wii U
+        // display bit (0x80). A received-card slot late in card1 catches the
+        // old sparse table: its kills were present, but the offline-hall
+        // partner's Hunter's Notes rendered the monster as `????`.
+        let last_card_row = 97 * 0xE00 + 0x7C0 + 38 * 10;
+        body[last_card_row..last_card_row + 10]
+            .copy_from_slice(&[0x0E, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x00, 0x01, 0x00]);
+        // Some real received cards have a non-zero hunt count but no low
+        // discovery flag. The personal-record converter treats that count as
+        // sufficient evidence that the record is displayable; card records
+        // must use the same rule.
+        let last_card_unflagged_row = last_card_row + 10;
+        body[last_card_unflagged_row..last_card_unflagged_row + 10]
+            .copy_from_slice(&[0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00, 0x00]);
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(
+            &payload[last_card_row..last_card_row + 10],
+            &[0x00, 0x0E, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
+        );
+        assert_eq!(
+            &payload[last_card_unflagged_row..last_card_unflagged_row + 10],
+            &[0x00, 0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
         );
     }
 
