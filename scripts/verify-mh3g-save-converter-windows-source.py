@@ -51,6 +51,10 @@ def verify_release_workflow() -> None:
         "scripts/package-mh3g-save-converter-windows.ps1",
         "mh3g-save-convert-windows-x64.zip",
         "mh3g-save-convert-windows-x64.zip.sha256",
+        "MH3GSaveConverter-Setup-x64.exe",
+        "MH3GSaveConverter-Setup-x64.exe.sha256",
+        "MH3GSaveConverter-Portable-x64.exe",
+        "MH3GSaveConverter-Portable-x64.exe.sha256",
         "if: failure()",
     ):
         require(expected in workflow, f"Windows release workflow is missing {expected}")
@@ -92,6 +96,10 @@ def verify_local_packaging_script() -> None:
         "1.95.0",
         "Test-WindowsSdk",
         "Microsoft.VisualStudio.Component.Windows10SDK.19041",
+        "Get-InnoSetupCompiler",
+        "Test-InnoSetup",
+        "JRSoftware.InnoSetup",
+        "MH3GSaveConverter.iss",
         "dotnet restore",
         "cargo test --locked",
         "cargo build --locked --release",
@@ -99,6 +107,12 @@ def verify_local_packaging_script() -> None:
         "dotnet publish",
         '"--self-contained", "true"',
         "WindowsAppSDKSelfContained=true",
+        "PublishSingleFile=true",
+        "IncludeAllContentForSelfExtract=true",
+        "Publish-PortableExecutable",
+        "Build-InstallerExecutable",
+        "MH3GSaveConverter-Portable-x64.exe",
+        "MH3GSaveConverter-Setup-x64.exe",
         "mh3g-save-convert.exe",
         "Run-Converter.ps1",
         "Zone.Identifier",
@@ -164,6 +178,32 @@ def verify_local_packaging_script() -> None:
         and "mh3g-save-convert-core.exe" in script,
         "Windows packaging must reject the legacy compatibility wrapper before publishing",
     )
+    require(
+        "Test-InnoSetup" in script
+        and 'Install-WithWinget -Id "JRSoftware.InnoSetup"' in script
+        and "Inno Setup 6" in script,
+        "Windows bootstrap must install Inno Setup only when the installer compiler is absent",
+    )
+    portable_publish = script.split("function Publish-PortableExecutable", 1)[1].split(
+        "function Build-InstallerExecutable", 1
+    )[0]
+    for expected in (
+        "-p:PublishSingleFile=true",
+        "-p:IncludeAllContentForSelfExtract=true",
+        "mh3g-save-convert.exe",
+        "finally",
+        "Remove-Item -LiteralPath $embeddedSidecar",
+    ):
+        require(expected in portable_publish, f"portable Windows publish is missing {expected}")
+    installer_build = script.split("function Build-InstallerExecutable", 1)[1].split(
+        "function Test-PackagedLayout", 1
+    )[0]
+    for expected in (
+        '"/DSourceDir=$SourceDirectory"',
+        '"/DOutputDir=$artifactsRoot"',
+        '"/DAppVersion=$Version"',
+    ):
+        require(expected in installer_build, f"Inno Setup build is missing {expected}")
     require(
         '$versionLine[0] -match \'^rustc\\s+(?<version>\\d+\\.\\d+\\.\\d+)\'' in script
         and '$versionText = $Matches["version"]' in script
@@ -256,6 +296,17 @@ def main() -> int:
     for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
         element_tree.parse(APP / relative)
 
+    installer_definition = ROOT / "packaging" / "mh3g-save-convert" / "MH3GSaveConverter.iss"
+    require(installer_definition.is_file(), "Inno Setup installer definition is missing")
+    installer_text = installer_definition.read_text(encoding="utf-8")
+    for expected in (
+        "PrivilegesRequired=lowest",
+        "ArchitecturesAllowed=x64compatible",
+        "MH3GSaveConverter-Setup-x64",
+        "tools",
+    ):
+        require(expected in installer_text, f"Inno Setup definition is missing {expected}")
+
     project = read("MH3GSaveConverter.Windows.csproj")
     for expected in (
         "net8.0-windows10.0.19041.0",
@@ -263,6 +314,7 @@ def main() -> int:
         "Microsoft.WindowsAppSDK",
         "<WindowsPackageType>None</WindowsPackageType>",
         "<PlatformTarget>x64</PlatformTarget>",
+        "<IncludeInSingleFile>true</IncludeInSingleFile>",
     ):
         require(expected in project, f"project is missing {expected}")
     for artwork in (

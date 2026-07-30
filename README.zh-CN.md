@@ -59,7 +59,7 @@ hash 不变。没有模拟器运行时，它还会验证事务写入和 manifest
 
 Windows 10 1809+/Windows 11 x64 的本地 WinUI 发包不要拆成 IDE/Qoder 的多条手工命令。
 从仓库根目录运行唯一脚本即可预检 .NET 8、Rust MSVC 和 Visual Studio Build Tools/Windows
-SDK，构建并自检 WinUI + Rust sidecar ZIP：
+SDK，构建并自检 WinUI + Rust sidecar 的三种 Windows x64 形式：ZIP、每用户安装器 EXE 和可直接打开的便携 EXE：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
@@ -68,7 +68,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-s
 首次缺少依赖时才显式追加 `-Bootstrap`；它使用 `winget` 安装缺失组件，可能要求管理员批准。
 若 WinGet 的 Rustup 安装登记残留、但当前用户缺少 `rustup.exe`，同一条 bootstrap 会原地修复，
 并以官方 HTTPS bootstrapper 与其 SHA-256 sidecar 完整性校验兜底，不会删除 `.cargo` 或 `.rustup`。常规运行不会清 NuGet/Cargo 缓存；若旧版脚本曾以 `-NoPath` 把私有 .NET 8 SDK 安装到 `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`，新脚本会直接复用，避免重复下载。产物、SHA-256 与失败诊断位于 `artifacts\`，其中
-`mh3g-save-convert-windows-build-transcript.txt` 需回传首个失败命令的完整输出块。完整的
+`mh3g-save-convert-windows-build-transcript.txt` 需回传首个失败命令的完整输出块。成功会生成
+`mh3g-save-convert-windows-x64.zip`、`MH3GSaveConverter-Setup-x64.exe` 和
+`MH3GSaveConverter-Portable-x64.exe`，每个都有独立 `.sha256`；单文件便携 UI 首次启动会将内含运行时与 Rust sidecar 解压至每用户缓存。完整的
 Windows 前置条件、行为和可选参数见
 [`apps/mh3g-save-converter-windows/README.zh-CN.md`](apps/mh3g-save-converter-windows/README.zh-CN.md)。
 

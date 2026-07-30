@@ -37,10 +37,16 @@ Quit Nemessix, Azahar, and Cemu before any write or rollback. See the root
 [Chinese CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md) for
 the exact source files and transaction scope.
 
-## Release layout
+## Release formats
 
-The Windows release job publishes the native WinUI application and its x64 Rust
-sidecar together. The extracted ZIP has this relative layout:
+The one-command package build produces three Windows x64 formats from the same
+native WinUI application and its Rust sidecar:
+
+1. `artifacts\mh3g-save-convert-windows-x64.zip`: traditional portable folder; fully extract it before running `MH3GSaveConverter.exe`.
+2. `artifacts\MH3GSaveConverter-Setup-x64.exe`: per-user installer; it installs the complete folder without requiring administrator rights.
+3. `artifacts\MH3GSaveConverter-Portable-x64.exe`: one directly runnable single-file UI. It bundles the same Rust sidecar and extracts it into a per-user temporary runtime cache on first launch; it is single-file delivery, not zero extraction.
+
+Each artifact receives its own `.sha256` sidecar. The ZIP and installer keep the complete relative layout below, including the explicit CLI launcher:
 
 ```text
 MH3GSaveConverter.exe
@@ -108,6 +114,10 @@ On success the package and its diagnostics are written to:
 ```text
 artifacts\mh3g-save-convert-windows-x64.zip
 artifacts\mh3g-save-convert-windows-x64.zip.sha256
+artifacts\MH3GSaveConverter-Setup-x64.exe
+artifacts\MH3GSaveConverter-Setup-x64.exe.sha256
+artifacts\MH3GSaveConverter-Portable-x64.exe
+artifacts\MH3GSaveConverter-Portable-x64.exe.sha256
 artifacts\mh3g-save-convert.exe.sha256
 artifacts\mh3g-save-convert-windows-build-transcript.txt
 ```

@@ -33,10 +33,15 @@
 [中文 CLI 文件契约](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md) 与
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md)。
 
-## 发布包布局
+## 发布格式
 
-Windows 发布任务会把原生 WinUI 应用与 x64 Rust sidecar 一起打包。解压
-后的 ZIP 固定包含：
+一键打包会使用同一份原生 WinUI 应用与 Rust sidecar 生成三种 Windows x64 形式：
+
+1. `artifacts\mh3g-save-convert-windows-x64.zip`：传统便携文件夹；必须完整解压后运行 `MH3GSaveConverter.exe`。
+2. `artifacts\MH3GSaveConverter-Setup-x64.exe`：每用户安装器；无需管理员权限，会安装完整目录。
+3. `artifacts\MH3GSaveConverter-Portable-x64.exe`：可直接打开的单文件 UI，内含同一份 Rust sidecar；首次启动会将其解压到每用户临时运行缓存。它是单文件分发，不是零解压应用。
+
+每个产物都有各自的 `.sha256` 文件。ZIP 与安装版会保留完整的下列相对布局和显式 CLI 启动器：
 
 ```text
 MH3GSaveConverter.exe
@@ -93,6 +98,10 @@ Tools（含推荐的 Windows SDK 组件）；若电脑已有不完整的 Visual 
 ```text
 artifacts\mh3g-save-convert-windows-x64.zip
 artifacts\mh3g-save-convert-windows-x64.zip.sha256
+artifacts\MH3GSaveConverter-Setup-x64.exe
+artifacts\MH3GSaveConverter-Setup-x64.exe.sha256
+artifacts\MH3GSaveConverter-Portable-x64.exe
+artifacts\MH3GSaveConverter-Portable-x64.exe.sha256
 artifacts\mh3g-save-convert.exe.sha256
 artifacts\mh3g-save-convert-windows-build-transcript.txt
 ```
