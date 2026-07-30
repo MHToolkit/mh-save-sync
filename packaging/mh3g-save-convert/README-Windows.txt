@@ -9,8 +9,19 @@ MH3G Japanese 3DS -> Wii U/Cemu Save Converter (Windows x64)
 - 仅支持日版 MH3G 3DS 存档（0x2B profile）转换到日版 MH3G HD Cemu。
 - 这是本地、单向转换；不会上传或修改 3DS 源文件，不能从 Cemu 转回 3DS。
 - 不支持直接读取 ZIP、7z、RAR，也不会自动扫描整个存档目录。
-- 必须先把下载 artifact 和内部 ZIP 完整解压到普通本地目录。不要在 QQ/浏览器压缩包预览中运行 EXE。
+- 若选择 ZIP，必须先完整解压到普通本地目录；不要在 QQ/浏览器压缩包预览中运行 EXE。安装版和单文件便携版可直接从普通本地目录运行。
 - 执行任何受支持的 `--write`、`rollback` 或 `rollback-cec` 前，必须完全退出 Cemu、Azahar 和 Nemessix。
+
+发布格式（Windows x64）
+-----------------------
+
+每次运行仓库根目录的 `scripts\package-mh3g-save-converter-windows.ps1` 都会从同一份 WinUI 发布目录与同一份 Rust CLI sidecar 生成以下三种产物，并各自附带 `.sha256`：
+
+1. `mh3g-save-convert-windows-x64.zip`：传统便携文件夹。完整解压后运行其中的 `MH3GSaveConverter.exe`；文件夹内保留 `tools\mh3g-save-convert.exe` 和 `Run-Converter.ps1`。
+2. `MH3GSaveConverter-Setup-x64.exe`：每用户安装器。运行后安装到当前用户的 Programs 目录，可创建开始菜单/可选桌面快捷方式；不需要管理员权限。
+3. `MH3GSaveConverter-Portable-x64.exe`：单文件便携 UI。可直接双击，不需要安装，也不需要另行放置 sidecar。首次启动会把 .NET/WinUI 及已打包的 Rust sidecar 解压至用户临时运行缓存；这是单文件分发，不是“零解压”。
+
+三种形式都只支持 Windows x64。请在普通本地目录运行，不要从 QQ/浏览器压缩包预览中打开；下载后先按对应 `.sha256` 校验。单文件便携 UI 不包含 `Run-Converter.ps1`，需要命令行模式请使用 ZIP 或安装版中的完整目录。
 
 先校验下载的 ZIP（在 ZIP 和 .sha256 所在目录执行）
 --------------------------------------------------
@@ -124,8 +135,19 @@ Scope
 
 - Japanese MH3G 3DS profile 0x2B to Japanese MH3G HD Cemu only.
 - Local, one-way conversion. The 3DS source is read-only and nothing is uploaded.
-- ZIP, 7z, and RAR are not direct inputs. Extract the complete package to a normal local folder; do not run it from a QQ/browser archive preview.
+- ZIP, 7z, and RAR are not direct inputs. If using the ZIP distribution, fully extract it to a normal local folder; do not run it from a QQ/browser archive preview. The installer and single-file portable UI run directly from a normal local folder.
 - Fully stop Cemu, Azahar, and Nemessix before any supported --write, rollback, or rollback-cec operation.
+
+Windows x64 distribution formats
+---------------------------------
+
+Every run of `scripts\package-mh3g-save-converter-windows.ps1` creates the following three formats from the same WinUI release folder and the same Rust CLI sidecar. Each has a matching `.sha256` file:
+
+1. `mh3g-save-convert-windows-x64.zip`: a conventional portable folder. Fully extract it, then run `MH3GSaveConverter.exe`; the folder retains `tools\mh3g-save-convert.exe` and `Run-Converter.ps1`.
+2. `MH3GSaveConverter-Setup-x64.exe`: a per-user installer. It installs under the current user's Programs directory and can create Start menu/an optional desktop shortcut without administrator rights.
+3. `MH3GSaveConverter-Portable-x64.exe`: a single-file portable UI. Run it directly; no installation or separately placed sidecar is required. First launch extracts the .NET/WinUI runtime and bundled Rust sidecar into a per-user temporary runtime cache. It is a single-file distribution, not a zero-extraction app.
+
+All three are Windows x64 only. Run them from a normal local directory, never a QQ/browser archive preview, and verify the matching `.sha256` after download. The single-file portable UI does not carry `Run-Converter.ps1`; use the ZIP or installed complete folder when explicit CLI access is needed.
 
 Verify and start
 ----------------

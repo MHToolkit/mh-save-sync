@@ -28,11 +28,17 @@ if ([string]::IsNullOrWhiteSpace($packageDirectoryName)) {
 }
 $archive = Join-Path $artifactsRoot "mh3g-save-convert-windows-x64.zip"
 $archiveChecksum = "$archive.sha256"
+$portableStage = Join-Path $artifactsRoot "mh3g-save-convert-windows-portable-stage"
+$portableExecutable = Join-Path $artifactsRoot "MH3GSaveConverter-Portable-x64.exe"
+$portableChecksum = "$portableExecutable.sha256"
+$installerExecutable = Join-Path $artifactsRoot "MH3GSaveConverter-Setup-x64.exe"
+$installerChecksum = "$installerExecutable.sha256"
 $transcript = Join-Path $artifactsRoot "mh3g-save-convert-windows-build-transcript.txt"
 $targetTriple = "x86_64-pc-windows-msvc"
 $project = Join-Path $repoRoot "apps\mh3g-save-converter-windows\MH3GSaveConverter.Windows.csproj"
 $launcher = Join-Path $repoRoot "scripts\mh3g-windows-launcher.ps1"
 $packageReadme = Join-Path $repoRoot "packaging\mh3g-save-convert\README-Windows.txt"
+$installerScript = Join-Path $repoRoot "packaging\mh3g-save-convert\MH3GSaveConverter.iss"
 $uiReadme = Join-Path $repoRoot "apps\mh3g-save-converter-windows\README.md"
 $uiChineseReadme = Join-Path $repoRoot "apps\mh3g-save-converter-windows\README.zh-CN.md"
 $transcriptStarted = $false
@@ -231,6 +237,45 @@ function Test-RustMinimumVersion {
     }
 }
 
+function Get-InnoSetupCompiler {
+    # Inno Setup is used only to wrap the already self-contained folder into a
+    # conventional per-user installer. The portable EXE does not depend on it.
+    $candidates = @()
+    foreach ($root in @(
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)", "Process"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles", "Process")
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+        $candidates += Join-Path $root "Inno Setup 6\ISCC.exe"
+    }
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+
+    $command = Get-ExternalCommand "ISCC.exe"
+    if ($null -ne $command) {
+        return $command
+    }
+    return $null
+}
+
+function Test-InnoSetup {
+    return $null -ne (Get-InnoSetupCompiler)
+}
+
+function Get-ConverterVersion {
+    $manifest = Join-Path $repoRoot "crates\mh3g-save-convert\Cargo.toml"
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+        throw "Converter Cargo manifest is missing: $manifest"
+    }
+    $versionMatch = [regex]::Match((Get-Content -LiteralPath $manifest -Raw), '(?m)^version\s*=\s*"(?<version>[^"\r\n]+)"\s*$')
+    if (-not $versionMatch.Success) {
+        throw "Could not resolve the mh3g-save-convert package version from $manifest"
+    }
+    return $versionMatch.Groups["version"].Value
+}
+
 function Get-MissingPrerequisites {
     $missing = @()
     if (-not (Test-DotnetEightSdk)) {
@@ -250,6 +295,9 @@ function Get-MissingPrerequisites {
     }
     if (-not (Test-WindowsSdk)) {
         $missing += "Windows 10/11 SDK"
+    }
+    if (-not (Test-InnoSetup)) {
+        $missing += "Inno Setup 6"
     }
     return $missing
 }
@@ -613,6 +661,9 @@ function Install-MissingPrerequisites {
     if ($Missing -contains "Visual Studio 2022 C++ Build Tools with Windows SDK" -or $Missing -contains "Windows 10/11 SDK") {
         Install-VisualStudioBuildComponents
     }
+    if ($Missing -contains "Inno Setup 6") {
+        Install-WithWinget -Id "JRSoftware.InnoSetup"
+    }
     Refresh-ProcessPath
     Set-RustupHomesForCurrentProcess | Out-Null
     Add-RustupBinToProcessPath
@@ -657,9 +708,12 @@ function Initialize-MsvcBuildEnvironment {
 }
 
 function Assert-StageWithinArtifacts {
+    param([string]$CandidatePath = $stage)
+
+    $fullCandidatePath = [System.IO.Path]::GetFullPath($CandidatePath)
     $rootWithSeparator = $artifactsRoot.TrimEnd([char]92, [char]47) + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $stage.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "-OutputDirectory must be below $artifactsRoot so the package script cannot erase an arbitrary directory."
+    if (-not $fullCandidatePath.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "A packaging stage must be below $artifactsRoot so the package script cannot erase an arbitrary directory."
     }
 
     # GetFullPath only normalizes lexical segments; it does not resolve Windows
@@ -667,7 +721,7 @@ function Assert-StageWithinArtifacts {
     # reparse point that redirects a permitted artifacts path to a different
     # directory. Check every existing component now and again immediately
     # before deleting the staging directory.
-    $relativeStage = $stage.Substring($rootWithSeparator.Length)
+    $relativeStage = $fullCandidatePath.Substring($rootWithSeparator.Length)
     $pathChain = @($artifactsRoot)
     $current = $artifactsRoot
     foreach ($segment in ($relativeStage -split '[\\/]')) {
@@ -683,10 +737,10 @@ function Assert-StageWithinArtifacts {
         }
         $item = Get-Item -LiteralPath $candidate -Force
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "-OutputDirectory path contains a reparse point at $candidate. Refusing to delete through a junction or symlink."
+            throw "Packaging stage path contains a reparse point at $candidate. Refusing to delete through a junction or symlink."
         }
         if (-not $item.PSIsContainer) {
-            throw "-OutputDirectory path component is not a directory: $candidate"
+            throw "Packaging stage path component is not a directory: $candidate"
         }
     }
 }
@@ -731,11 +785,112 @@ function Assert-EmulatorsStoppedForRustTests {
     throw ("Close these emulator processes before the mandatory Rust test suite: {0}. No process was stopped; after they exit, rerun this exact package command. Use -SkipTests only for an isolated publish/ZIP diagnosis, never for a final distribution build." -f ($names -join ", "))
 }
 
+function Publish-PortableExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Dotnet,
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$NativeSidecar,
+        [Parameter(Mandatory = $true)][string]$PortableStageDirectory,
+        [Parameter(Mandatory = $true)][string]$PortableOutput
+    )
+
+    # The UI invokes the Rust converter from AppContext.BaseDirectory\tools.
+    # Single-file .NET applications extract content to a private cache at first
+    # start, so place the same native sidecar in the project just for this
+    # Publish invocation and ask .NET to include all content in that extraction.
+    # Restore the source tree exactly afterwards even when publishing fails.
+    $projectDirectory = Split-Path -Parent $ProjectPath
+    $projectToolsDirectory = Join-Path $projectDirectory "tools"
+    $embeddedSidecar = Join-Path $projectToolsDirectory "mh3g-save-convert.exe"
+    $backup = Join-Path ([System.IO.Path]::GetTempPath()) ("mh3g-save-convert-sidecar-" + [Guid]::NewGuid().ToString("N") + ".exe")
+    $hadExistingSidecar = Test-Path -LiteralPath $embeddedSidecar -PathType Leaf
+
+    try {
+        New-Item -ItemType Directory -Force $projectToolsDirectory | Out-Null
+        if ($hadExistingSidecar) {
+            Copy-Item -LiteralPath $embeddedSidecar -Destination $backup -Force
+        }
+        Copy-Item -LiteralPath $NativeSidecar -Destination $embeddedSidecar -Force
+
+        Assert-StageWithinArtifacts -CandidatePath $PortableStageDirectory
+        Remove-Item -LiteralPath $PortableStageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        Invoke-External -FilePath $Dotnet -Arguments @(
+            "publish", $ProjectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "true", "--no-restore",
+            "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-p:PublishSingleFile=true",
+            "-p:IncludeAllContentForSelfExtract=true", "-p:PublishReadyToRun=false", "-o", $PortableStageDirectory
+        ) -Description "WinUI portable single-file dotnet publish"
+
+        $publishedPortable = Join-Path $PortableStageDirectory "MH3GSaveConverter.exe"
+        if (-not (Test-Path -LiteralPath $publishedPortable -PathType Leaf)) {
+            throw "Portable dotnet publish completed without MH3GSaveConverter.exe. See $transcript."
+        }
+        if ((Get-Item -LiteralPath $publishedPortable).Length -le 0) {
+            throw "Portable dotnet publish produced an empty MH3GSaveConverter.exe."
+        }
+        Copy-Item -LiteralPath $publishedPortable -Destination $PortableOutput -Force
+    } finally {
+        if ($hadExistingSidecar) {
+            Copy-Item -LiteralPath $backup -Destination $embeddedSidecar -Force -ErrorAction SilentlyContinue
+        } else {
+            Remove-Item -LiteralPath $embeddedSidecar -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Build-InstallerExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallerCompiler,
+        [Parameter(Mandatory = $true)][string]$InstallerDefinition,
+        [Parameter(Mandatory = $true)][string]$SourceDirectory,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$InstallerOutput
+    )
+
+    if (-not (Test-Path -LiteralPath $InstallerDefinition -PathType Leaf)) {
+        throw "Inno Setup definition is missing: $InstallerDefinition"
+    }
+    Remove-Item -LiteralPath $InstallerOutput -Force -ErrorAction SilentlyContinue
+    Invoke-External -FilePath $InstallerCompiler -Arguments @(
+        "/Qp", "/DSourceDir=$SourceDirectory", "/DOutputDir=$artifactsRoot", "/DAppVersion=$Version", $InstallerDefinition
+    ) -Description "Inno Setup installer build"
+    if (-not (Test-Path -LiteralPath $InstallerOutput -PathType Leaf)) {
+        throw "Inno Setup completed without $InstallerOutput. See $transcript."
+    }
+    if ((Get-Item -LiteralPath $InstallerOutput).Length -le 0) {
+        throw "Inno Setup produced an empty installer executable."
+    }
+}
+
 function Test-PackagedLayout {
     param(
         [Parameter(Mandatory = $true)][string]$ArchivePath,
-        [Parameter(Mandatory = $true)][string]$PackageDirectoryName
+        [Parameter(Mandatory = $true)][string]$PackageDirectoryName,
+        [Parameter(Mandatory = $true)][string]$PortableExecutable,
+        [Parameter(Mandatory = $true)][string]$PortableChecksum,
+        [Parameter(Mandatory = $true)][string]$InstallerExecutable,
+        [Parameter(Mandatory = $true)][string]$InstallerChecksum
     )
+
+    foreach ($standaloneArtifact in @(
+        [PSCustomObject]@{ Executable = $PortableExecutable; Checksum = $PortableChecksum },
+        [PSCustomObject]@{ Executable = $InstallerExecutable; Checksum = $InstallerChecksum }
+    )) {
+        if (-not (Test-Path -LiteralPath $standaloneArtifact.Executable -PathType Leaf)) {
+            throw "Windows package self-check is missing $($standaloneArtifact.Executable)"
+        }
+        if (-not (Test-Path -LiteralPath $standaloneArtifact.Checksum -PathType Leaf)) {
+            throw "Windows package self-check is missing $($standaloneArtifact.Checksum)"
+        }
+        if ((Get-Item -LiteralPath $standaloneArtifact.Executable).Length -le 0) {
+            throw "Windows package self-check found an empty standalone executable: $($standaloneArtifact.Executable)"
+        }
+        $expectedStandaloneHash = ((Get-Content -LiteralPath $standaloneArtifact.Checksum -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+        $actualStandaloneHash = (Get-FileHash -LiteralPath $standaloneArtifact.Executable -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualStandaloneHash -ne $expectedStandaloneHash) {
+            throw "Windows package self-check found a standalone executable checksum mismatch: $($standaloneArtifact.Executable)"
+        }
+    }
 
     $verifyRoot = Join-Path $artifactsRoot ("mh3g-save-convert-windows-verify-" + [Guid]::NewGuid().ToString("N"))
     try {
@@ -840,12 +995,13 @@ try {
     if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
         throw "WinUI project is missing: $project"
     }
-    foreach ($required in @($launcher, $packageReadme, $uiReadme, $uiChineseReadme)) {
+    foreach ($required in @($launcher, $packageReadme, $installerScript, $uiReadme, $uiChineseReadme)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "Required packaging file is missing: $required"
         }
     }
     Assert-StageWithinArtifacts
+    Assert-StageWithinArtifacts -CandidatePath $portableStage
     New-Item -ItemType Directory -Force $artifactsRoot | Out-Null
     Initialize-ConsoleUtf8Encoding
     Start-Transcript -LiteralPath $transcript -Force | Out-Null
@@ -875,7 +1031,8 @@ try {
     $cargo = Get-RustToolCommand "cargo"
     $rustup = Get-RustToolCommand "rustup"
     $rustc = Get-RustToolCommand "rustc"
-    if ($null -eq $dotnet -or $null -eq $cargo -or $null -eq $rustup -or $null -eq $rustc) {
+    $innoSetup = Get-InnoSetupCompiler
+    if ($null -eq $dotnet -or $null -eq $cargo -or $null -eq $rustup -or $null -eq $rustc -or $null -eq $innoSetup) {
         throw "A required executable disappeared after preflight. Reopen 64-bit PowerShell and rerun with -Bootstrap if needed."
     }
     if (-not $SkipTests) {
@@ -946,10 +1103,24 @@ try {
         Copy-Item -LiteralPath $uiChineseReadme -Destination (Join-Path $stage "README-Windows-UI.zh-CN.md") -Force
         Copy-Item -LiteralPath $packageReadme -Destination (Join-Path $stage "README-Windows.txt") -Force
 
+        # Build all three user-facing formats from the same self-contained WinUI
+        # folder and the same native Rust sidecar. The single-file form bundles
+        # that sidecar as extracted app content; the installer wraps the folder
+        # form so its tools\ path remains intact.
+        Remove-Item -LiteralPath $portableExecutable, $portableChecksum, $installerExecutable, $installerChecksum -Force -ErrorAction SilentlyContinue
+        Publish-PortableExecutable -Dotnet $dotnet -ProjectPath $project -NativeSidecar $sidecar -PortableStageDirectory $portableStage -PortableOutput $portableExecutable
+        Write-Sha256File -FilePath $portableExecutable -OutputPath $portableChecksum -DisplayName "MH3GSaveConverter-Portable-x64.exe" | Out-Null
+
+        $converterVersion = Get-ConverterVersion
+        Build-InstallerExecutable -InstallerCompiler $innoSetup -InstallerDefinition $installerScript -SourceDirectory $stage -Version $converterVersion -InstallerOutput $installerExecutable
+        Write-Sha256File -FilePath $installerExecutable -OutputPath $installerChecksum -DisplayName "MH3GSaveConverter-Setup-x64.exe" | Out-Null
+
         Remove-Item -LiteralPath $archive, $archiveChecksum -Force -ErrorAction SilentlyContinue
         Compress-Archive -LiteralPath $stage -DestinationPath $archive -Force
         Write-Sha256File -FilePath $archive -OutputPath $archiveChecksum -DisplayName "mh3g-save-convert-windows-x64.zip" | Out-Null
-        Test-PackagedLayout -ArchivePath $archive -PackageDirectoryName $packageDirectoryName
+        Test-PackagedLayout -ArchivePath $archive -PackageDirectoryName $packageDirectoryName -PortableExecutable $portableExecutable -PortableChecksum $portableChecksum -InstallerExecutable $installerExecutable -InstallerChecksum $installerChecksum
+        Assert-StageWithinArtifacts -CandidatePath $portableStage
+        Remove-Item -LiteralPath $portableStage -Recurse -Force -ErrorAction SilentlyContinue
     } finally {
         Pop-Location
     }
@@ -957,7 +1128,11 @@ try {
     Write-Host ""
     Write-Host "Windows x64 package complete."
     Write-Host "ZIP: $archive"
-    Write-Host "SHA-256: $archiveChecksum"
+    Write-Host "ZIP SHA-256: $archiveChecksum"
+    Write-Host "Portable EXE: $portableExecutable"
+    Write-Host "Portable EXE SHA-256: $portableChecksum"
+    Write-Host "Installer EXE: $installerExecutable"
+    Write-Host "Installer EXE SHA-256: $installerChecksum"
     Write-Host "Transcript: $transcript"
 } catch {
     Write-Error ("Windows package failed: {0}" -f $_.Exception.Message)

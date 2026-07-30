@@ -80,7 +80,7 @@ never launches Cemu or opens a real MLC.
 For a Windows 10 1809+/Windows 11 x64 local WinUI package, do not split the
 build into IDE/Qoder-specific manual commands. From the repository root, the
 single package script preflights .NET 8, Rust MSVC, and Visual Studio Build
-Tools/Windows SDK, then builds and self-checks the WinUI + Rust-sidecar ZIP:
+Tools/Windows SDK, then builds and self-checks three WinUI + Rust-sidecar Windows x64 formats: the ZIP, per-user installer EXE, and direct-launch portable EXE:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-mh3g-save-converter-windows.ps1
@@ -96,8 +96,12 @@ Normal runs never clear NuGet/Cargo caches. They also reuse a valid private
 .NET 8 SDK from an earlier package version at
 `%LOCALAPPDATA%\MH3GSaveConverter\BuildTools\dotnet8\dotnet.exe`, so an SDK
 installed with `-NoPath` is not downloaded again. Artifacts, SHA-256 files, and
-a failure transcript are written beneath `artifacts\`; return the first failed
-command block in `mh3g-save-convert-windows-build-transcript.txt` from a tester. See the complete Windows contract and optional switches in
+a failure transcript are written beneath `artifacts\`:
+`mh3g-save-convert-windows-x64.zip`, `MH3GSaveConverter-Setup-x64.exe`, and
+`MH3GSaveConverter-Portable-x64.exe` each receive their own `.sha256`. The
+single-file portable UI extracts its bundled runtime and Rust sidecar to a
+per-user cache on first launch. Return the first failed command block in
+`mh3g-save-convert-windows-build-transcript.txt` from a tester. See the complete Windows contract and optional switches in
 [`apps/mh3g-save-converter-windows/README.md`](apps/mh3g-save-converter-windows/README.md).
 
 > **Read this first:** the current CLI does **not** read ZIP, 7z, or RAR

@@ -74,6 +74,10 @@ jobs:
           path: |
             artifacts/mh3g-save-convert-windows-x64.zip
             artifacts/mh3g-save-convert-windows-x64.zip.sha256
+            artifacts/MH3GSaveConverter-Setup-x64.exe
+            artifacts/MH3GSaveConverter-Setup-x64.exe.sha256
+            artifacts/MH3GSaveConverter-Portable-x64.exe
+            artifacts/MH3GSaveConverter-Portable-x64.exe.sha256
             artifacts/mh3g-save-convert.exe.sha256
             artifacts/mh3g-save-convert-windows-build-transcript.txt
           if-no-files-found: error

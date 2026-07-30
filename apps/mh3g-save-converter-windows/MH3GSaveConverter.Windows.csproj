@@ -35,6 +35,11 @@
          usable for path selection and report review until that sidecar exists. -->
     <None Update="tools\mh3g-save-convert.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <!-- The package script temporarily supplies this native sidecar before
+           single-file publish, then restores the source tree. Keep it inside
+           the bundle so IncludeAllContentForSelfExtract makes tools/ available
+           under the single-file app's extracted AppContext.BaseDirectory. -->
+      <IncludeInSingleFile>true</IncludeInSingleFile>
     </None>
   </ItemGroup>
 </Project>
