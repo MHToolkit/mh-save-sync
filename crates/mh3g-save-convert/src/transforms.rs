@@ -333,6 +333,43 @@ fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<()
     Ok(())
 }
 
+/// Apply the single authoritative cross-platform Hunter's Notes visibility
+/// mapping.
+///
+/// The three storage locations (the player's own profile, received guild-card
+/// files, and CEC/offline-hall partner cards) have different physical offsets,
+/// but they encode the same semantics: 3DS discovery/crown state at
+/// `state_offset`, plus little-endian slay/capture counters.  Wii U consumes
+/// the converted state byte and only renders a monster name when bit `0x80` is
+/// set. Keeping this rule here prevents those three import paths drifting.
+fn apply_hunter_notes_display_state(
+    source: &[u8],
+    target: &mut [u8],
+    slay_offset: usize,
+    capture_offset: usize,
+    state_offset: usize,
+) -> Result<(), ConversionError> {
+    validate_range(source, slay_offset, 2, "Hunter's Notes slay source")?;
+    validate_range(source, capture_offset, 2, "Hunter's Notes capture source")?;
+    transform_crown(source, target, state_offset)?;
+
+    let slays = u16::from_le_bytes(
+        source[slay_offset..slay_offset + 2]
+            .try_into()
+            .expect("validated Hunter's Notes slay range"),
+    );
+    let captures = u16::from_le_bytes(
+        source[capture_offset..capture_offset + 2]
+            .try_into()
+            .expect("validated Hunter's Notes capture range"),
+    );
+    if slays != 0 || captures != 0 {
+        target[state_offset] |= 0x80;
+    }
+
+    Ok(())
+}
+
 fn apply_guild_card_monster_log_corrections(
     source: &[u8],
     target: &mut [u8],
@@ -365,24 +402,13 @@ fn apply_guild_card_monster_log_slot_corrections(
             copy_reversed(source, target, record_start + relative, 2)?;
         }
 
-        // Wii U uses bit 0x80 to decide whether to show a monster name, while
-        // 3DS writes the equivalent discovery bit as 0x01. Reapply the same
-        // conversion and non-zero hunt fallback used by the personal Hunter's
-        // Notes for all received-card rows, including offline-hall partners.
-        transform_crown(source, target, record_start + 8)?;
-        let slays = u16::from_le_bytes(
-            source[record_start..record_start + 2]
-                .try_into()
-                .expect("validated card monster-log slay range"),
-        );
-        let captures = u16::from_le_bytes(
-            source[record_start + 2..record_start + 4]
-                .try_into()
-                .expect("validated card monster-log capture range"),
-        );
-        if slays != 0 || captures != 0 {
-            target[record_start + 8] |= 0x80;
-        }
+        apply_hunter_notes_display_state(
+            source,
+            target,
+            record_start,
+            record_start + 2,
+            record_start + 8,
+        )?;
     }
 
     Ok(())
@@ -706,16 +732,14 @@ fn apply_confirmed_numeric_and_record_corrections(
             copy_reversed(source, target, offset, 2)?;
         }
 
-        let slay = u16::from_le_bytes(source[slay_offset..slay_offset + 2].try_into().unwrap());
-        let capture = u16::from_le_bytes(
-            source[capture_offset..capture_offset + 2]
-                .try_into()
-                .unwrap(),
-        );
         let discovery_offset = 0x81B4 + index * 10 + 8;
-        if slay != 0 || capture != 0 || source[discovery_offset] & 0x01 != 0 {
-            target[discovery_offset] |= 0x80;
-        }
+        apply_hunter_notes_display_state(
+            source,
+            target,
+            slay_offset,
+            capture_offset,
+            discovery_offset,
+        )?;
     }
 
     let deviljho_linked_size_offset = 0x5984 + DEVILJHO_LINKED_SIZE_CACHE_ID * 4;
@@ -896,8 +920,9 @@ mod tests {
     };
 
     use super::{
-        EQUIPMENT_BOX_START, EVENT_FLAG_START, QUEST_COMPLETION_START, SECOND_RGBA_OFFSET,
-        apply_arena_records, apply_endian_swaps, apply_japanese_wiiu_corrections,
+        EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE, MONSTER_IDS,
+        QUEST_COMPLETION_START, SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
+        apply_japanese_wiiu_corrections, apply_japanese_wiiu_guild_card_slot_corrections,
         apply_monster_discovery,
     };
 
@@ -1099,6 +1124,43 @@ mod tests {
             112
         );
         assert_ne!(target[discovery_offset] & 0x80, 0);
+    }
+
+    #[test]
+    fn hunter_notes_state_mapping_is_shared_by_personal_and_received_cards() {
+        const MONSTER_INDEX: usize = 2;
+        const MONSTER_ID: usize = 0x2D;
+        const SOURCE_STATE: u8 = 0x0E;
+        const EXPECTED_WIIU_STATE: u8 = 0x68;
+
+        // The personal record stores counters and display state in separate
+        // tables; a received card stores them together in a ten-byte row.
+        // The physical offsets differ, but the crown/discovery mapping must
+        // be identical across the personal card and an offline-hall partner.
+        let mut personal_source = vec![0_u8; PAYLOAD_SIZE];
+        let personal_state_offset = 0x81B4 + MONSTER_INDEX * 10 + 8;
+        personal_source[personal_state_offset] = SOURCE_STATE;
+        let mut personal_target = personal_source.clone();
+        apply_japanese_wiiu_corrections(&personal_source, &mut personal_target).unwrap();
+
+        let mut received_source = vec![0_u8; GUILD_CARD_SLOT_SIZE];
+        let received_state_offset = 0x7C0 + MONSTER_INDEX * 10 + 8;
+        received_source[received_state_offset] = SOURCE_STATE;
+        let mut received_target = received_source.clone();
+        apply_japanese_wiiu_guild_card_slot_corrections(&received_source, &mut received_target)
+            .unwrap();
+
+        assert_eq!(
+            personal_target[personal_state_offset], EXPECTED_WIIU_STATE,
+            "personal guild card"
+        );
+        assert_eq!(
+            received_target[received_state_offset], EXPECTED_WIIU_STATE,
+            "received/black-slave guild card"
+        );
+        // Keep the test's selected personal monster tied to the record order
+        // rather than silently relying on an unrelated cache row.
+        assert_eq!(MONSTER_IDS[MONSTER_INDEX], MONSTER_ID);
     }
 
     #[test]
