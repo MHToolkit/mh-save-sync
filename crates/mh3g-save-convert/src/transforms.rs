@@ -10,6 +10,7 @@ use crate::{
     },
     profile::PAYLOAD_SIZE,
     progress::remap_quest_completion,
+    revision::ConverterRevision,
     transform_table::{ARENA_RECORD_OFFSETS, MONSTER_DISCOVERY_OFFSETS, SWAP_SPANS},
 };
 
@@ -375,9 +376,15 @@ fn apply_hunter_notes_display_state(
 fn apply_guild_card_monster_log_corrections(
     source: &[u8],
     target: &mut [u8],
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     for slot in 0..GUILD_CARD_SLOT_COUNT {
-        apply_guild_card_monster_log_slot_corrections(source, target, slot * GUILD_CARD_SLOT_SIZE)?;
+        apply_guild_card_monster_log_slot_corrections(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE,
+            revision,
+        )?;
     }
 
     Ok(())
@@ -392,6 +399,7 @@ fn apply_guild_card_monster_log_slot_corrections(
     source: &[u8],
     target: &mut [u8],
     slot_start: usize,
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
         let record_start =
@@ -404,13 +412,15 @@ fn apply_guild_card_monster_log_slot_corrections(
             copy_reversed(source, target, record_start + relative, 2)?;
         }
 
-        apply_hunter_notes_display_state(
-            source,
-            target,
-            record_start,
-            record_start + 2,
-            record_start + 8,
-        )?;
+        if revision >= ConverterRevision::V0_0_5 {
+            apply_hunter_notes_display_state(
+                source,
+                target,
+                record_start,
+                record_start + 2,
+                record_start + 8,
+            )?;
+        }
     }
 
     Ok(())
@@ -574,6 +584,18 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
+    apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
+        source,
+        target,
+        ConverterRevision::LATEST,
+    )
+}
+
+pub(crate) fn apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
+    source: &[u8],
+    target: &mut [u8],
+    revision: ConverterRevision,
+) -> Result<(), ConversionError> {
     if source.len() != GUILD_CARD_SLOT_SIZE || target.len() != GUILD_CARD_SLOT_SIZE {
         return Err(ConversionError::InvalidSave(format!(
             "MH3G guild-card slot must be {GUILD_CARD_SLOT_SIZE} bytes, got source {} and target {}",
@@ -595,12 +617,14 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         transform_arena4(source, target, offset)?;
     }
 
-    apply_arena_record_table(
-        source,
-        target,
-        GUILD_CARD_ARENA_RECORD_START,
-        GUILD_CARD_ARENA_RECORD_COUNT,
-    )?;
+    if revision >= ConverterRevision::V0_0_4 {
+        apply_arena_record_table(
+            source,
+            target,
+            GUILD_CARD_ARENA_RECORD_START,
+            GUILD_CARD_ARENA_RECORD_COUNT,
+        )?;
+    }
     for &offset in MEOW_CARD_SWAP2
         .iter()
         .filter(|&&offset| offset < GUILD_CARD_SLOT_SIZE)
@@ -638,7 +662,7 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         copy_reversed(source, target, offset, 4)?;
     }
 
-    apply_guild_card_monster_log_slot_corrections(source, target, 0)?;
+    apply_guild_card_monster_log_slot_corrections(source, target, 0, revision)?;
 
     Ok(())
 }
@@ -652,6 +676,20 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
     kind: GuildCardBodyKind,
     source: &[u8],
     target: &mut [u8],
+) -> Result<(), ConversionError> {
+    apply_japanese_wiiu_guild_card_corrections_for_revision(
+        kind,
+        source,
+        target,
+        ConverterRevision::LATEST,
+    )
+}
+
+pub(crate) fn apply_japanese_wiiu_guild_card_corrections_for_revision(
+    kind: GuildCardBodyKind,
+    source: &[u8],
+    target: &mut [u8],
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     let (expected_size, swap4, arena4, swap2, crown): (
         usize,
@@ -701,8 +739,10 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
         apply_guild_card_hr_corrections(source, target)?;
         apply_guild_card_equipment_corrections(source, target)?;
         apply_guild_card_weapon_usage_corrections(source, target)?;
-        apply_guild_card_monster_log_corrections(source, target)?;
-        apply_guild_card_arena_corrections(source, target)?;
+        apply_guild_card_monster_log_corrections(source, target, revision)?;
+        if revision >= ConverterRevision::V0_0_4 {
+            apply_guild_card_arena_corrections(source, target)?;
+        }
         apply_guild_card_metadata_corrections(source, target)?;
     }
 
@@ -712,6 +752,7 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
 fn apply_confirmed_numeric_and_record_corrections(
     source: &[u8],
     target: &mut [u8],
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     for candidate in 0..OFFLINE_HUNTER_CANDIDATE_ID_COUNT {
         copy_reversed(
@@ -735,13 +776,26 @@ fn apply_confirmed_numeric_and_record_corrections(
         }
 
         let discovery_offset = 0x81B4 + index * 10 + 8;
-        apply_hunter_notes_display_state(
-            source,
-            target,
-            slay_offset,
-            capture_offset,
-            discovery_offset,
-        )?;
+        if revision >= ConverterRevision::V0_0_5 {
+            apply_hunter_notes_display_state(
+                source,
+                target,
+                slay_offset,
+                capture_offset,
+                discovery_offset,
+            )?;
+        } else {
+            let slays =
+                u16::from_le_bytes(source[slay_offset..slay_offset + 2].try_into().unwrap());
+            let captures = u16::from_le_bytes(
+                source[capture_offset..capture_offset + 2]
+                    .try_into()
+                    .unwrap(),
+            );
+            if slays != 0 || captures != 0 || source[discovery_offset] & 0x01 != 0 {
+                target[discovery_offset] |= 0x80;
+            }
+        }
     }
 
     let deviljho_linked_size_offset = 0x5984 + DEVILJHO_LINKED_SIZE_CACHE_ID * 4;
@@ -800,6 +854,7 @@ fn apply_confirmed_numeric_and_record_corrections(
 fn apply_shakalaka_companion_corrections(
     source: &[u8],
     target: &mut [u8],
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     for companion in 0..SHAKALAKA_RECORD_COUNT {
         let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
@@ -807,15 +862,22 @@ fn apply_shakalaka_companion_corrections(
         for relative in (0..SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
             copy_reversed(source, target, record_start + relative, 4)?;
         }
-        for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
+        let scalar_end = if revision == ConverterRevision::V0_0_4 {
+            SHAKALAKA_LAMP_MASK_MASTERY_START + 2
+        } else {
+            SHAKALAKA_MASK_STATE_START
+        };
+        for relative in (SHAKALAKA_U32_HEADER_SIZE..scalar_end).step_by(2) {
             copy_reversed(source, target, record_start + relative, 2)?;
         }
-        copy_reversed(
-            source,
-            target,
-            record_start + SHAKALAKA_LAMP_MASK_MASTERY_START,
-            2,
-        )?;
+        if revision >= ConverterRevision::V0_0_6 {
+            copy_reversed(
+                source,
+                target,
+                record_start + SHAKALAKA_LAMP_MASK_MASTERY_START,
+                2,
+            )?;
+        }
     }
 
     Ok(())
@@ -825,6 +887,14 @@ fn apply_shakalaka_companion_corrections(
 pub fn apply_japanese_wiiu_corrections(
     source: &[u8],
     target: &mut [u8],
+) -> Result<(), ConversionError> {
+    apply_japanese_wiiu_corrections_for_revision(source, target, ConverterRevision::LATEST)
+}
+
+pub(crate) fn apply_japanese_wiiu_corrections_for_revision(
+    source: &[u8],
+    target: &mut [u8],
+    revision: ConverterRevision,
 ) -> Result<(), ConversionError> {
     validate_payload_size(source)?;
     validate_payload_size(target)?;
@@ -893,12 +963,14 @@ pub fn apply_japanese_wiiu_corrections(
     for offset in MEOW_USER_OFFICIAL_FIX_ARENA4 {
         transform_arena4(source, target, offset)?;
     }
-    apply_arena_record_table(
-        source,
-        target,
-        USER_ARENA_RECORD_START,
-        USER_ARENA_RECORD_COUNT,
-    )?;
+    if revision >= ConverterRevision::V0_0_4 {
+        apply_arena_record_table(
+            source,
+            target,
+            USER_ARENA_RECORD_START,
+            USER_ARENA_RECORD_COUNT,
+        )?;
+    }
     for offset in MEOW_USER_OFFICIAL_FIX_COPY1 {
         target[offset] = source[offset];
     }
@@ -906,7 +978,9 @@ pub fn apply_japanese_wiiu_corrections(
     // The compatibility operation list covers only a subset of the numeric
     // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix and the
     // isolated Lamp Mask mastery scalar while preserving the packed state.
-    apply_shakalaka_companion_corrections(source, target)?;
+    if revision >= ConverterRevision::V0_0_4 {
+        apply_shakalaka_companion_corrections(source, target, revision)?;
+    }
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5
     // copies them unchanged, while the 3DS body stores their logical values in
@@ -915,7 +989,7 @@ pub fn apply_japanese_wiiu_corrections(
     remap_quest_completion(source, target)?;
     copy_reversed(source, target, SECOND_RGBA_OFFSET, 4)?;
     apply_offline_hunter_roster_corrections(source, target)?;
-    apply_confirmed_numeric_and_record_corrections(source, target)?;
+    apply_confirmed_numeric_and_record_corrections(source, target, revision)?;
 
     Ok(())
 }

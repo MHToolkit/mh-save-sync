@@ -156,6 +156,34 @@
                         <TextBlock Text="{Binding Copy.CoreSectionDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
 
                         <StackPanel Spacing="7">
+                            <TextBlock Text="{Binding Copy.ConversionModeTitle}" FontWeight="SemiBold" />
+                            <ComboBox x:Name="ConversionModePicker"
+                                      MinWidth="280"
+                                      HorizontalAlignment="Left"
+                                      SelectionChanged="ConversionModePicker_SelectionChanged">
+                                <ComboBoxItem Tag="new" Content="{Binding Copy.ConversionModeNew}" />
+                                <ComboBoxItem Tag="repair" Content="{Binding Copy.ConversionModeRepair}" />
+                            </ComboBox>
+                            <Border Padding="12" Background="#FFF3F6FA" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
+                                <TextBlock Text="{Binding ConversionModeDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            </Border>
+                            <TextBlock Text="{Binding Copy.RepairVersionTitle}" FontWeight="SemiBold" />
+                            <ComboBox x:Name="RepairVersionPicker"
+                                      MinWidth="220"
+                                      HorizontalAlignment="Left"
+                                      IsEnabled="{Binding IsRepairMode}"
+                                      SelectionChanged="RepairVersionPicker_SelectionChanged">
+                                <ComboBoxItem Tag="auto" Content="{Binding Copy.RepairVersionAutomatic}" />
+                                <ComboBoxItem Tag="0.0.3" Content="0.0.3" />
+                                <ComboBoxItem Tag="0.0.4" Content="0.0.4" />
+                                <ComboBoxItem Tag="0.0.5" Content="0.0.5" />
+                                <ComboBoxItem Tag="0.0.6" Content="0.0.6" />
+                            </ComboBox>
+                            <TextBlock Text="{Binding Copy.RepairVersionHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding RepairDetectionSummary}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="7">
                             <TextBlock Text="{Binding Copy.SaveSlot}" FontWeight="SemiBold" />
                             <ComboBox ItemsSource="{Binding SaveSlots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}" HorizontalAlignment="Left" MinWidth="150" />
                             <TextBlock Text="{Binding Copy.SaveSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />

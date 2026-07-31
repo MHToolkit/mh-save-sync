@@ -329,6 +329,76 @@ If a target existed, `--write` creates
 `.user2.mh3g-install-history-<sha256>.json`. Keep the manifest until manual
 Cemu validation succeeds.
 
+#### `repair-converted` — repair a played save created by an older converter
+
+```text
+mh3g-save-convert repair-converted <original-3DS-user#> --current <current-Cemu-user#> \
+  [--source-extdata-dir <original-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  [--dry-run | --write --expected-source-set-sha256 <SHA256> \
+    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+```
+
+Use this command when a save was converted with 0.0.3 through 0.0.6 and then
+played further on Wii U/Cemu. It does not replace the current save with the old
+3DS state. For each known historical conversion field it compares the older
+expected value, the current value, and the 0.0.7 expected value. Only fields
+still equal to the old result are repaired; complete fields changed on Wii U
+are preserved and reported as conflicts. Current HR, equipment, materials,
+storage, quest progress, farm, fleet, and other later gameplay therefore remain
+owned by the current Cemu save.
+
+The CLI requires two exact, same-numbered `user1`, `user2`, or `user3` files.
+The native macOS and Windows workbenches may accept a file or its direct parent
+directory, but they still resolve and pass one exact file to the CLI. To repair
+guild cards, `--source-extdata-dir` must be the complete 3DS
+`.../00000481/user` directory with all eight source files, and the current
+`user#` parent must contain all eight same-named Cemu files. Version 0.0.7
+field-repairs `user#`, `card1`, `card2`, `card3`, and `cardbox`;
+`quest1` through `quest4` participate in set validation but remain
+byte-identical. `system`, `cec`, `phrase1` through `phrase3`, and unknown files
+are not read or written by this command.
+
+Start with a read-only preview:
+
+```bash
+REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+  --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
+```
+
+If the top-level `detection.confidence` is `ambiguous`, do not write. Confirm
+the original version from its `candidates`, then repeat Dry Run with
+`--from-version`. Every selected component shares this one revision decision;
+the converter never repairs `user#` and `card*` as different historical
+releases. Detection cannot read an embedded converter version because older
+releases did not store a trustworthy marker. A write must reuse all three set
+hashes from that final Dry Run:
+
+```bash
+SOURCE_SET_SHA256=$(jq -er '.source_set_sha256' <<<"$REPAIR_JSON")
+CURRENT_SET_SHA256=$(jq -er '.current_set_sha256' <<<"$REPAIR_JSON")
+PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
+
+"${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+  --source-extdata-dir "$EXTRAS_SOURCE" \
+  --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
+  --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
+  --expected-preview-sha256 "$PREVIEW_SHA256" \
+  --write
+```
+
+If Dry Run used `--from-version`, pass the same value to the write. Any source,
+current target, or preview change between the two steps fails closed. A
+successful write returns a coordinator manifest named
+`.mh3g-compatibility-repair-<UUID>.json`, covering the core slot and optional
+guild-card subtransactions. Roll it back with:
+
+```bash
+"${CLI[@]}" rollback-repair --manifest "$COMPATIBILITY_MANIFEST"
+```
+
+Omit `--source-extdata-dir` for a core-only repair. A `no-changes` report means
+the selected scope needed no write, so no empty coordinator manifest is made.
+
 #### `convert-system` — convert shared system data
 
 ```text

@@ -13,9 +13,12 @@
   `%LOCALAPPDATA%\MHToolkit\MH3GSaveConverter\settings.json`。
 - 不扫描 SD 卡、MLC、ZIP、7z、RAR 或任意存档文件夹。所有输入都必须由用户
   选择准确文件或目录。
-- 核心槽位流程固定为 `inspect` -> `convert --dry-run` -> 最终 SHA-256
-  复核 -> `convert --write`。写入前有确认对话框，成功后会记录 CLI 输出的
-  manifest，回滚只能使用该 manifest。
+- 全新转换流程固定为 `inspect` -> `convert --dry-run` -> 最终 SHA-256
+  复核 -> `convert --write`。修复模式则使用原始 3DS `user#`、当前同槽位
+  Cemu `user#` 与可选的完整 3DS ExtData，调用 `repair-converted`。自动检测
+  结果为歧义时，界面会要求选择 0.0.3 至 0.0.6 后重新 Dry Run。
+- 写入前有确认对话框。普通转换记录单文件 manifest；兼容修复记录
+  `.mh3g-compatibility-repair-<UUID>.json`，并通过 `rollback-repair` 总体回滚。
 - C# 仅用 `ProcessStartInfo.ArgumentList` 逐个传递 argv，且
   `UseShellExecute = false`；它只解析 CLI 的 JSON stdout，不拼接 shell 命令，
   也不重复实现转换逻辑。
@@ -23,10 +26,10 @@
   回滚链路。写入会绑定紧接着的 Dry Run 返回的聚合
   source_record_set_sha256 与 target_sha256_before，邮箱或缓存变化时会
   失败关闭。选择核心槽位不会自动打开 CEC。
-- `system` 与 ExtData（`card*`、`cardbox`、`quest*`）仍属于独立 CLI
-  事务。当前首版 Windows 外壳不会猜测 Cemu MLC 目录，也不会静默安装
-  ExtData 组件组。在 Windows 上，ExtData 转换可以预览并生成暂存文件，
-  但在后端具备等价的持久目录元数据和原子交换事务前，多文件安装与回滚会保持不可用。
+- `system` 与普通 ExtData 暂存/安装仍是显式事务。Windows 后端使用
+  `ReplaceFileW`、manifest 绑定备份和持久恢复日志安装完整 ExtData 组件组；
+  界面不会猜测 Cemu MLC 目录或静默安装。兼容修复模式只字段级更新仍保持旧版
+  转换结果的 `user#` 与公会名片字段，当前 `quest1` 至 `quest4` 保持原字节。
 
 执行写入或回滚前，必须退出 Nemessix、Azahar 和 Cemu。准确源文件、目标范围
 及事务边界参见根目录的

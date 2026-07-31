@@ -14,7 +14,8 @@ struct ComponentSelectionView: View {
             subtitle: ConverterCopy.text("Components.Subtitle", language: language)
         ) {
             Form {
-                Section {
+                if workflow.mode == .newConversion {
+                    Section {
                     Toggle(ConverterCopy.text("Components.System", language: language), isOn: binding(\.includeSystem))
                     if workflow.components.includeSystem {
                         SelectedPathRow(
@@ -32,8 +33,9 @@ struct ComponentSelectionView: View {
                             chooseSystemTarget()
                         }
                     }
-                } footer: {
-                    Text(ConverterCopy.text("Components.SystemFooter", language: language))
+                    } footer: {
+                        Text(ConverterCopy.text("Components.SystemFooter", language: language))
+                    }
                 }
 
                 Section {
@@ -48,17 +50,23 @@ struct ComponentSelectionView: View {
                         enabled: workflow.components.includeGuildCards,
                         language: language
                     )
-                    Toggle(ConverterCopy.text("Components.Quests", language: language), isOn: binding(\.includeQuests))
-                    Text(ConverterCopy.text("Components.QuestsDetail", language: language))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 6)
-                    GroupScopeCaption(
-                        image: "scroll",
-                        names: ExtraGroup.quests.componentNames.joined(separator: " · "),
-                        enabled: workflow.components.includeQuests,
-                        language: language
-                    )
+                    if workflow.mode == .newConversion {
+                        Toggle(ConverterCopy.text("Components.Quests", language: language), isOn: binding(\.includeQuests))
+                        Text(ConverterCopy.text("Components.QuestsDetail", language: language))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 6)
+                        GroupScopeCaption(
+                            image: "scroll",
+                            names: ExtraGroup.quests.componentNames.joined(separator: " · "),
+                            enabled: workflow.components.includeQuests,
+                            language: language
+                        )
+                    } else {
+                        Text(ConverterCopy.text("Components.RepairExtData", language: language))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if !workflow.components.selectedGroups.isEmpty {
                         SelectedPathRow(
                             title: ConverterCopy.text("Components.ExtDataSource", language: language),
@@ -67,19 +75,21 @@ struct ComponentSelectionView: View {
                         ) {
                             chooseExtraSource()
                         }
-                        SelectedPathRow(
-                            title: ConverterCopy.text("Components.Staging", language: language),
-                            value: workflow.components.extraStagingDirectory,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
-                        ) {
-                            chooseExtraStaging()
-                        }
-                        SelectedPathRow(
-                            title: ConverterCopy.text("Components.Target", language: language),
-                            value: workflow.components.extraTargetDirectory,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
-                        ) {
-                            chooseExtraTarget()
+                        if workflow.mode == .newConversion {
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Components.Staging", language: language),
+                                value: workflow.components.extraStagingDirectory,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseExtraStaging()
+                            }
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Components.Target", language: language),
+                                value: workflow.components.extraTargetDirectory,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseExtraTarget()
+                            }
                         }
                     }
                 } footer: {

@@ -6,6 +6,8 @@ import Foundation
 public enum ConverterOperation: String, CaseIterable, Codable, Sendable {
     case inspect
     case convert
+    case repairConverted = "repair-converted"
+    case rollbackRepair = "rollback-repair"
     case convertSystem = "convert-system"
     case convertExtras = "convert-extras"
     case installExtras = "install-extras"
@@ -13,6 +15,22 @@ public enum ConverterOperation: String, CaseIterable, Codable, Sendable {
     case rollback
     case rollbackExtras = "rollback-extras"
     case rollbackCEC = "rollback-cec"
+}
+
+public enum ConversionMode: String, CaseIterable, Identifiable, Sendable {
+    case newConversion
+    case repairConverted
+
+    public var id: String { rawValue }
+}
+
+public enum HistoricalConverterRevision: String, CaseIterable, Identifiable, Codable, Sendable {
+    case v0_0_3 = "0.0.3"
+    case v0_0_4 = "0.0.4"
+    case v0_0_5 = "0.0.5"
+    case v0_0_6 = "0.0.6"
+
+    public var id: String { rawValue }
 }
 
 public enum WorkflowState: String, Equatable, Sendable {
@@ -234,6 +252,34 @@ public struct DryRunFingerprint: Equatable, Sendable {
     }
 }
 
+public struct RepairDryRunFingerprint: Equatable, Sendable {
+    public let source: URL
+    public let current: URL
+    public let extDataSource: URL?
+    public let fromVersion: HistoricalConverterRevision?
+    public let sourceSetSHA256: String
+    public let currentSetSHA256: String
+    public let previewSHA256: String
+
+    public init(
+        source: URL,
+        current: URL,
+        extDataSource: URL?,
+        fromVersion: HistoricalConverterRevision?,
+        sourceSetSHA256: String,
+        currentSetSHA256: String,
+        previewSHA256: String
+    ) {
+        self.source = source.standardizedFileURL
+        self.current = current.standardizedFileURL
+        self.extDataSource = extDataSource?.standardizedFileURL
+        self.fromVersion = fromVersion
+        self.sourceSetSHA256 = sourceSetSHA256
+        self.currentSetSHA256 = currentSetSHA256
+        self.previewSHA256 = previewSHA256
+    }
+}
+
 /// `system` is a distinct 3DS/Wii U file pair, so it must retain its own
 /// authorization instead of borrowing the selected `user#` slot fingerprint.
 public struct SystemDryRunFingerprint: Equatable, Sendable {
@@ -415,13 +461,20 @@ public struct ConverterReport: Decodable, Sendable {
     public let groups: [ExtraGroup]?
     public let stagingSetSHA256: String?
     public let targetSetSHA256Before: String?
+    public let sourceSetSHA256: String?
+    public let currentSetSHA256: String?
+    public let previewSHA256: String?
+    public let detection: ConverterRevisionDetection?
+    public let manifests: [String]?
+    public let compatibilityManifest: String?
     public let output: String?
     public let backup: String?
     public let manifest: String?
     public let stderr: String?
 
     enum CodingKeys: String, CodingKey {
-        case operation, status, profile, size, hashes, output, backup, manifest, stderr, components, groups
+        case operation, status, profile, size, hashes, output, backup, manifest, stderr, components, groups, manifests, detection
+        case compatibilityManifest = "compatibility_manifest"
         case sourceSHA256 = "source_sha256"
         case targetSHA256Before = "target_sha256_before"
         case targetSHA256After = "target_sha256_after"
@@ -429,6 +482,9 @@ public struct ConverterReport: Decodable, Sendable {
         case sourceRecordSetSHA256 = "source_record_set_sha256"
         case stagingSetSHA256 = "staging_set_sha256"
         case targetSetSHA256Before = "target_set_sha256_before"
+        case sourceSetSHA256 = "source_set_sha256"
+        case currentSetSHA256 = "current_set_sha256"
+        case previewSHA256 = "preview_sha256"
     }
 
     public func hash(named name: String) -> String? {
@@ -443,20 +499,27 @@ public struct ConverterReport: Decodable, Sendable {
 
 public struct ConverterExtraComponent: Decodable, Sendable {
     public let component: String
-    public let sourceSHA256: String
-    public let outputSHA256: String
+    public let sourceSHA256: String?
+    public let outputSHA256: String?
+    public let detection: ConverterRevisionDetection?
 
     enum CodingKeys: String, CodingKey {
-        case component
+        case component, detection
         case sourceSHA256 = "source_sha256"
         case outputSHA256 = "output_sha256"
     }
 
-    public func fingerprint() -> ExtraComponentFingerprint {
-        ExtraComponentFingerprint(
+    public func fingerprint() -> ExtraComponentFingerprint? {
+        guard let sourceSHA256, let outputSHA256 else { return nil }
+        return ExtraComponentFingerprint(
             component: component,
             sourceSHA256: sourceSHA256,
             outputSHA256: outputSHA256
         )
     }
+}
+
+public struct ConverterRevisionDetection: Decodable, Sendable {
+    public let confidence: String
+    public let candidates: [HistoricalConverterRevision]
 }

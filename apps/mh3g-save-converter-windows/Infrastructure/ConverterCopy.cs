@@ -55,6 +55,15 @@ public sealed class ConverterCopy : ObservableObject
     public string HeroSafety => Text(nameof(HeroSafety));
     public string ArtworkSource => Text(nameof(ArtworkSource));
     public string ArtworkTarget => Text(nameof(ArtworkTarget));
+    public string ConversionModeTitle => Text(nameof(ConversionModeTitle));
+    public string ConversionModeNew => Text(nameof(ConversionModeNew));
+    public string ConversionModeRepair => Text(nameof(ConversionModeRepair));
+    public string ConversionModeNewDescription => Text(nameof(ConversionModeNewDescription));
+    public string ConversionModeRepairDescription => Text(nameof(ConversionModeRepairDescription));
+    public string RepairVersionTitle => Text(nameof(RepairVersionTitle));
+    public string RepairVersionAutomatic => Text(nameof(RepairVersionAutomatic));
+    public string RepairVersionHint => Text(nameof(RepairVersionHint));
+    public string RepairVersionRequired => Text(nameof(RepairVersionRequired));
     public string CoreSectionTitle => Text(nameof(CoreSectionTitle));
     public string CoreSectionDescription => Text(nameof(CoreSectionDescription));
     public string SaveSlot => Text(nameof(SaveSlot));
@@ -153,6 +162,10 @@ public sealed class ConverterCopy : ObservableObject
     public string DescribeResolvedSource(string path) => string.Format(Text("ResolvedSource"), path);
     public string DescribeResolvedTarget(string path) => string.Format(Text("ResolvedTarget"), path);
     public string DescribeResolvedExtData(string path) => string.Format(Text("ResolvedExtData"), path);
+    public string DescribeRepairVersionAmbiguous(string candidates) =>
+        string.Format(Text("RepairVersionAmbiguous"), candidates);
+    public string DescribeRepairVersionDetected(string candidates) =>
+        string.Format(Text("RepairVersionDetected"), candidates);
     public string DescribePathError(SavePathResolutionError error) => Text($"PathError_{error}");
 
     private string Text(string key)
@@ -192,6 +205,17 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(HeroSafety)] = "No archive discovery. No cloud upload. No recursive MLC overwrite.",
         [nameof(ArtworkSource)] = "Source file or folder",
         [nameof(ArtworkTarget)] = "One resolved target",
+        [nameof(ConversionModeTitle)] = "Conversion mode",
+        [nameof(ConversionModeNew)] = "New conversion",
+        [nameof(ConversionModeRepair)] = "Repair an already converted save",
+        [nameof(ConversionModeNewDescription)] = "Create a Wii U / Cemu slot from an original Japanese 3DS user# file.",
+        [nameof(ConversionModeRepairDescription)] = "Already converted? Add the original 3DS user# and the latest matching Wii U / Cemu user# that you have continued playing. The repair keeps later Wii U progress and only updates fields that still match a supported older converter. To repair received guild cards and offline partners too, enable Guild cards below and select the original 3DS ExtData user directory.",
+        [nameof(RepairVersionTitle)] = "Original converter version",
+        [nameof(RepairVersionAutomatic)] = "Detect automatically",
+        [nameof(RepairVersionHint)] = "Keep automatic detection unless Dry Run reports multiple incompatible candidates. Choosing a version invalidates the previous preview and requires another Dry Run.",
+        [nameof(RepairVersionRequired)] = "Choose one detected converter version and run Dry Run again",
+        ["RepairVersionAmbiguous"] = "Dry Run found incompatible candidates: {0}. Select the version used originally, then run Dry Run again.",
+        ["RepairVersionDetected"] = "Detection is safe to apply automatically. Matching revision range: {0}.",
         [nameof(CoreSectionTitle)] = "Core slot",
         [nameof(CoreSectionDescription)] = "Choose one user# slot. A source folder resolves only its direct child; an output folder resolves to that same user# name.",
         [nameof(SaveSlot)] = "Save slot",
@@ -237,7 +261,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(WriteCec)] = "Write experimental CEC",
         [nameof(RollbackCec)] = "Rollback CEC manifest",
         [nameof(ExtDataNotice)] = "ExtData is optional. Choose its exact user directory (or only its direct 00000481 parent). Staging always converts the complete eight-file set; the group checkboxes do not filter that output and select groups for the read-only target preview.",
-        [nameof(ExtDataInstallUnavailable)] = "Windows can stage the complete ExtData set and preview selected groups read-only, but it cannot safely install or roll back multi-file card/quest groups yet. Core user# and system writes are unaffected.",
+        [nameof(ExtDataInstallUnavailable)] = "Windows installs complete ExtData groups through the Rust sidecar's recovery journal and ReplaceFileW-backed transaction. The emulator must remain closed.",
         [nameof(ResultTitle)] = "Structured report",
         [nameof(ResultEmpty)] = "Run an inspection or Dry Run to see the CLI JSON report here.",
         [nameof(OperationHistory)] = "This session",
@@ -280,12 +304,12 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(ExtDataSource)] = "3DS ExtData user directory",
         ["ExtDataSourceHint"] = "Choose .../extdata/00000000/00000481/user, or only its direct 00000481 parent. Do not choose an SDMC or MLC root.",
         [nameof(StagingDirectory)] = "Staging directory",
-        [nameof(ExtDataTarget)] = "Cemu ExtData target directory (read-only preview only)",
+        [nameof(ExtDataTarget)] = "Cemu ExtData target directory",
         [nameof(PreviewStaging)] = "Preview complete staging conversion",
         [nameof(WriteStaging)] = "Write complete staging conversion",
-        [nameof(PreviewInstall)] = "Preview selected groups (read-only)",
-        [nameof(InstallExtData)] = "Install selected ExtData (unavailable on Windows)",
-        [nameof(ExtDataManifest)] = "ExtData manifest (unavailable on Windows)",
+        [nameof(PreviewInstall)] = "Preview selected groups",
+        [nameof(InstallExtData)] = "Install selected ExtData",
+        [nameof(ExtDataManifest)] = "ExtData recovery manifest",
         ["ResolvedSource"] = "Resolved source: {0}",
         ["ResolvedTarget"] = "Output will be: {0}",
         ["ResolvedExtData"] = "Resolved ExtData user directory: {0}",
@@ -333,6 +357,17 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(HeroSafety)] = "不扫描压缩包，不上传云端，不递归覆盖 MLC。",
         [nameof(ArtworkSource)] = "源文件或目录",
         [nameof(ArtworkTarget)] = "一个解析后的目标",
+        [nameof(ConversionModeTitle)] = "转换模式",
+        [nameof(ConversionModeNew)] = "全新转换",
+        [nameof(ConversionModeRepair)] = "修复已转换存档",
+        [nameof(ConversionModeNewDescription)] = "使用原始日版 3DS user# 创建新的 Wii U / Cemu 角色存档。",
+        [nameof(ConversionModeRepairDescription)] = "已经转换过？请同时添加原始 3DS user#，以及继续游玩后的最新同槽位 Wii U / Cemu user#。修复流程会保留后续 Wii U 进度，只更新仍与受支持旧版转换器结果一致的字段。还要修复收到的公会名片和离线伙伴时，请在下方启用“公会名片与离线伙伴”，并选择原始 3DS ExtData user 目录。",
+        [nameof(RepairVersionTitle)] = "原转换器版本",
+        [nameof(RepairVersionAutomatic)] = "自动检测",
+        [nameof(RepairVersionHint)] = "默认保持自动检测。只有 Dry Run 报告多个互不兼容的候选版本时才需要手动选择；选择后旧预览会失效，必须重新 Dry Run。",
+        [nameof(RepairVersionRequired)] = "请选择一个检测到的转换器版本，然后重新运行 Dry Run",
+        ["RepairVersionAmbiguous"] = "Dry Run 检测到互不兼容的候选版本：{0}。请选择当时使用的版本，然后重新运行 Dry Run。",
+        ["RepairVersionDetected"] = "当前检测结果可以安全自动应用。匹配的版本范围：{0}。",
         [nameof(CoreSectionTitle)] = "核心角色槽位",
         [nameof(CoreSectionDescription)] = "选择一个 user# 槽位。源目录只解析它的直接子文件；输出目录会解析为同名 user#。",
         [nameof(SaveSlot)] = "存档槽位",
@@ -378,7 +413,7 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(WriteCec)] = "写入实验性 CEC",
         [nameof(RollbackCec)] = "回滚 CEC manifest",
         [nameof(ExtDataNotice)] = "ExtData 是可选项。请选择准确的 user 目录（或它的直接 00000481 父目录）。暂存转换始终生成完整八个文件；组复选框不会筛选这些输出，只决定只读目标预览的组件组。",
-        [nameof(ExtDataInstallUnavailable)] = "Windows 可以把完整 ExtData 集合转换到暂存目录，并只读预览选中的组件组；但目前无法安全安装或回滚多文件 card/quest 组。核心 user# 与 system 写入不受影响。",
+        [nameof(ExtDataInstallUnavailable)] = "Windows 会通过 Rust sidecar 的恢复日志和 ReplaceFileW 事务安装完整 ExtData 组件组；整个过程必须保持模拟器关闭。",
         [nameof(ResultTitle)] = "结构化报告",
         [nameof(ResultEmpty)] = "运行检查或 Dry Run 后，会在这里显示 CLI JSON 报告。",
         [nameof(OperationHistory)] = "本次会话",
@@ -421,12 +456,12 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(ExtDataSource)] = "3DS ExtData user 目录",
         ["ExtDataSourceHint"] = "请选择 .../extdata/00000000/00000481/user，或它的直接 00000481 父目录。不要选择 SDMC 或 MLC 根目录。",
         [nameof(StagingDirectory)] = "临时转换目录",
-        [nameof(ExtDataTarget)] = "Cemu ExtData 目标目录（仅用于只读预览）",
+        [nameof(ExtDataTarget)] = "Cemu ExtData 目标目录",
         [nameof(PreviewStaging)] = "预览完整临时转换",
         [nameof(WriteStaging)] = "写入完整临时转换",
-        [nameof(PreviewInstall)] = "只读预览所选组件组",
-        [nameof(InstallExtData)] = "安装所选 ExtData（Windows 暂不可用）",
-        [nameof(ExtDataManifest)] = "ExtData manifest（Windows 暂不可用）",
+        [nameof(PreviewInstall)] = "预览所选组件组",
+        [nameof(InstallExtData)] = "安装所选 ExtData",
+        [nameof(ExtDataManifest)] = "ExtData 恢复 manifest",
         ["ResolvedSource"] = "解析后的源文件：{0}",
         ["ResolvedTarget"] = "最终输出位置：{0}",
         ["ResolvedExtData"] = "解析后的 ExtData user 目录：{0}",

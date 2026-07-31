@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using MHToolkit.MH3GSaveConverter.Windows.Infrastructure;
 using MHToolkit.MH3GSaveConverter.Windows.Models;
 using MHToolkit.MH3GSaveConverter.Windows.Services;
@@ -12,19 +13,19 @@ namespace MHToolkit.MH3GSaveConverter.Windows.ViewModels;
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
-    // The Rust sidecar deliberately refuses the multi-file ExtData install and
-    // rollback path on Windows: it has no safe two-name atomic-exchange
-    // backend there. Conversion of the complete ExtData set to an explicitly
-    // selected staging directory and a read-only target preflight remain
-    // available, but the UI must never imply that a staged card/quest group
-    // can be safely installed from this platform.
-    private static bool SupportsSafeExtrasInstall => false;
+    // The Rust sidecar uses ReplaceFileW with a manifest-bound backup plus a
+    // durable recovery journal for Windows multi-file ExtData transactions.
+    private static bool SupportsSafeExtrasInstall => true;
 
     private readonly ConverterCliClient _cliClient;
     private readonly FileFingerprintService _fingerprints;
     private readonly LanguagePreferenceStore _languageStore;
 
     private AppLanguageOverride _languageOverride;
+    private ConversionMode _conversionMode = ConversionMode.NewConversion;
+    private string? _repairFromVersion;
+    private bool _repairRevisionSelectionRequired;
+    private string _repairDetectionSummary = string.Empty;
     private string _selectedSlot = SavePathResolver.AvailableSlots[1];
     private string _sourcePath = string.Empty;
     private string _targetPath = string.Empty;
@@ -55,6 +56,7 @@ public sealed class MainViewModel : ObservableObject
     private FileFingerprint? _inspectedSource;
     private FileFingerprint? _inspectedTarget;
     private DryRunAuthorization? _coreAuthorization;
+    private RepairDryRunAuthorization? _repairAuthorization;
     private SystemDryRunAuthorization? _systemAuthorization;
     private ExtrasStageDryRunAuthorization? _extrasStageAuthorization;
     private ExtrasInstallDryRunAuthorization? _extrasInstallAuthorization;
@@ -80,6 +82,8 @@ public sealed class MainViewModel : ObservableObject
         RolledBack,
     }
 
+    private sealed record RepairRevisionDetection(bool IsAmbiguous, string Summary);
+
     public MainViewModel(
         ConverterCliClient? cliClient = null,
         FileFingerprintService? fingerprints = null,
@@ -102,6 +106,63 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _languageOverride;
         private set => SetProperty(ref _languageOverride, value);
+    }
+
+    public ConversionMode SelectedConversionMode => _conversionMode;
+    public bool IsRepairMode => _conversionMode == ConversionMode.RepairConverted;
+    public string ConversionModeDescription => IsRepairMode
+        ? Copy.ConversionModeRepairDescription
+        : Copy.ConversionModeNewDescription;
+    public bool IsRepairRevisionSelectionRequired
+    {
+        get => _repairRevisionSelectionRequired;
+        private set => SetProperty(ref _repairRevisionSelectionRequired, value);
+    }
+    public string RepairDetectionSummary
+    {
+        get => _repairDetectionSummary;
+        private set => SetProperty(ref _repairDetectionSummary, value);
+    }
+
+    public void SetRepairFromVersion(string? tag)
+    {
+        var revision = tag is "0.0.3" or "0.0.4" or "0.0.5" or "0.0.6"
+            ? tag
+            : null;
+        if (string.Equals(_repairFromVersion, revision, StringComparison.Ordinal))
+        {
+            return;
+        }
+        _repairFromVersion = revision;
+        _repairAuthorization = null;
+        IsRepairRevisionSelectionRequired = false;
+        RepairDetectionSummary = string.Empty;
+        OnPropertyChanged(nameof(CanWriteCore));
+    }
+
+    public void SetConversionMode(string? tag)
+    {
+        var mode = string.Equals(tag, "repair", StringComparison.OrdinalIgnoreCase)
+            ? ConversionMode.RepairConverted
+            : ConversionMode.NewConversion;
+        if (_conversionMode == mode)
+        {
+            return;
+        }
+        _conversionMode = mode;
+        if (IsRepairMode)
+        {
+            IsSystemEnabled = false;
+            IncludeQuests = false;
+        }
+        _repairFromVersion = null;
+        IsRepairRevisionSelectionRequired = false;
+        RepairDetectionSummary = string.Empty;
+        InvalidateCoreAuthorization();
+        OnPropertyChanged(nameof(SelectedConversionMode));
+        OnPropertyChanged(nameof(IsRepairMode));
+        OnPropertyChanged(nameof(ConversionModeDescription));
+        RaiseOptionalConfigurationAvailability();
     }
 
     public string SourcePath
@@ -473,8 +534,11 @@ public sealed class MainViewModel : ObservableObject
     public bool ShowPostWriteGuidance => _workflowGuidance == WorkflowGuidance.CoreWritten;
     public bool ShowPostOptionalGuidance => _workflowGuidance == WorkflowGuidance.OptionalStepComplete;
     public bool ShowPostRollbackGuidance => _workflowGuidance == WorkflowGuidance.RolledBack;
-    public bool SelectedOptionalDataIsConfigured => (!IsSystemEnabled || HasSystemPaths())
-        && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
+    public bool SelectedOptionalDataIsConfigured => IsRepairMode
+        ? !IncludeGuildCards || SavePathResolver.TryResolveExtDataUserDirectory(
+            ExtrasSourceDirectory, out _, out _)
+        : (!IsSystemEnabled || HasSystemPaths())
+            && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
     public bool HasPendingSelectedOptionalWork => IsSystemEnabled && !_systemWriteCompleted;
     public string PostWriteGuidanceMessage => HasPendingSelectedOptionalWork
         ? Copy.NextAfterCoreWriteWithOptionalData
@@ -488,11 +552,12 @@ public sealed class MainViewModel : ObservableObject
     public bool CanRunCoreDryRun => !IsBusy
         && _sourceInspected
         && _targetInspected
+        && (!IsRepairMode || _inspectedTarget?.Exists == true)
         && SelectedOptionalDataIsConfigured
         && HasValidCorePaths();
     public bool CanWriteCore => !IsBusy
         && SelectedOptionalDataIsConfigured
-        && _coreAuthorization is not null
+        && (IsRepairMode ? _repairAuthorization is not null : _coreAuthorization is not null)
         && HasValidCorePaths();
     public bool CanRollbackCore => !IsBusy && !string.IsNullOrWhiteSpace(RollbackManifestPath);
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
@@ -639,9 +704,11 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         _coreAuthorization = null;
+        _repairAuthorization = null;
         OnPropertyChanged(nameof(CanWriteCore));
 
-        await RunOperationAsync("convert --dry-run", async cancellationToken =>
+        var operation = IsRepairMode ? "repair-converted --dry-run" : "convert --dry-run";
+        await RunOperationAsync(operation, async cancellationToken =>
         {
             var sourceBefore = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
             var targetBefore = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
@@ -650,32 +717,100 @@ public sealed class MainViewModel : ObservableObject
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
-            var result = await ExecuteAsync(
-                "convert --dry-run",
-                new[] { "convert", paths.Source, "--output", paths.Target, "--dry-run" },
-                cancellationToken);
-            RequireSuccess(result, "core Dry Run");
-            RequireStatus(result, "dry-run", "core Dry Run");
+            CliExecutionResult result;
+            if (IsRepairMode)
+            {
+                var arguments = new List<string>
+                {
+                    "repair-converted", paths.Source, "--current", paths.Target,
+                };
+                string? extDataSource = null;
+                if (IncludeGuildCards)
+                {
+                    if (!SavePathResolver.TryResolveExtDataUserDirectory(
+                        ExtrasSourceDirectory, out extDataSource, out _))
+                    {
+                        throw new InvalidOperationException(Copy.ExtrasPathsRequired);
+                    }
+                    arguments.Add("--source-extdata-dir");
+                    arguments.Add(extDataSource);
+                }
+                if (!string.IsNullOrWhiteSpace(_repairFromVersion))
+                {
+                    arguments.Add("--from-version");
+                    arguments.Add(_repairFromVersion);
+                }
+                arguments.Add("--dry-run");
+                result = await ExecuteAsync(operation, arguments, cancellationToken);
+                RequireSuccess(result, "repair Dry Run");
+                RequireStatus(result, "dry-run", "repair Dry Run");
+                var sourceSet = result.TryGetString("source_set_sha256");
+                var currentSet = result.TryGetString("current_set_sha256");
+                var preview = result.TryGetString("preview_sha256");
+                if (string.IsNullOrWhiteSpace(sourceSet)
+                    || string.IsNullOrWhiteSpace(currentSet)
+                    || string.IsNullOrWhiteSpace(preview))
+                {
+                    throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                }
+                var detection = ReadRepairRevisionDetection(result);
+                IsRepairRevisionSelectionRequired =
+                    detection.IsAmbiguous && string.IsNullOrWhiteSpace(_repairFromVersion);
+                RepairDetectionSummary = detection.Summary;
+                _repairAuthorization = new RepairDryRunAuthorization(
+                    sourceBefore,
+                    targetBefore,
+                    extDataSource,
+                    _repairFromVersion,
+                    sourceSet,
+                    currentSet,
+                    preview,
+                    DateTimeOffset.UtcNow);
+            }
+            else
+            {
+                result = await ExecuteAsync(
+                    operation,
+                    new[] { "convert", paths.Source, "--output", paths.Target, "--dry-run" },
+                    cancellationToken);
+                RequireSuccess(result, "core Dry Run");
+                RequireStatus(result, "dry-run", "core Dry Run");
+            }
 
             var sourceAfter = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
             var targetAfter = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
-            var reportSourceHash = result.TryGetHash("source");
-            var reportTargetHash = result.TryGetHash("target_before");
-            var targetMatchesDryRun = targetAfter.Exists
-                ? !string.IsNullOrWhiteSpace(targetAfter.Sha256)
-                    && !string.IsNullOrWhiteSpace(reportTargetHash)
-                    && string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)
-                : string.IsNullOrWhiteSpace(reportTargetHash);
-            if (!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter)
-                || !sourceAfter.Exists
-                || string.IsNullOrWhiteSpace(reportSourceHash)
-                || !string.Equals(sourceAfter.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase)
-                || !targetMatchesDryRun)
+            if (!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter))
             {
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
-
-            _coreAuthorization = new DryRunAuthorization(sourceAfter, targetAfter, reportSourceHash, DateTimeOffset.UtcNow);
+            if (IsRepairRevisionSelectionRequired)
+            {
+                _repairAuthorization = null;
+                Stage = WorkflowStage.Inspected;
+                StatusText = Copy.RepairVersionRequired;
+                SetWorkflowGuidance(WorkflowGuidance.CoreInspected);
+                RaiseCoreActionAvailability();
+                return;
+            }
+            if (!IsRepairMode)
+            {
+                var reportSourceHash = result.TryGetHash("source");
+                var reportTargetHash = result.TryGetHash("target_before");
+                var targetMatchesDryRun = targetAfter.Exists
+                    ? !string.IsNullOrWhiteSpace(targetAfter.Sha256)
+                        && !string.IsNullOrWhiteSpace(reportTargetHash)
+                        && string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)
+                    : string.IsNullOrWhiteSpace(reportTargetHash);
+                if (!sourceAfter.Exists
+                    || string.IsNullOrWhiteSpace(reportSourceHash)
+                    || !string.Equals(sourceAfter.Sha256, reportSourceHash, StringComparison.OrdinalIgnoreCase)
+                    || !targetMatchesDryRun)
+                {
+                    throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                }
+                _coreAuthorization = new DryRunAuthorization(
+                    sourceAfter, targetAfter, reportSourceHash, DateTimeOffset.UtcNow);
+            }
             Stage = WorkflowStage.DryRunAuthorized;
             StatusText = Copy.DryRunAuthorized;
             SetWorkflowGuidance(WorkflowGuidance.CoreDryRunAuthorized);
@@ -691,7 +826,8 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         var authorization = _coreAuthorization;
-        if (authorization is null)
+        var repairAuthorization = _repairAuthorization;
+        if (IsRepairMode ? repairAuthorization is null : authorization is null)
         {
             Fail(Copy.WriteUnavailable);
             return;
@@ -701,17 +837,59 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        await RunOperationAsync("convert --write", async cancellationToken =>
+        var operation = IsRepairMode ? "repair-converted --write" : "convert --write";
+        await RunOperationAsync(operation, async cancellationToken =>
         {
             var currentSource = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
             var currentTarget = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
-            if (!authorization.Source.Matches(currentSource) || !authorization.Target.Matches(currentTarget))
+            var authorizedSource = IsRepairMode ? repairAuthorization!.Source : authorization!.Source;
+            var authorizedTarget = IsRepairMode ? repairAuthorization!.Current : authorization!.Target;
+            if (!authorizedSource.Matches(currentSource) || !authorizedTarget.Matches(currentTarget))
             {
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
 
             Stage = WorkflowStage.Writing;
+            if (IsRepairMode)
+            {
+                var arguments = new List<string>
+                {
+                    "repair-converted", paths.Source,
+                    "--current", paths.Target,
+                };
+                if (!string.IsNullOrWhiteSpace(repairAuthorization!.ExtDataSource))
+                {
+                    arguments.Add("--source-extdata-dir");
+                    arguments.Add(repairAuthorization.ExtDataSource);
+                }
+                if (!string.IsNullOrWhiteSpace(repairAuthorization.FromVersion))
+                {
+                    arguments.Add("--from-version");
+                    arguments.Add(repairAuthorization.FromVersion);
+                }
+                arguments.AddRange(new[]
+                {
+                    "--write",
+                    "--expected-source-set-sha256", repairAuthorization.SourceSetSha256,
+                    "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
+                    "--expected-preview-sha256", repairAuthorization.PreviewSha256,
+                });
+                var repairResult = await ExecuteAsync(operation, arguments, cancellationToken);
+                RequireSuccess(repairResult, "repair converted save");
+                if (repairResult.Status is not ("written" or "no-changes"))
+                {
+                    throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                }
+                _repairAuthorization = null;
+                RollbackManifestPath = repairResult.TryGetString("compatibility_manifest")
+                    ?? RollbackManifestPath;
+                Stage = WorkflowStage.Written;
+                StatusText = Copy.Written;
+                SetWorkflowGuidance(WorkflowGuidance.CoreWritten);
+                RaiseCoreActionAvailability();
+                return;
+            }
             var arguments = new List<string>
             {
                 "convert", paths.Source, "--output", paths.Target,
@@ -730,7 +908,7 @@ public sealed class MainViewModel : ObservableObject
             }
             arguments.Add("--write");
             var result = await ExecuteAsync(
-                "convert --write",
+                operation,
                 arguments,
                 cancellationToken);
             RequireSuccess(result, "write core slot");
@@ -752,15 +930,19 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        await RunOperationAsync("rollback", async cancellationToken =>
+        var isCompatibilityRollback = (Path.GetFileName(RollbackManifestPath) ?? string.Empty)
+            .StartsWith(".mh3g-compatibility-repair-", StringComparison.Ordinal);
+        var operation = isCompatibilityRollback ? "rollback-repair" : "rollback";
+        await RunOperationAsync(operation, async cancellationToken =>
         {
             Stage = WorkflowStage.Writing;
             var result = await ExecuteAsync(
-                "rollback",
-                new[] { "rollback", "--manifest", RollbackManifestPath },
+                operation,
+                new[] { operation, "--manifest", RollbackManifestPath },
                 cancellationToken);
-            RequireSuccess(result, "rollback");
-            RequireStatus(result, "rolled-back", "rollback");
+            RequireSuccess(result, operation);
+            RequireStatus(result, "rolled-back", operation);
+            RollbackManifestPath = string.Empty;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
@@ -995,11 +1177,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task InstallExtrasAsync()
     {
-        if (!SupportsSafeExtrasInstall)
-        {
-            Fail(Copy.ExtDataInstallUnavailable);
-            return;
-        }
         var authorization = _extrasInstallAuthorization;
         if (authorization is null || !MatchesExtrasInstallAuthorization(authorization))
         {
@@ -1028,11 +1205,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RollbackExtrasAsync()
     {
-        if (!SupportsSafeExtrasInstall)
-        {
-            Fail(Copy.ExtDataInstallUnavailable);
-            return;
-        }
         if (!CanRollbackExtras)
         {
             return;
@@ -1266,6 +1438,41 @@ public sealed class MainViewModel : ObservableObject
         return string.Join(Environment.NewLine, details);
     }
 
+    private RepairRevisionDetection ReadRepairRevisionDetection(CliExecutionResult result)
+    {
+        if (!result.Report.HasValue
+            || !result.Report.Value.TryGetProperty("detection", out var detection)
+            || !detection.TryGetProperty("confidence", out var confidence)
+            || confidence.ValueKind != JsonValueKind.String
+            || !detection.TryGetProperty("candidates", out var componentCandidates)
+            || componentCandidates.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+        }
+
+        var candidates = new SortedSet<string>(StringComparer.Ordinal);
+        var ambiguous = string.Equals(
+            confidence.GetString(), "ambiguous", StringComparison.Ordinal);
+        foreach (var candidate in componentCandidates.EnumerateArray())
+        {
+            if (candidate.ValueKind == JsonValueKind.String
+                && candidate.GetString() is { Length: > 0 } value)
+            {
+                candidates.Add(value);
+            }
+        }
+        if (candidates.Count == 0)
+        {
+            throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+        }
+        var joined = string.Join(", ", candidates);
+        return new RepairRevisionDetection(
+            ambiguous,
+            ambiguous
+                ? Copy.DescribeRepairVersionAmbiguous(joined)
+                : Copy.DescribeRepairVersionDetected(joined));
+    }
+
     private bool TryRequireCorePaths(out CoreSavePaths paths)
     {
         if (TryResolveCorePaths(out paths, out var error))
@@ -1466,6 +1673,7 @@ public sealed class MainViewModel : ObservableObject
         _inspectedSource = null;
         _inspectedTarget = null;
         _coreAuthorization = null;
+        _repairAuthorization = null;
         if (_workflowGuidance is WorkflowGuidance.CoreInspected
             or WorkflowGuidance.CoreDryRunAuthorized
             or WorkflowGuidance.CoreWritten)
@@ -1504,6 +1712,7 @@ public sealed class MainViewModel : ObservableObject
         {
             case AuthorizationDomain.Core:
                 _coreAuthorization = null;
+                _repairAuthorization = null;
                 RaiseCoreActionAvailability();
                 break;
             case AuthorizationDomain.System:

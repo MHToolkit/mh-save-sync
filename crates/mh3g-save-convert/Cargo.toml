@@ -1,6 +1,6 @@
 [package]
 name = "mh3g-save-convert"
-version = "0.0.6"
+version = "0.0.7"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -25,4 +25,4 @@ uuid.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp"] }

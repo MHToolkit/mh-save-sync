@@ -143,7 +143,45 @@ pub trait ExtraFileOperations {
         expected_staged: &[u8],
         expected_target: &[u8],
     ) -> Result<(), ConversionError>;
+    /// Restore a target that is proven absent after an interrupted platform
+    /// replacement. The implementation must fail instead of overwriting if a
+    /// competing writer recreates the target.
+    fn restore_missing_target(
+        &self,
+        staged: &Path,
+        target: &Path,
+        expected_staged: &[u8],
+    ) -> Result<(), ConversionError> {
+        validate_regular_file_bytes(
+            staged,
+            expected_staged,
+            None,
+            "restoring missing ExtData target",
+        )?;
+        if target.exists() {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "missing ExtData rollback target reappeared before restore: {}",
+                target.display()
+            )));
+        }
+        io_at_path(
+            fs::rename(staged, target),
+            "restoring missing ExtData target",
+            target,
+        )?;
+        validate_regular_file_bytes(
+            target,
+            expected_staged,
+            None,
+            "verifying restored missing ExtData target",
+        )
+    }
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError>;
+    /// Windows `ReplaceFileW` moves the former target directly to the
+    /// transaction backup path instead of retaining it at `staged`.
+    fn previous_value_moves_to_backup(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -189,6 +227,10 @@ impl ExtraFileOperations for StdExtraFileOperations {
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
         sync_extra_directory(path)
     }
+
+    fn previous_value_moves_to_backup(&self) -> bool {
+        cfg!(windows)
+    }
 }
 
 /// Perform a replace-or-restore as a two-name atomic exchange and verify the
@@ -205,94 +247,188 @@ fn conditional_exchange(
 ) -> Result<(), ConversionError> {
     validate_regular_file_bytes(staged, expected_staged, None, operation)?;
     validate_regular_file_bytes(target, expected_target, None, operation)?;
-    atomic_exchange_paths(staged, target, operation)?;
 
-    let target_after = read_regular_file(target, operation);
-    let staged_after = read_regular_file(staged, operation);
-    match (target_after, staged_after) {
-        (Ok(target_after), Ok(staged_after))
-            if target_after == expected_staged && staged_after == expected_target =>
-        {
-            sync_exchange_parents(staged, target, operation)
-        }
-        (target_after, staged_after) => {
-            let observed_target = target_after
-                .as_ref()
-                .map(|bytes| sha256_hex(bytes))
-                .unwrap_or_else(|_| "unreadable".to_owned());
-            let observed_staged = staged_after
-                .as_ref()
-                .map(|bytes| sha256_hex(bytes))
-                .unwrap_or_else(|_| "unreadable".to_owned());
-            let (Ok(target_after), Ok(staged_after)) = (&target_after, &staged_after) else {
-                return Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData exchange has an unreadable post-swap path; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
-                )));
-            };
-            // Only reverse a conflict when the target still demonstrably holds
-            // this transaction's staged value.  If it does not, a later writer
-            // has already won the pathname and we leave both paths untouched.
-            if target_after != expected_staged {
-                return Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData exchange detected a competing write after the swap; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
-                )));
+    #[cfg(windows)]
+    {
+        conditional_replace_windows(staged, target, expected_staged, expected_target, operation)
+    }
+
+    #[cfg(not(windows))]
+    {
+        atomic_exchange_paths(staged, target, operation)?;
+
+        let target_after = read_regular_file(target, operation);
+        let staged_after = read_regular_file(staged, operation);
+        match (target_after, staged_after) {
+            (Ok(target_after), Ok(staged_after))
+                if target_after == expected_staged && staged_after == expected_target =>
+            {
+                sync_exchange_parents(staged, target, operation)
             }
-            let target_snapshot = capture_owned_regular_file(
-                target,
-                target_after,
-                "capturing ExtData target before conflict restoration",
-            )?;
-            let staged_snapshot = capture_owned_regular_file(
-                staged,
-                staged_after,
-                "capturing ExtData staged value before conflict restoration",
-            )?;
-            if let Err(error) = validate_owned_regular_file(
-                &target_snapshot,
-                "rechecking ExtData target before conflict restoration",
-            ) {
-                return Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData exchange detected a competing write and the target changed before restoration; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={error})"
-                )));
-            }
-            if let Err(error) = validate_owned_regular_file(
-                &staged_snapshot,
-                "rechecking ExtData staged value before conflict restoration",
-            ) {
-                return Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData exchange detected a competing write and the staged value changed before restoration; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={error})"
-                )));
-            }
-            let restore = atomic_exchange_paths(staged, target, operation)
-                .and_then(|_| sync_exchange_parents(staged, target, operation));
-            match restore {
-                Ok(()) => {
-                    let restored_target = read_regular_file(
-                        target,
-                        "verifying ExtData target after conflict restoration",
-                    );
-                    let restored_staged = read_regular_file(
-                        staged,
-                        "verifying ExtData staged value after conflict restoration",
-                    );
-                    if restored_target.as_ref().ok() == Some(staged_after)
-                        && restored_staged.as_ref().ok() == Some(target_after)
-                    {
-                        Err(ConversionError::UnsafeInstall(format!(
-                            "ExtData exchange detected a competing write; original names were restored ({operation}; target={observed_target}, staged={observed_staged})"
-                        )))
-                    } else {
-                        Err(ConversionError::UnsafeInstall(format!(
-                            "ExtData exchange detected a competing write but conflict restoration changed again; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
-                        )))
-                    }
+            (target_after, staged_after) => {
+                let observed_target = target_after
+                    .as_ref()
+                    .map(|bytes| sha256_hex(bytes))
+                    .unwrap_or_else(|_| "unreadable".to_owned());
+                let observed_staged = staged_after
+                    .as_ref()
+                    .map(|bytes| sha256_hex(bytes))
+                    .unwrap_or_else(|_| "unreadable".to_owned());
+                let (Ok(target_after), Ok(staged_after)) = (&target_after, &staged_after) else {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData exchange has an unreadable post-swap path; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
+                    )));
+                };
+                // Only reverse a conflict when the target still demonstrably holds
+                // this transaction's staged value.  If it does not, a later writer
+                // has already won the pathname and we leave both paths untouched.
+                if target_after != expected_staged {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData exchange detected a competing write after the swap; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
+                    )));
                 }
-                Err(restore_error) => Err(ConversionError::UnsafeInstall(format!(
-                    "ExtData exchange detected a competing write and could not restore the original names; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={restore_error})"
-                ))),
+                let target_snapshot = capture_owned_regular_file(
+                    target,
+                    target_after,
+                    "capturing ExtData target before conflict restoration",
+                )?;
+                let staged_snapshot = capture_owned_regular_file(
+                    staged,
+                    staged_after,
+                    "capturing ExtData staged value before conflict restoration",
+                )?;
+                if let Err(error) = validate_owned_regular_file(
+                    &target_snapshot,
+                    "rechecking ExtData target before conflict restoration",
+                ) {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData exchange detected a competing write and the target changed before restoration; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={error})"
+                    )));
+                }
+                if let Err(error) = validate_owned_regular_file(
+                    &staged_snapshot,
+                    "rechecking ExtData staged value before conflict restoration",
+                ) {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData exchange detected a competing write and the staged value changed before restoration; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={error})"
+                    )));
+                }
+                let restore = atomic_exchange_paths(staged, target, operation)
+                    .and_then(|_| sync_exchange_parents(staged, target, operation));
+                match restore {
+                    Ok(()) => {
+                        let restored_target = read_regular_file(
+                            target,
+                            "verifying ExtData target after conflict restoration",
+                        );
+                        let restored_staged = read_regular_file(
+                            staged,
+                            "verifying ExtData staged value after conflict restoration",
+                        );
+                        if restored_target.as_ref().ok() == Some(staged_after)
+                            && restored_staged.as_ref().ok() == Some(target_after)
+                        {
+                            Err(ConversionError::UnsafeInstall(format!(
+                                "ExtData exchange detected a competing write; original names were restored ({operation}; target={observed_target}, staged={observed_staged})"
+                            )))
+                        } else {
+                            Err(ConversionError::UnsafeInstall(format!(
+                                "ExtData exchange detected a competing write but conflict restoration changed again; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged})"
+                            )))
+                        }
+                    }
+                    Err(restore_error) => Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData exchange detected a competing write and could not restore the original names; retain the recovery journal and both paths ({operation}; target={observed_target}, staged={observed_staged}; recovery={restore_error})"
+                    ))),
+                }
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn conditional_replace_windows(
+    staged: &Path,
+    target: &Path,
+    expected_staged: &[u8],
+    expected_target: &[u8],
+    operation: &'static str,
+) -> Result<(), ConversionError> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::{Foundation::GetLastError, Storage::FileSystem::ReplaceFileW};
+
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str().encode_wide().chain(Some(0)).collect()
+    }
+
+    let is_install = operation == "replacing staged ExtData component";
+    let backup = if is_install {
+        let transaction_dir = staged.parent().ok_or_else(|| {
+            ConversionError::UnsafeInstall(format!(
+                "Windows ExtData replacement has no transaction directory: {}",
+                staged.display()
+            ))
+        })?;
+        let component = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                ConversionError::InvalidSave(format!(
+                    "Windows ExtData target has an invalid component name: {}",
+                    target.display()
+                ))
+            })?;
+        let path =
+            controlled_backup_path(transaction_dir, component, &sha256_hex(expected_target))?;
+        reject_existing_path(&path, "Windows ExtData replacement backup")?;
+        Some(path)
+    } else {
+        None
+    };
+
+    let target_wide = wide(target);
+    let staged_wide = wide(staged);
+    let backup_wide = backup.as_deref().map(wide);
+    let backup_ptr = backup_wide
+        .as_ref()
+        .map_or(ptr::null(), |value| value.as_ptr());
+    let replaced = unsafe {
+        ReplaceFileW(
+            target_wide.as_ptr(),
+            staged_wide.as_ptr(),
+            backup_ptr,
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if replaced == 0 {
+        let code = unsafe { GetLastError() };
+        return Err(ConversionError::UnsafeInstall(format!(
+            "Windows ExtData replacement failed with Win32 error {code}; retain the recovery journal and inspect target={}, staged={}, backup={}",
+            target.display(),
+            staged.display(),
+            backup
+                .as_deref()
+                .map_or_else(|| "<none>".to_owned(), |path| path.display().to_string())
+        )));
+    }
+
+    validate_regular_file_bytes(target, expected_staged, None, operation)?;
+    if let Some(backup) = backup.as_deref() {
+        validate_regular_file_bytes(
+            backup,
+            expected_target,
+            None,
+            "verifying Windows ExtData replacement backup",
+        )?;
+    } else if read_optional_regular_file(staged, operation)?.is_some() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "Windows ExtData rollback left an unexpected staged file: {}",
+            staged.display()
+        )));
+    }
+    sync_exchange_parents(staged, target, operation)
 }
 
 fn sync_exchange_parents(
@@ -652,13 +788,72 @@ fn manifest_directory_identities(
         Ok((Some(target_identity), Some(transaction_identity)))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        Ok((
+            Some(windows_directory_identity(
+                target_dir,
+                "recording Windows ExtData target directory identity",
+            )?),
+            Some(windows_directory_identity(
+                transaction_dir,
+                "recording Windows ExtData transaction directory identity",
+            )?),
+        ))
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (target_dir, transaction_dir);
         Err(ConversionError::UnsafeInstall(
             "ExtData transactions require POSIX directory identities".to_owned(),
         ))
     }
+}
+
+#[cfg(windows)]
+fn windows_directory_identity(
+    path: &Path,
+    operation: &'static str,
+) -> Result<ManifestDirectoryIdentity, ConversionError> {
+    use std::os::windows::{
+        fs::{MetadataExt, OpenOptionsExt},
+        io::AsRawHandle,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let metadata = io_at_path(fs::symlink_metadata(path), operation, path)?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(ConversionError::InvalidSave(format!(
+            "Windows ExtData transaction directory must not be a reparse point: {}",
+            path.display()
+        )));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    let directory = io_at_path(options.open(path), operation, path)?;
+    let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    let result =
+        unsafe { GetFileInformationByHandle(directory.as_raw_handle() as _, &mut information) };
+    if result == 0 {
+        return io_at_path(
+            Err(std::io::Error::last_os_error()),
+            "reading Windows ExtData directory identity",
+            path,
+        );
+    }
+    let index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    Ok((u64::from(information.dwVolumeSerialNumber), index))
 }
 
 #[cfg(unix)]
@@ -975,7 +1170,12 @@ fn atomic_exchange_paths(
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+)))]
 fn atomic_exchange_paths(
     _staged: &Path,
     _target: &Path,
@@ -1370,7 +1570,9 @@ pub fn install_extra_groups_with(
         operations.sync_directory(&plan.target_dir)?;
 
         for entry in &plan.entries {
-            if let (Some(backup), Some(previous)) = (&entry.backup, entry.previous.as_deref()) {
+            if !operations.previous_value_moves_to_backup()
+                && let (Some(backup), Some(previous)) = (&entry.backup, entry.previous.as_deref())
+            {
                 operations.write_new_file(backup, previous)?;
                 let staged_backup = read_regular_file(backup, "reading staged ExtData backup")?;
                 if staged_backup != previous {
@@ -1424,14 +1626,27 @@ pub fn install_extra_groups_with(
                 &entry.staging_bytes,
                 previous,
             )?;
-            // An atomic exchange leaves the former target at the controlled
-            // temporary path.  Retain its identity for compensated failure
-            // handling and for a later explicit rollback.
-            temporary_paths[index] = Some(capture_owned_regular_file(
-                &entry.temporary,
-                previous,
-                "capturing exchanged ExtData target snapshot",
-            )?);
+            // POSIX exchange retains the former target at the controlled
+            // temporary path. Windows ReplaceFileW moves it directly to the
+            // controlled backup path. Retain the platform-specific artifact
+            // identity for compensated failure handling and rollback.
+            if operations.previous_value_moves_to_backup() {
+                capture_owned_regular_file(
+                    entry
+                        .backup
+                        .as_deref()
+                        .expect("initialized ExtData targets have backup paths"),
+                    previous,
+                    "capturing replaced Windows ExtData target backup",
+                )?;
+                temporary_paths[index] = None;
+            } else {
+                temporary_paths[index] = Some(capture_owned_regular_file(
+                    &entry.temporary,
+                    previous,
+                    "capturing exchanged ExtData target snapshot",
+                )?);
+            }
             operations.sync_directory(&plan.transaction_dir)?;
             operations.sync_directory(&plan.target_dir)?;
         }
@@ -1599,41 +1814,67 @@ pub fn rollback_extra_groups_with(
             continue;
         }
         reject_running_emulator(probe)?;
-        let current = read_regular_file(
+        let current = read_optional_regular_file(
             &state.entry.entry.target,
             "rechecking ExtData rollback target hash before restore",
         )?;
-        validate_cemu_external_component_named(&current, &state.entry.entry.component)?;
-        if sha256_hex(&current) != state.entry.entry.after_sha256 {
-            return Err(ConversionError::UnsafeInstall(format!(
-                "ExtData rollback target changed after preflight: {}",
-                state.entry.entry.target.display()
-            )));
+        match current.as_deref() {
+            Some(current) => {
+                validate_cemu_external_component_named(current, &state.entry.entry.component)?;
+                if sha256_hex(current) != state.entry.entry.after_sha256 {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "ExtData rollback target changed after preflight: {}",
+                        state.entry.entry.target.display()
+                    )));
+                }
+            }
+            None if state.current.is_none() => {}
+            None => {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "ExtData rollback target disappeared after preflight: {}",
+                    state.entry.entry.target.display()
+                )));
+            }
         }
         let previous = state
             .entry
             .previous
             .as_deref()
             .expect("validated ExtData rollback manifest requires initialized targets");
-        let temporary = read_regular_file(
-            &state.entry.entry.temporary,
-            "reading exchanged ExtData target snapshot before rollback",
-        )?;
-        if temporary != previous {
-            return Err(ConversionError::UnsafeInstall(format!(
-                "ExtData rollback temporary does not hold the pre-install target: {}",
-                state.entry.entry.temporary.display()
-            )));
+        if operations.previous_value_moves_to_backup() {
+            if state.entry.entry.temporary.exists() {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "Windows ExtData rollback temporary already exists: {}",
+                    state.entry.entry.temporary.display()
+                )));
+            }
+            operations.write_new_file(&state.entry.entry.temporary, previous)?;
+        } else {
+            let temporary = read_regular_file(
+                &state.entry.entry.temporary,
+                "reading exchanged ExtData target snapshot before rollback",
+            )?;
+            if temporary != previous {
+                return Err(ConversionError::UnsafeInstall(format!(
+                    "ExtData rollback temporary does not hold the pre-install target: {}",
+                    state.entry.entry.temporary.display()
+                )));
+            }
         }
-        let result = operations.restore_target(
-            &state.entry.entry.temporary,
-            &state.entry.entry.target,
-            previous,
-            state
-                .current
-                .as_deref()
-                .expect("rollback state requiring restore has an installed target"),
-        );
+        let result = if let Some(installed) = state.current.as_deref() {
+            operations.restore_target(
+                &state.entry.entry.temporary,
+                &state.entry.entry.target,
+                previous,
+                installed,
+            )
+        } else {
+            operations.restore_missing_target(
+                &state.entry.entry.temporary,
+                &state.entry.entry.target,
+                previous,
+            )
+        };
         if let Err(error) = result {
             return Err(ConversionError::UnsafeInstall(format!(
                 "ExtData rollback reached an atomic target exchange but did not finish cleanly at {}: {error}; retain the recovery journal and run rollback again only after resolving the conflict",
@@ -2333,13 +2574,11 @@ fn reject_running_emulator(probe: &dyn ProcessProbe) -> Result<(), ConversionErr
 
 #[cfg(windows)]
 fn require_durable_extra_transaction_support() -> Result<(), ConversionError> {
-    // Win32 exposes no directory fsync equivalent. The primary save converter
-    // remains available, but optional multi-file ExtData replacement must not
-    // claim crash recovery without a durable directory metadata barrier.
-    Err(ConversionError::UnsafeInstall(
-        "multi-file ExtData installation is unavailable on Windows because durable directory metadata sync is unsupported"
-            .to_owned(),
-    ))
+    // Every transaction artifact is flushed before replacement. ReplaceFileW
+    // then moves the former target into the manifest-bound backup pathname as
+    // part of the same filesystem operation. The recovery journal and stable
+    // Windows volume/file identities make an interrupted group recoverable.
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -2434,7 +2673,32 @@ fn validate_manifest_directory_identities(
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let observed_target_identity = windows_directory_identity(
+            target_dir,
+            "validating Windows ExtData rollback target directory identity",
+        )?;
+        let observed_transaction_identity = windows_directory_identity(
+            transaction_dir,
+            "validating Windows ExtData rollback transaction directory identity",
+        )?;
+        if observed_target_identity != expected_target_identity {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "Windows ExtData rollback target directory identity does not match its recovery journal: {}",
+                target_dir.display()
+            )));
+        }
+        if observed_transaction_identity != expected_transaction_identity {
+            return Err(ConversionError::UnsafeInstall(format!(
+                "Windows ExtData rollback transaction directory identity does not match its recovery journal: {}",
+                transaction_dir.display()
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             target_dir,
@@ -2718,6 +2982,14 @@ fn prepare_rollback_states(
                         )?,
                     )
                 }
+                (Some(before_sha256), Some(backup), None) => (
+                    true,
+                    Some(read_and_validate_rollback_backup(
+                        backup,
+                        before_sha256,
+                        &entry.component,
+                    )?),
+                ),
                 (None, None, Some(current_sha256)) if current_sha256 == entry.after_sha256 => {
                     (true, None)
                 }
