@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -10,7 +10,11 @@ use sha2::Digest;
 use tempfile::TempDir;
 
 use mh3g_save_convert::{
-    converter::{convert_3ds_to_cemu_named, convert_external_component_to_cemu_named},
+    cec::{CEMU_HEADER_SIZE, CEMU_RECORD_AREA_OFFSET, empty_cemu_cec},
+    converter::{
+        convert_3ds_system_to_cemu_named, convert_3ds_to_cemu_named,
+        convert_external_component_to_cemu_named,
+    },
     profile::{JP_3DS_HEADER, JP_CEMU_HEADER, build_jp_cemu_header},
 };
 
@@ -363,7 +367,7 @@ fn repair_converted_write_rejects_a_current_save_changed_after_dry_run() {
 }
 
 #[test]
-fn repair_converted_installs_a_complete_card_group_and_preserves_quests() {
+fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -399,11 +403,32 @@ fn repair_converted_installs_a_complete_card_group_and_preserves_quests() {
         if component == "card1" {
             // Recreate the pre-0.0.5 display-state result.
             current_bytes[JP_CEMU_HEADER.len() + 0x7C0 + 8] = 0;
+        } else if component == "cardbox" {
+            // Model a later Wii U compact-card update outside the repair map.
+            current_bytes[JP_CEMU_HEADER.len() + 1976..JP_CEMU_HEADER.len() + 1978]
+                .copy_from_slice(&1_u16.to_be_bytes());
         }
         fs::write(current_dir.join(component), current_bytes).unwrap();
     }
+    let system_source = fs::read(system_fixture(&temp)).unwrap();
+    let mut system = convert_3ds_system_to_cemu_named(&system_source, "system").unwrap();
+    system[JP_CEMU_HEADER.len() + 0x40] = 0x5A;
+    fs::write(current_dir.join("system"), system).unwrap();
+
+    let mut cec = empty_cemu_cec().unwrap();
+    let card1_for_cec = fs::read(current_dir.join("card1")).unwrap();
+    let cec_record_start = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET;
+    cec[cec_record_start..cec_record_start + 0xE00]
+        .copy_from_slice(&card1_for_cec[JP_CEMU_HEADER.len()..JP_CEMU_HEADER.len() + 0xE00]);
+    fs::write(current_dir.join("cec"), cec).unwrap();
+
     let card1_before = fs::read(current_dir.join("card1")).unwrap();
-    let quest_before = fs::read(current_dir.join("quest1")).unwrap();
+    let preserved_before = [
+        "system", "cec", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ]
+    .into_iter()
+    .map(|component| (component, fs::read(current_dir.join(component)).unwrap()))
+    .collect::<BTreeMap<_, _>>();
 
     let dry = run_json(&[
         "repair-converted".into(),
@@ -458,7 +483,13 @@ fn repair_converted_installs_a_complete_card_group_and_preserves_quests() {
         fs::read(current_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 8],
         0x80
     );
-    assert_eq!(fs::read(current_dir.join("quest1")).unwrap(), quest_before);
+    for (component, before) in &preserved_before {
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            *before,
+            "{component} must preserve later Wii U data during repair"
+        );
+    }
     assert_eq!(written["manifests"].as_array().unwrap().len(), 2);
     let compatibility_manifest = written["compatibility_manifest"]
         .as_str()
@@ -471,7 +502,13 @@ fn repair_converted_installs_a_complete_card_group_and_preserves_quests() {
     assert_eq!(rolled_back["status"], "rolled-back");
     assert_eq!(fs::read(&current_path).unwrap(), current_slot_before);
     assert_eq!(fs::read(current_dir.join("card1")).unwrap(), card1_before);
-    assert_eq!(fs::read(current_dir.join("quest1")).unwrap(), quest_before);
+    for (component, before) in &preserved_before {
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            *before,
+            "{component} must remain byte-identical after rollback"
+        );
+    }
 }
 
 #[test]
