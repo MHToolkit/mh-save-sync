@@ -56,6 +56,23 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 
 选中的 `user#` 是核心转换器唯一必需的输入。它包含主角色状态、槽位内离线猎人名单和候选/缓存数据。`convert` 永远不会自动打开 `system`、`card*`、`quest*`、`cec`、其他 `user#` 或父目录中的其他文件。
 
+### 旧转换存档兼容修复
+
+`repair-converted` 与全新 `convert` 是两个独立契约。它需要一个原始 3DS `user#` 和一个已经由 0.0.3 至 0.0.6 转换、之后可能继续游玩的同名 Cemu `user#`：
+
+```text
+mh3g-save-convert repair-converted <3DS-user#> --current <Cemu-user#> \
+  [--source-extdata-dir <3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  [--dry-run | --write --expected-source-set-sha256 <SHA256> \
+    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+```
+
+该操作以当前 Cemu 数据为继续游玩的权威数据，只对 0.0.3 至 0.0.6 之间已知变化的完整语义字段执行三方比较。当前字段仍等于历史版本输出时才替换为 0.0.7 输出；若当前字段不同于历史值和 0.0.7 值，则按 Wii U 后续进度保留并报告冲突。它不会按字节盲合并，也不会重建整个 Cemu 槽位。
+
+仅修核心槽位时不传 `--source-extdata-dir`。修复公会名片时，该目录必须含全部八个 3DS ExtData 文件，当前 `user#` 的父目录也必须含全部八个 Cemu 文件。`user#` 和四个 `card*` 是可修复组件；`quest1` 至 `quest4` 会被验证并纳入集合 SHA-256，但逐字节保持当前 Cemu 内容。该命令不处理 `system`、`cec` 或 `phrase*`。
+
+Dry Run 会把全部选中组件汇总成一个顶层版本判断，可能报告 `exact`、`compatible-range`、`ambiguous` 或 `unknown`；所有组件共用同一个最终历史版本。`ambiguous` 写入必须显式指定一个未被证据否定的 `--from-version` 并重新 Dry Run；`unknown` 拒绝修复。写入必须提交紧邻 Dry Run 返回的 `source_set_sha256`、`current_set_sha256` 与 `preview_sha256`。成功时返回 `.mh3g-compatibility-repair-<UUID>.json`；`rollback-repair --manifest <path>` 会按“公会名片子事务，再核心子事务”的顺序恢复。
+
 ### 可选的共享 `system`
 
 `system` 是独立共享组件，不是 `convert user#` 的隐含副作用。
@@ -135,12 +152,14 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 | `inspect-progress <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `inspect-events <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `convert <user#> --output <same user#>` | 源槽位；只有安装时才读取已有目标和旧事务记录 | 无 | 指定目标槽位及下述核心事务文件 |
+| `repair-converted <3DS-user#> --current <Cemu-user#>` | 原始 3DS 槽位、当前 Cemu 槽位；可选完整 3DS/Cemu ExtData 集合 | 无 | 只改变报告中确认需要修复的同名 `user#` 和完整公会名片组，并创建协调 manifest；任务文件保持不变 |
 | `convert-system system --output system` | 源 `system`；只有安装时才读取已有目标和旧事务记录 | 无 | 指定 `system` 及相同模式的事务文件 |
 | `convert-extras --source-dir ... --output-dir ...` | 全部八个 ExtData 文件 | 无，也不会创建输出目录 | 只写入 `output-dir` 下生成的八个文件 |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | 完整暂存 ExtData 集合及被选中、已初始化的目标组件组 | 无 | 只改变被选中的完整 Cemu 组件组，以及下文一个绑定 manifest 的 ExtData 恢复事务 |
 | `inspect-cec --source-dir ... [--target cec] [--source-slot user#]` | CEC `InBox___` 和 `OutBox__`；可选 `cec` 和可选用户槽位 | 无 | 不适用 |
 | `convert-cec --source-dir ... --target cec` | 收到的 `InBox___` 记录以及已有 `cec`（如存在） | 无 | `cec` 和 CEC 事务文件；要求 `--experimental` 与两项预期 Dry Run 哈希 |
 | `rollback` | 受控核心/system manifest、目标和备份 | 不适用 | 只恢复或删除 manifest 绑定的核心/system 目标，并清理其事务文件 |
+| `rollback-repair` | 兼容修复总 manifest 及其核心/ExtData 子 manifest | 不适用 | 以受控顺序回滚兼容修复涉及的全部子事务 |
 | `rollback-extras` | 受控 ExtData 事务 manifest、被选中目标组件组和保留的旧字节 | 不适用 | 只恢复 manifest 绑定的完整组件组 |
 | `rollback-cec` | 受控 CEC manifest、目标和备份 | 不适用 | 只恢复或删除 manifest 绑定的 CEC 目标，并清理其事务文件 |
 
@@ -172,6 +191,7 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 - `convert-extras` 不会修改任何源文件、用户槽位、`system` 或 `cec`；它只写入明确的暂存输出。
 - `install-extras` 不会修改源文件、任何 `user#`、`system`、`cec` 或未被选中的 ExtData 组件组；只会改变选中的完整目标组件组及其受控事务文件。
 - `convert-cec` 不会修改 `user#`、`system`、`card*` 或 `quest*`。
+- `repair-converted` 不会修改其他 `user#`、`system`、`cec`、`phrase*` 或 `quest1` 至 `quest4`；未选择 ExtData 时也不会读取或修改任何 `card*`。
 - 任何转换器命令都没有枚举 `phrase1`、`phrase2` 或 `phrase3`，MH3G 转换实现不会读取或写入它们。
 - 从该 CLI 的视角看，3DS 源存档文件始终只读。
 

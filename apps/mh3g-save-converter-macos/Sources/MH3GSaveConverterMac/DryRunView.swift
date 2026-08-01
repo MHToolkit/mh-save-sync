@@ -44,6 +44,25 @@ struct DryRunView: View {
                 }
 
                 Section {
+                    if workflow.mode == .repairConverted {
+                        Picker(
+                            ConverterCopy.text("Repair.Version", language: language),
+                            selection: Binding(
+                                get: { workflow.repairFromVersion },
+                                set: { workflow.setRepairFromVersion($0) }
+                            )
+                        ) {
+                            Text(ConverterCopy.text("Repair.Version.Auto", language: language))
+                                .tag(nil as HistoricalConverterRevision?)
+                            ForEach(HistoricalConverterRevision.allCases) { revision in
+                                Text(revision.rawValue)
+                                    .tag(Optional(revision))
+                            }
+                        }
+                        Text(ConverterCopy.text("Repair.Version.Hint", language: language))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     HStack {
                         Button(ConverterCopy.text("DryRun.Start", language: language)) {
                             runDryRun()
@@ -59,13 +78,30 @@ struct DryRunView: View {
                         Label(ConverterCopy.text("DryRun.Authorized", language: language), systemImage: "checkmark.shield.fill")
                             .foregroundStyle(.green)
                         HashRows(fingerprint: fingerprint, language: language)
+                    } else if workflow.canWrite,
+                              let fingerprint = workflow.repairDryRunFingerprint {
+                        Label(ConverterCopy.text("DryRun.Authorized", language: language), systemImage: "checkmark.shield.fill")
+                            .foregroundStyle(.green)
+                        RepairHashRows(fingerprint: fingerprint, language: language)
+                    } else if workflow.repairRevisionSelectionRequired {
+                        Label(
+                            ConverterCopy.text("Repair.Version.Required", language: language),
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.orange)
+                        if !workflow.repairRevisionCandidates.isEmpty {
+                            Text(workflow.repairRevisionCandidates.map(\.rawValue).joined(separator: " · "))
+                                .font(.caption.monospaced())
+                        }
                     } else {
                         Text(ConverterCopy.text("DryRun.NotAuthorized", language: language))
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                if workflow.failure?.operation == .convert, let failure = workflow.failure {
+                if workflow.failure?.operation == .convert
+                    || workflow.failure?.operation == .repairConverted,
+                   let failure = workflow.failure {
                     Section {
                         FailureDetails(failure: failure, language: language)
                     }
@@ -126,6 +162,29 @@ struct DryRunView: View {
         Task {
             defer { running = false }
             try? await workflow.runCoreDryRun()
+        }
+    }
+}
+
+private struct RepairHashRows: View {
+    let fingerprint: RepairDryRunFingerprint
+    let language: ConverterLanguage
+
+    var body: some View {
+        LabeledContent(ConverterCopy.text("Write.SourceSHA256", language: language)) {
+            Text(fingerprint.sourceSetSHA256)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+        }
+        LabeledContent(ConverterCopy.text("Write.TargetSHA256", language: language)) {
+            Text(fingerprint.currentSetSHA256)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+        }
+        LabeledContent(ConverterCopy.text("Repair.PreviewSHA256", language: language)) {
+            Text(fingerprint.previewSHA256)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
         }
     }
 }

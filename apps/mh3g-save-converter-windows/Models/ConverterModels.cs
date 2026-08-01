@@ -20,6 +20,12 @@ public enum WorkflowStage
     Failed,
 }
 
+public enum ConversionMode
+{
+    NewConversion,
+    RepairConverted,
+}
+
 public sealed record FileFingerprint(string Path, bool Exists, string? Sha256)
 {
     public static readonly string MissingHash = "<missing>";
@@ -36,6 +42,16 @@ public sealed record DryRunAuthorization(
     FileFingerprint Source,
     FileFingerprint Target,
     string SourceReportHash,
+    DateTimeOffset CompletedAt);
+
+public sealed record RepairDryRunAuthorization(
+    FileFingerprint Source,
+    FileFingerprint Current,
+    string? ExtDataSource,
+    string? FromVersion,
+    string SourceSetSha256,
+    string CurrentSetSha256,
+    string PreviewSha256,
     DateTimeOffset CompletedAt);
 
 public sealed record CecDryRunAuthorization(

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -9,7 +9,14 @@ use serde_json::Value;
 use sha2::Digest;
 use tempfile::TempDir;
 
-use mh3g_save_convert::profile::build_jp_cemu_header;
+use mh3g_save_convert::{
+    cec::{CEMU_HEADER_SIZE, CEMU_RECORD_AREA_OFFSET, empty_cemu_cec},
+    converter::{
+        convert_3ds_system_to_cemu_named, convert_3ds_to_cemu_named,
+        convert_external_component_to_cemu_named,
+    },
+    profile::{JP_3DS_HEADER, JP_CEMU_HEADER, build_jp_cemu_header},
+};
 
 #[cfg(target_os = "macos")]
 use std::{
@@ -239,6 +246,269 @@ fn run_output_with_stopped_emulators(args: &[String]) -> Output {
 
 fn keys(value: &Value) -> BTreeSet<String> {
     value.as_object().unwrap().keys().cloned().collect()
+}
+
+#[test]
+fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = temp.path().join("3ds").join("user2");
+    let current_path = temp.path().join("cemu").join("user2");
+    fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(current_path.parent().unwrap()).unwrap();
+
+    let mut source = (0..THREE_DS_SIZE)
+        .map(|index| (index as u8).wrapping_mul(37).wrapping_add(11))
+        .collect::<Vec<_>>();
+    source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+    let source_lamp = JP_3DS_HEADER.len() + 0x6F44 + 0xE4;
+    source[source_lamp..source_lamp + 2].copy_from_slice(&[0x1E, 0x00]);
+    fs::write(&source_path, &source).unwrap();
+
+    let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
+    let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
+    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    let unrelated = JP_CEMU_HEADER.len() + 0x240;
+    current[unrelated] ^= 0x5A;
+    let unrelated_after = current[unrelated];
+    fs::write(&current_path, &current).unwrap();
+    let before_repair = current.clone();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+    assert_eq!(dry["components"][0]["merge"]["repaired_fields"], 1);
+    assert_eq!(dry["components"][0]["merge"]["preserved_conflicts"], 0);
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    let installed = fs::read(&current_path).unwrap();
+    assert_eq!(&installed[lamp..lamp + 2], &[0x00, 0x1E]);
+    assert_eq!(installed[unrelated], unrelated_after);
+    assert!(written["manifests"].as_array().unwrap().len() == 1);
+    let compatibility_manifest = written["compatibility_manifest"]
+        .as_str()
+        .expect("written compatibility repair has a coordinator manifest");
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-repair".into(),
+        "--manifest".into(),
+        compatibility_manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert_eq!(fs::read(&current_path).unwrap(), before_repair);
+}
+
+#[test]
+fn repair_converted_write_rejects_a_current_save_changed_after_dry_run() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let source = fs::read(&source_path).unwrap();
+    let current_path = target_slot(&temp, "user2");
+    let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
+    let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
+    let source_lamp = JP_3DS_HEADER.len() + 0x6F44 + 0xE4;
+    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    fs::write(&current_path, &current).unwrap();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--dry-run".into(),
+    ]);
+    current[JP_CEMU_HEADER.len() + 0x240] ^= 0x5A;
+    fs::write(&current_path, &current).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&current_path).unwrap(), current);
+}
+
+#[test]
+fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let mut source_slot = fs::read(&source_path).unwrap();
+    let source_lamp = JP_3DS_HEADER.len() + 0x6F44 + 0xE4;
+    source_slot[source_lamp..source_lamp + 2].copy_from_slice(&[0x1E, 0x00]);
+    fs::write(&source_path, &source_slot).unwrap();
+    let current_dir = temp.path().join("cemu-repair");
+    fs::create_dir_all(&current_dir).unwrap();
+    let current_path = current_dir.join("user2");
+    let mut current_slot = convert_3ds_to_cemu_named(&source_slot, "user2").unwrap();
+    let current_lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
+    current_slot[current_lamp..current_lamp + 2]
+        .copy_from_slice(&source_slot[source_lamp..source_lamp + 2]);
+    fs::write(&current_path, &current_slot).unwrap();
+    let current_slot_before = current_slot.clone();
+
+    let extdata = extras_fixture(&temp);
+    let card1_path = extdata.join("card1");
+    let mut card1_source = fs::read(&card1_path).unwrap();
+    let card_row = JP_3DS_HEADER.len() + 0x7C0;
+    card1_source[card_row..card_row + 2].copy_from_slice(&[0x01, 0x00]);
+    card1_source[card_row + 8] = 0;
+    fs::write(&card1_path, &card1_source).unwrap();
+
+    for component in [
+        "card1", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ] {
+        let source_bytes = fs::read(extdata.join(component)).unwrap();
+        let mut current_bytes =
+            convert_external_component_to_cemu_named(&source_bytes, component).unwrap();
+        if component == "card1" {
+            // Recreate the pre-0.0.5 display-state result.
+            current_bytes[JP_CEMU_HEADER.len() + 0x7C0 + 8] = 0;
+        } else if component == "cardbox" {
+            // Model a later Wii U compact-card update outside the repair map.
+            current_bytes[JP_CEMU_HEADER.len() + 1976..JP_CEMU_HEADER.len() + 1978]
+                .copy_from_slice(&1_u16.to_be_bytes());
+        }
+        fs::write(current_dir.join(component), current_bytes).unwrap();
+    }
+    let system_source = fs::read(system_fixture(&temp)).unwrap();
+    let mut system = convert_3ds_system_to_cemu_named(&system_source, "system").unwrap();
+    system[JP_CEMU_HEADER.len() + 0x40] = 0x5A;
+    fs::write(current_dir.join("system"), system).unwrap();
+
+    let mut cec = empty_cemu_cec().unwrap();
+    let card1_for_cec = fs::read(current_dir.join("card1")).unwrap();
+    let cec_record_start = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET;
+    cec[cec_record_start..cec_record_start + 0xE00]
+        .copy_from_slice(&card1_for_cec[JP_CEMU_HEADER.len()..JP_CEMU_HEADER.len() + 0xE00]);
+    fs::write(current_dir.join("cec"), cec).unwrap();
+
+    let card1_before = fs::read(current_dir.join("card1")).unwrap();
+    let preserved_before = [
+        "system", "cec", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ]
+    .into_iter()
+    .map(|component| (component, fs::read(current_dir.join(component)).unwrap()))
+    .collect::<BTreeMap<_, _>>();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--source-extdata-dir".into(),
+        extdata.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert!(dry["detection"]["candidates"].is_array());
+    let assumed_revisions = dry["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|component| component["merge"]["assumed_revision"].to_string())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        assumed_revisions.len(),
+        1,
+        "all selected components must use one historical converter revision"
+    );
+    let card1 = dry["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["component"] == "card1")
+        .unwrap();
+    assert_eq!(card1["merge"]["repaired_fields"], 1);
+    assert_eq!(
+        dry["preserved_components"],
+        serde_json::json!(["quest1", "quest2", "quest3", "quest4"])
+    );
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--source-extdata-dir".into(),
+        extdata.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    assert_eq!(
+        fs::read(current_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 8],
+        0x80
+    );
+    for (component, before) in &preserved_before {
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            *before,
+            "{component} must preserve later Wii U data during repair"
+        );
+    }
+    assert_eq!(written["manifests"].as_array().unwrap().len(), 2);
+    let compatibility_manifest = written["compatibility_manifest"]
+        .as_str()
+        .expect("combined repair has a coordinator manifest");
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-repair".into(),
+        "--manifest".into(),
+        compatibility_manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert_eq!(fs::read(&current_path).unwrap(), current_slot_before);
+    assert_eq!(fs::read(current_dir.join("card1")).unwrap(), card1_before);
+    for (component, before) in &preserved_before {
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            *before,
+            "{component} must remain byte-identical after rollback"
+        );
+    }
 }
 
 #[test]

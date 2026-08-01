@@ -14,9 +14,14 @@ code.
   `%LOCALAPPDATA%\MHToolkit\MH3GSaveConverter\settings.json`.
 - It does not search an SD card, MLC, ZIP, 7z, RAR, or a generic save folder.
   The user selects exact paths.
-- Core migration exposes `inspect` -> `convert --dry-run` -> final SHA-256
-  recheck -> `convert --write`. The UI opens a confirmation dialog before the
-  write and then records the emitted manifest path for manifest-bound rollback.
+- New conversion exposes `inspect` -> `convert --dry-run` -> final SHA-256
+  recheck -> `convert --write`. Repair mode uses the original 3DS `user#`, the
+  current same-slot Cemu `user#`, and optional complete 3DS ExtData through
+  `repair-converted`. Ambiguous detection requires choosing 0.0.3 through
+  0.0.6 and repeating Dry Run.
+- The UI opens a confirmation dialog before writing. Normal conversion records
+  its single-file manifest; repair records
+  `.mh3g-compatibility-repair-<UUID>.json` and uses `rollback-repair`.
 - The process bridge uses `ProcessStartInfo.ArgumentList`, sets
   `UseShellExecute = false`, and parses the CLI's JSON stdout. No shell command
   string is built and no conversion behavior is duplicated in C#.
@@ -25,12 +30,12 @@ code.
   Dry Run's aggregate source_record_set_sha256 and target_sha256_before are
   bound to its write, so a changed mailbox or cache fails closed. It never turns
   on merely because a player selected the primary slot.
-- `system` and ExtData (`card*`, `cardbox`, `quest*`) remain explicit,
-  independent CLI transactions in this first Windows shell. The UI does not
-  guess a Cemu MLC directory or silently install an ExtData group. On Windows,
-  ExtData conversion can be previewed and staged, but its multi-file install and rollback
-  are intentionally unavailable until the backend has an equivalent durable
-  directory-metadata and atomic-exchange transaction.
+- `system` and normal ExtData staging/install remain explicit transactions.
+  The Windows backend installs complete ExtData groups through `ReplaceFileW`,
+  manifest-bound backups, and a durable recovery journal. The UI never guesses
+  a Cemu MLC directory or silently installs a group. Compatibility repair
+  field-updates only `user#` and guild-card values that still match an older
+  conversion; current `quest1` through `quest4` bytes are preserved.
 
 Quit Nemessix, Azahar, and Cemu before any write or rollback. See the root
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md) and

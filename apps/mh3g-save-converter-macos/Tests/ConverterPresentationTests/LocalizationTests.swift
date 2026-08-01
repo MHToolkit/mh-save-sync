@@ -47,6 +47,11 @@ final class LocalizationTests: XCTestCase {
             "Guide.ToWriteAndOptionals",
             "Guide.ToHistory",
             "Guide.NextStep",
+            "Repair.Version",
+            "Repair.Version.Auto",
+            "Repair.Version.Hint",
+            "Repair.Version.Required",
+            "Repair.PreviewSHA256",
         ] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing \(key)")
             let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any])

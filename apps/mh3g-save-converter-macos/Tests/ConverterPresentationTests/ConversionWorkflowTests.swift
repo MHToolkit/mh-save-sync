@@ -26,6 +26,76 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(workflow.dryRunFingerprint?.targetSHA256, fixtureTargetInspection.sha256)
     }
 
+    func testRepairDryRunRequiresARevisionWhenDetectionIsAmbiguous() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairDryRunResult(confidence: "ambiguous", candidates: ["0.0.3", "0.0.4"])),
+            .success(repairDryRunResult(confidence: "selected", candidates: ["0.0.3"])),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+
+        XCTAssertTrue(workflow.repairRevisionSelectionRequired)
+        XCTAssertEqual(workflow.repairRevisionCandidates, [.v0_0_3, .v0_0_4])
+        XCTAssertNil(workflow.repairDryRunFingerprint)
+        XCTAssertFalse(workflow.canWrite)
+
+        workflow.setRepairFromVersion(.v0_0_3)
+        try await workflow.runCoreDryRun()
+
+        XCTAssertFalse(workflow.repairRevisionSelectionRequired)
+        XCTAssertEqual(workflow.repairDryRunFingerprint?.fromVersion, .v0_0_3)
+        XCTAssertTrue(workflow.canWrite)
+        let commands = await executor.recordedCommands()
+        XCTAssertFalse(commands[0].arguments.contains("--from-version"))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--from-version", "0.0.3"))
+    }
+
+    func testRepairWriteReusesTheAuthorizedRevisionAndPublishesCoordinatorManifest() async throws {
+        let manifest = "/tmp/.mh3g-compatibility-repair-test.json"
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairDryRunResult(confidence: "selected", candidates: ["0.0.5"])),
+            .success(repairWrittenResult(manifest: manifest)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        try await workflow.writeCore()
+
+        XCTAssertEqual(workflow.latestReport?.compatibilityManifest, manifest)
+        let commands = await executor.recordedCommands()
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--from-version", "0.0.5"))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--from-version", "0.0.5"))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-source-set-sha256", fixtureRepairSourceSetSHA256))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-current-set-sha256", fixtureRepairCurrentSetSHA256))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-preview-sha256", fixtureRepairPreviewSHA256))
+    }
+
+    func testCompatibilityManifestUsesRollbackRepair() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(rolledBackResult(operation: ConverterOperation.rollbackRepair.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        let manifest = URL(fileURLWithPath: "/tmp/.mh3g-compatibility-repair-test.json")
+
+        try await workflow.rollback(manifest: manifest)
+
+        let commands = await executor.recordedCommands()
+        let command = try XCTUnwrap(commands.first)
+        XCTAssertEqual(command.arguments, [
+            ConverterOperation.rollbackRepair.rawValue,
+            "--manifest", manifest.path,
+        ])
+    }
+
     func testNewExportAuthorizesAnAbsentTargetAndWritesWithAbsencePrecondition() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(newExportDryRunResult()),
@@ -664,6 +734,9 @@ private let fixtureSystemSourceSHA256 = "c".repeated(64)
 private let fixtureSystemTargetSHA256 = "d".repeated(64)
 private let fixtureCECSourceRecordSetSHA256 = "f".repeated(64)
 private let fixtureCECTargetSHA256 = "g".repeated(64)
+private let fixtureRepairSourceSetSHA256 = "h".repeated(64)
+private let fixtureRepairCurrentSetSHA256 = "i".repeated(64)
+private let fixtureRepairPreviewSHA256 = "j".repeated(64)
 
 private func dryRunResult() -> ConverterCommandResult {
     let json = """
@@ -688,6 +761,26 @@ private func systemDryRunResult() -> ConverterCommandResult {
 
 private func writtenResult(operation: String) -> ConverterCommandResult {
     let json = "{\"operation\":\"\(operation)\",\"status\":\"written\"}"
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairDryRunResult(confidence: String, candidates: [String]) -> ConverterCommandResult {
+    let candidateJSON = candidates.map { "\"\($0)\"" }.joined(separator: ",")
+    let json = """
+    {"operation":"repair-converted","status":"dry-run","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"components":[{"component":"user2","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]}}]}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairWrittenResult(manifest: String) -> ConverterCommandResult {
+    let json = """
+    {"operation":"repair-converted","status":"written","compatibility_manifest":"\(manifest)"}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func rolledBackResult(operation: String) -> ConverterCommandResult {
+    let json = "{\"operation\":\"\(operation)\",\"status\":\"rolled-back\"}"
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
@@ -764,6 +857,14 @@ private actor BlockingConverterCommandExecutor: ConverterCommandExecuting {
     func complete(with result: ConverterCommandResult) {
         resultWaiter?.resume(returning: result)
         resultWaiter = nil
+    }
+}
+
+private extension Array where Element == String {
+    func containsAdjacent(_ first: String, _ second: String) -> Bool {
+        indices.dropLast().contains { index in
+            self[index] == first && self[index + 1] == second
+        }
     }
 }
 

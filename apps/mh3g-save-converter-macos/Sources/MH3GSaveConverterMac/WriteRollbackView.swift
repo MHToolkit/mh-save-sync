@@ -398,7 +398,9 @@ struct WriteRollbackView: View {
     }
 
     private func captureManifest(into destination: inout URL?) {
-        guard let path = workflow.latestReport?.manifest else { return }
+        guard let report = workflow.latestReport,
+              let path = report.compatibilityManifest ?? report.manifest
+        else { return }
         destination = URL(fileURLWithPath: path)
     }
 }

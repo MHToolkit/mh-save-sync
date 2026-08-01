@@ -65,6 +65,7 @@ struct InstallBackend<'a> {
     probe: &'a dyn ProcessProbe,
     validator: &'a dyn InstallValidator,
     publisher: &'a dyn ManifestPublisher,
+    verify_fresh_conversion: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -182,6 +183,37 @@ pub fn install_with_expectations(
             probe: &PlatformProcessProbe::default(),
             validator: &CemuSaveValidator,
             publisher: &JsonManifestPublisher,
+            verify_fresh_conversion: true,
+        },
+    )
+}
+
+/// Install a field-aware compatibility merge through the same guarded slot
+/// transaction as a fresh conversion.
+///
+/// The caller must have produced `installed` through the compatibility merge
+/// core. This entry point intentionally skips only the fresh-conversion
+/// equality check; profile validation, process refusal, target hash pinning,
+/// backup, atomic replacement, manifest publication, and rollback remain
+/// unchanged.
+pub fn install_compatibility_merge_with_expectations(
+    source: &[u8],
+    installed: &[u8],
+    target: impl AsRef<Path>,
+    manifest_path: impl AsRef<Path>,
+    expectations: InstallExpectations<'_>,
+) -> Result<InstallManifest, ConversionError> {
+    install_with_backend(
+        source,
+        installed,
+        target,
+        manifest_path,
+        InstallBackend {
+            expectations,
+            probe: &PlatformProcessProbe::default(),
+            validator: &CemuSaveValidator,
+            publisher: &JsonManifestPublisher,
+            verify_fresh_conversion: false,
         },
     )
 }
@@ -204,6 +236,7 @@ pub fn install_with(
             probe,
             validator,
             publisher: &JsonManifestPublisher,
+            verify_fresh_conversion: true,
         },
     )
 }
@@ -227,6 +260,7 @@ pub fn install_with_publisher(
             probe,
             validator,
             publisher,
+            verify_fresh_conversion: true,
         },
     )
 }
@@ -256,15 +290,17 @@ fn install_with_backend(
         )));
     }
 
-    let filename = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
-    let expected = convert_source_to_cemu(source, filename)?;
-    if expected != installed {
-        return Err(ConversionError::InvalidSave(
-            "installed bytes do not match the converted source save".to_owned(),
-        ));
+    if backend.verify_fresh_conversion {
+        let filename = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
+        let expected = convert_source_to_cemu(source, filename)?;
+        if expected != installed {
+            return Err(ConversionError::InvalidSave(
+                "installed bytes do not match the converted source save".to_owned(),
+            ));
+        }
     }
 
     let installed_sha256 = sha256_hex(installed);

@@ -4,9 +4,10 @@ use crate::{
         CEMU_SIZE, CEMU_SYSTEM_SIZE, JP_3DS_HEADER, PAYLOAD_SIZE, SYSTEM_PAYLOAD_SIZE, SaveProfile,
         build_jp_cemu_header, inspect_bytes,
     },
+    revision::ConverterRevision,
     transforms::{
-        GuildCardBodyKind, apply_japanese_wiiu_corrections,
-        apply_japanese_wiiu_guild_card_corrections,
+        GuildCardBodyKind, apply_japanese_wiiu_corrections_for_revision,
+        apply_japanese_wiiu_guild_card_corrections_for_revision,
     },
 };
 
@@ -64,6 +65,18 @@ pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
 ) -> Result<Vec<u8>, ConversionError> {
+    convert_external_component_to_cemu_named_for_revision(
+        source,
+        filename,
+        ConverterRevision::LATEST,
+    )
+}
+
+pub(crate) fn convert_external_component_to_cemu_named_for_revision(
+    source: &[u8],
+    filename: &str,
+    revision: ConverterRevision,
+) -> Result<Vec<u8>, ConversionError> {
     let payload_size = external_component_payload_size(filename).ok_or_else(|| {
         ConversionError::InvalidSave(format!("unsupported MH3G extra-data component: {filename}"))
     })?;
@@ -77,15 +90,17 @@ pub fn convert_external_component_to_cemu_named(
     let source_payload = &source[JP_3DS_HEADER.len()..];
     let mut payload = source_payload.to_vec();
     match filename {
-        "card1" | "card2" | "card3" => apply_japanese_wiiu_guild_card_corrections(
+        "card1" | "card2" | "card3" => apply_japanese_wiiu_guild_card_corrections_for_revision(
             GuildCardBodyKind::Card,
             source_payload,
             &mut payload,
+            revision,
         )?,
-        "cardbox" => apply_japanese_wiiu_guild_card_corrections(
+        "cardbox" => apply_japanese_wiiu_guild_card_corrections_for_revision(
             GuildCardBodyKind::Cardbox,
             source_payload,
             &mut payload,
+            revision,
         )?,
         "quest1" | "quest2" | "quest3" | "quest4" => {}
         _ => unreachable!("external_component_payload_size validated the component"),
@@ -137,6 +152,14 @@ pub fn convert_3ds_to_cemu_named(
     source: &[u8],
     filename: &str,
 ) -> Result<Vec<u8>, ConversionError> {
+    convert_3ds_to_cemu_named_for_revision(source, filename, ConverterRevision::LATEST)
+}
+
+pub(crate) fn convert_3ds_to_cemu_named_for_revision(
+    source: &[u8],
+    filename: &str,
+    revision: ConverterRevision,
+) -> Result<Vec<u8>, ConversionError> {
     let inspection = inspect_bytes(source)?;
     if inspection.profile != SaveProfile::JpThreeDs {
         return Err(ConversionError::InvalidSave(format!(
@@ -147,7 +170,7 @@ pub fn convert_3ds_to_cemu_named(
 
     let source_payload = &source[JP_3DS_HEADER.len()..];
     let mut payload = source_payload.to_vec();
-    apply_japanese_wiiu_corrections(source_payload, &mut payload)?;
+    apply_japanese_wiiu_corrections_for_revision(source_payload, &mut payload, revision)?;
 
     let mut output = Vec::with_capacity(CEMU_SIZE);
     output.extend_from_slice(&build_jp_cemu_header(filename, PAYLOAD_SIZE)?);

@@ -239,6 +239,49 @@ NEW_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$NEW_DRY_RUN_JSON")
 
 如果目标原本存在，`--write` 会在同目录创建 `.user2.mh3g-backup-<previous-sha256>` 和 `.user2.mh3g-install.json`；重复安装还可能生成 `.user2.mh3g-install-history-<sha256>.json`。在 Cemu 中手动验证成功前，请保留 manifest。
 
+#### `repair-converted`：修复旧版转换后继续游玩的存档
+
+```text
+mh3g-save-convert repair-converted <原始-3DS-user#> --current <当前-Cemu-user#> \
+  [--source-extdata-dir <原始-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  [--dry-run | --write --expected-source-set-sha256 <SHA256> \
+    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+```
+
+该命令用于“曾用 0.0.3 至 0.0.6 转换，之后又在 Wii U/Cemu 中继续游玩”的存档。它不会把当前存档整体替换为旧 3DS 状态，而是为每个已知历史转换字段比较“旧版预期值、当前值、0.0.7 预期值”：仍等于旧版结果的字段才修复；已在 Wii U 侧变化的整字段保留并报告冲突。因此当前 HR、装备、素材、仓库、任务进度、农场、狩猎船和其他继续游玩的数据以当前 Cemu 存档为准。
+
+CLI 必须接收两个编号相同、文件名相同的准确 `user1`、`user2` 或 `user3` 文件。原生 macOS/Windows 工作台可以让用户选择文件或其直接父目录，但最终仍只把解析出的准确文件传给 CLI。若启用公会名片修复，`--source-extdata-dir` 必须是含全部八个源文件的 3DS `.../00000481/user` 目录，并且当前 `user#` 的父目录必须含全部八个同名 Cemu 文件。0.0.7 会字段级修复 `user#`、`card1`、`card2`、`card3`、`cardbox`；`quest1` 至 `quest4` 只参与集合校验并逐字节保留。`system`、`cec`、`phrase1` 至 `phrase3` 和未知文件不会被该命令读取或写入。
+
+先运行只读预览：
+
+```bash
+REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+  --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
+```
+
+如果 JSON 顶层的 `detection.confidence` 为 `ambiguous`，不要直接写入；从其 `candidates` 中确认当时使用的版本，并用 `--from-version` 重新运行 Dry Run。所有选中组件始终共用这一份版本判断，不会把 `user#` 和 `card*` 分别按不同历史版本修复。自动检测不是读取存档内嵌版本号，因为旧版本没有写入可靠标记。写入必须复用同一次最终 Dry Run 的三个集合哈希：
+
+```bash
+SOURCE_SET_SHA256=$(jq -er '.source_set_sha256' <<<"$REPAIR_JSON")
+CURRENT_SET_SHA256=$(jq -er '.current_set_sha256' <<<"$REPAIR_JSON")
+PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
+
+"${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+  --source-extdata-dir "$EXTRAS_SOURCE" \
+  --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
+  --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
+  --expected-preview-sha256 "$PREVIEW_SHA256" \
+  --write
+```
+
+若 Dry Run 使用了 `--from-version`，写入必须传入同一个值。任一源文件、当前目标或预览在两步之间变化都会失败关闭。成功写入会返回总 manifest `.mh3g-compatibility-repair-<UUID>.json`；它协调核心槽位与可选公会名片子事务。完整回滚使用：
+
+```bash
+"${CLI[@]}" rollback-repair --manifest "$COMPATIBILITY_MANIFEST"
+```
+
+只修核心 `user#` 时省略 `--source-extdata-dir`。若报告状态为 `no-changes`，说明所选范围无需修改，不会生成无意义的总 manifest。
+
 #### `convert-system`：转换共享 system 数据
 
 ```text

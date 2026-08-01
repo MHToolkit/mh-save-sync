@@ -11,6 +11,8 @@ namespace MHToolkit.MH3GSaveConverter.Windows;
 public sealed partial class MainWindow : Window
 {
     private bool _synchronizingLanguage;
+    private bool _synchronizingConversionMode;
+    private bool _synchronizingRepairVersion;
 
     public MainWindow()
     {
@@ -19,6 +21,8 @@ public sealed partial class MainWindow : Window
         DataContext = ViewModel;
         ConfigureWindowMaterial();
         SelectLanguage(ViewModel.LanguageOverride);
+        SelectConversionMode(ViewModel.SelectedConversionMode);
+        SelectRepairVersion(null);
     }
 
     public MainViewModel ViewModel { get; }
@@ -52,6 +56,50 @@ public sealed partial class MainWindow : Window
         }
 
         ViewModel.SetLanguage(item.Tag as string);
+    }
+
+    private void SelectConversionMode(Models.ConversionMode mode)
+    {
+        _synchronizingConversionMode = true;
+        ConversionModePicker.SelectedIndex = mode == Models.ConversionMode.RepairConverted ? 1 : 0;
+        _synchronizingConversionMode = false;
+    }
+
+    private void ConversionModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_synchronizingConversionMode
+            || ConversionModePicker.SelectedItem is not ComboBoxItem item)
+        {
+            return;
+        }
+
+        ViewModel.SetConversionMode(item.Tag as string);
+        SelectRepairVersion(null);
+    }
+
+    private void SelectRepairVersion(string? version)
+    {
+        _synchronizingRepairVersion = true;
+        RepairVersionPicker.SelectedIndex = version switch
+        {
+            "0.0.3" => 1,
+            "0.0.4" => 2,
+            "0.0.5" => 3,
+            "0.0.6" => 4,
+            _ => 0,
+        };
+        _synchronizingRepairVersion = false;
+    }
+
+    private void RepairVersionPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_synchronizingRepairVersion
+            || RepairVersionPicker.SelectedItem is not ComboBoxItem item)
+        {
+            return;
+        }
+
+        ViewModel.SetRepairFromVersion(item.Tag as string);
     }
 
     private async void ChooseSourceFile_Click(object sender, RoutedEventArgs e)
@@ -256,7 +304,7 @@ public sealed partial class MainWindow : Window
         SourcePathBox.Text = path;
         ViewModel.SourcePath = path;
 
-        var slot = Path.GetFileName(path).ToLowerInvariant();
+        var slot = (Path.GetFileName(path) ?? string.Empty).ToLowerInvariant();
         if (slot is "user1" or "user2" or "user3")
         {
             ViewModel.SelectedSlot = slot;

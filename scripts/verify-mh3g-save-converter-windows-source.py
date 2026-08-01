@@ -347,7 +347,10 @@ def main() -> int:
     workflow = read("ViewModels/MainViewModel.cs")
     for expected in (
         '"convert", paths.Source, "--output", paths.Target, "--dry-run"',
-        '"rollback", "--manifest", RollbackManifestPath',
+        'Path.GetFileName(RollbackManifestPath)',
+        '".mh3g-compatibility-repair-"',
+        'isCompatibilityRollback ? "rollback-repair" : "rollback"',
+        'new[] { operation, "--manifest", RollbackManifestPath }',
         '"convert-cec", "--source-dir", CecSourceDirectory, "--target", CecTargetPath, "--dry-run"',
         '"--write", "--experimental"',
         "_coreAuthorization",
@@ -355,6 +358,20 @@ def main() -> int:
         'Path.Combine(AppContext.BaseDirectory, "tools", "mh3g-save-convert.exe")',
     ):
         require(expected in workflow, f"workflow is missing {expected}")
+    for expected in (
+        "ConversionMode.RepairConverted",
+        "RepairDryRunAuthorization",
+        '"repair-converted", paths.Source, "--current", paths.Target',
+        'arguments.Add("--source-extdata-dir");',
+        'arguments.Add("--from-version");',
+        '"--expected-source-set-sha256"',
+        '"--expected-current-set-sha256"',
+        '"--expected-preview-sha256"',
+        'TryGetProperty("detection", out var detection)',
+        'TryGetString("compatibility_manifest")',
+        '"rollback-repair"',
+    ):
+        require(expected in workflow, f"Windows compatibility-repair workflow is missing {expected}")
 
     resolver = read("Models/SavePathResolution.cs")
     for expected in (
@@ -378,7 +395,8 @@ def main() -> int:
         "string.IsNullOrWhiteSpace(targetAfter.Sha256)",
         "string.IsNullOrWhiteSpace(reportTargetHash)",
         "string.Equals(targetAfter.Sha256, reportTargetHash, StringComparison.OrdinalIgnoreCase)",
-        "new DryRunAuthorization(sourceAfter, targetAfter, reportSourceHash",
+        "_coreAuthorization = new DryRunAuthorization(",
+        "sourceAfter, targetAfter, reportSourceHash, DateTimeOffset.UtcNow",
     ):
         require(expected in core_dry_run, f"core Dry Run is missing target hash validation {expected}")
 
@@ -528,14 +546,12 @@ def main() -> int:
         "a failed operation must not revoke unrelated authorization domains",
     )
 
-    # The CLI deliberately fail-closes automatic multi-file ExtData install
-    # and rollback on Windows until it has a safe two-name exchange backend.
-    # The native shell may still expose the genuinely read-only install Dry
-    # Run, but must never guide a user to a sidecar write/rollback that is
-    # specified to refuse. Staging always converts the complete ExtData set
-    # into the explicitly selected staging directory.
+    # The Windows backend now uses ReplaceFileW, a manifest-bound backup, and a
+    # durable recovery journal. The native shell must expose the same guarded
+    # ExtData write and rollback flow as the sidecar instead of retaining the
+    # former platform capability block.
     for expected in (
-        "private static bool SupportsSafeExtrasInstall => false;",
+        "private static bool SupportsSafeExtrasInstall => true;",
         "!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths()",
         "public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();",
         "public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();",
@@ -550,9 +566,8 @@ def main() -> int:
     for method in ("InstallExtrasAsync", "RollbackExtrasAsync"):
         body = public_method_body(workflow, method)
         require(
-            "if (!SupportsSafeExtrasInstall)" in body
-            and "Fail(Copy.ExtDataInstallUnavailable);" in body,
-            f"{method} must report the Windows ExtData install capability boundary before invoking the sidecar",
+            "if (!SupportsSafeExtrasInstall)" not in body,
+            f"{method} must not retain the obsolete Windows ExtData capability block",
         )
     extras_install_preview = public_method_body(workflow, "RunExtrasInstallDryRunAsync")
     require(
@@ -620,6 +635,9 @@ def main() -> int:
 
     window = read("MainWindow.xaml")
     for expected in (
+        "ConversionModePicker",
+        "RepairVersionPicker",
+        "RepairDetectionSummary",
         "SystemDryRun_Click",
         "WriteSystem_Click",
         "ExtrasStageDryRun_Click",
@@ -640,6 +658,8 @@ def main() -> int:
 
     code_behind = read("MainWindow.xaml.cs")
     for expected in (
+        "ConversionModePicker_SelectionChanged",
+        "RepairVersionPicker_SelectionChanged",
         "ChooseSystemSource_Click",
         "ChooseExtrasSource_Click",
         "SystemDryRun_Click",
@@ -649,6 +669,10 @@ def main() -> int:
 
     copy = read("Infrastructure/ConverterCopy.cs")
     for expected in (
+        "Repair an already converted save",
+        "修复已转换存档",
+        "Original converter version",
+        "原转换器版本",
         "Simplified Chinese",
         "简体中文",
         "Experimental CEC",

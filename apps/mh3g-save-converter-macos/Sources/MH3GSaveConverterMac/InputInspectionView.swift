@@ -21,6 +21,24 @@ struct InputInspectionView: View {
         ) {
             Form {
                 Section {
+                    Picker(ConverterCopy.text("Input.Mode", language: language), selection: Binding(
+                        get: { workflow.mode },
+                        set: { workflow.setMode($0) }
+                    )) {
+                        Text(ConverterCopy.text("Input.Mode.New", language: language))
+                            .tag(ConversionMode.newConversion)
+                        Text(ConverterCopy.text("Input.Mode.Repair", language: language))
+                            .tag(ConversionMode.repairConverted)
+                    }
+                    .pickerStyle(.segmented)
+                    if workflow.mode == .repairConverted {
+                        Label(
+                            ConverterCopy.text("Input.RepairHint", language: language),
+                            systemImage: "wrench.and.screwdriver"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                     Picker(ConverterCopy.text("Input.Slot", language: language), selection: $slot) {
                         ForEach(SaveSlot.allCases) { slot in
                             Text(slot.rawValue).tag(slot)

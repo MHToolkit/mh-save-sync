@@ -4,12 +4,17 @@ import Observation
 @MainActor
 @Observable
 public final class ConversionWorkflow {
+    public private(set) var mode: ConversionMode = .newConversion
     public private(set) var state: WorkflowState = .input
     public private(set) var input: ConversionInput?
     public private(set) var sourceInspection: InputInspection?
     public private(set) var targetInspection: InputInspection?
     public private(set) var components = ComponentSelection()
     public private(set) var dryRunFingerprint: DryRunFingerprint?
+    public private(set) var repairDryRunFingerprint: RepairDryRunFingerprint?
+    public private(set) var repairFromVersion: HistoricalConverterRevision?
+    public private(set) var repairRevisionCandidates = [HistoricalConverterRevision]()
+    public private(set) var repairRevisionSelectionRequired = false
     public private(set) var systemDryRunFingerprint: SystemDryRunFingerprint?
     public private(set) var extrasStageDryRunFingerprint: ExtrasStageDryRunFingerprint?
     public private(set) var extrasInstallDryRunFingerprint: ExtrasInstallDryRunFingerprint?
@@ -33,6 +38,7 @@ public final class ConversionWorkflow {
     public var canStartDryRun: Bool {
         input != nil
             && sourceInspection != nil
+            && (mode == .newConversion || targetInspection != nil)
             && selectedOptionalDataIsConfigured
             && activeOperation == nil
     }
@@ -48,6 +54,9 @@ public final class ConversionWorkflow {
     /// same gate; every optional command also validates its own paths before
     /// argv construction.
     public var selectedOptionalDataIsConfigured: Bool {
+        if mode == .repairConverted {
+            return !components.includeGuildCards || components.extraSourceDirectory != nil
+        }
         let systemConfigured = !components.includeSystem
             || (components.systemSource != nil && components.systemTarget != nil)
         let extrasConfigured = components.selectedGroups.isEmpty
@@ -62,7 +71,10 @@ public final class ConversionWorkflow {
     /// look complete in the UI. Experimental CEC remains an independent tool
     /// and does not block the normal conversion route.
     public var hasPendingSelectedOptionalWork: Bool {
-        (components.includeSystem && !systemWriteCompleted)
+        if mode == .repairConverted {
+            return false
+        }
+        return (components.includeSystem && !systemWriteCompleted)
             || (!components.selectedGroups.isEmpty && !extrasInstallCompleted)
     }
 
@@ -74,6 +86,17 @@ public final class ConversionWorkflow {
     /// Every write path re-checks its own current authorization before
     /// constructing argv, so programmatic UI calls cannot bypass the guard.
     public var canWrite: Bool {
+        if mode == .repairConverted {
+            guard activeOperation == nil,
+                  let authorized = repairDryRunFingerprint,
+                  let input
+            else { return false }
+            return authorized.source == input.source.standardizedFileURL
+                && authorized.current == input.target.standardizedFileURL
+                && authorized.extDataSource == components.extraSourceDirectory?.standardizedFileURL
+                && authorized.fromVersion == repairFromVersion
+                && !repairRevisionSelectionRequired
+        }
         guard activeOperation == nil,
               selectedOptionalDataIsConfigured,
               let authorized = dryRunFingerprint,
@@ -133,6 +156,28 @@ public final class ConversionWorkflow {
         targetInspection = nil
         coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .input, clearsPresentation: true)
+    }
+
+    public func setMode(_ mode: ConversionMode) {
+        guard activeOperation == nil, self.mode != mode else { return }
+        self.mode = mode
+        repairFromVersion = nil
+        repairRevisionCandidates = []
+        repairRevisionSelectionRequired = false
+        components.includeSystem = false
+        components.includeQuests = false
+        coreWriteCompleted = false
+        invalidateCoreAuthorization(nextState: .input, clearsPresentation: true)
+    }
+
+    public func setRepairFromVersion(_ revision: HistoricalConverterRevision?) {
+        guard activeOperation == nil, repairFromVersion != revision else { return }
+        repairFromVersion = revision
+        repairRevisionSelectionRequired = false
+        repairDryRunFingerprint = nil
+        if state == .dryRun {
+            state = .componentSelection
+        }
     }
 
     public func applyInspections(source: InputInspection, target: InputInspection?) {
@@ -224,8 +269,67 @@ public final class ConversionWorkflow {
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         guard sourceInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
         try requireSelectedOptionalDataConfiguration()
-        try await withOperation(.convert) { lease in
+        let operation: ConverterOperation = mode == .repairConverted ? .repairConverted : .convert
+        try await withOperation(operation) { lease in
             self.dryRunFingerprint = nil
+            self.repairDryRunFingerprint = nil
+            self.repairRevisionCandidates = []
+            self.repairRevisionSelectionRequired = false
+            if self.mode == .repairConverted {
+                var arguments = [
+                    ConverterOperation.repairConverted.rawValue,
+                    input.source.path,
+                    "--current", input.target.path,
+                ]
+                if self.components.includeGuildCards,
+                   let extData = self.components.extraSourceDirectory {
+                    arguments += ["--source-extdata-dir", extData.path]
+                }
+                if let revision = self.repairFromVersion {
+                    arguments += ["--from-version", revision.rawValue]
+                }
+                arguments.append("--dry-run")
+                let report = try await self.execute(
+                    .repairConverted,
+                    arguments: arguments,
+                    lease: lease
+                )
+                guard report.status == "dry-run",
+                      let sourceSetSHA256 = report.sourceSetSHA256,
+                      let currentSetSHA256 = report.currentSetSHA256,
+                      let previewSHA256 = report.previewSHA256,
+                      let detection = report.detection,
+                      let repairComponents = report.components,
+                      !repairComponents.isEmpty
+                else {
+                    throw self.failureAndRethrow(
+                        .repairConverted,
+                        ConversionWorkflowError.invalidReport("repair Dry Run requires source/current set and preview SHA-256"),
+                        stderr: report.stderr ?? ""
+                    )
+                }
+                self.repairRevisionCandidates = detection.candidates
+                self.repairRevisionSelectionRequired =
+                    detection.confidence == "ambiguous"
+                    && self.repairFromVersion == nil
+                if self.repairRevisionSelectionRequired {
+                    self.latestReport = report
+                    self.state = .dryRun
+                    return
+                }
+                self.repairDryRunFingerprint = RepairDryRunFingerprint(
+                    source: input.source,
+                    current: input.target,
+                    extDataSource: self.components.includeGuildCards ? self.components.extraSourceDirectory : nil,
+                    fromVersion: self.repairFromVersion,
+                    sourceSetSHA256: sourceSetSHA256,
+                    currentSetSHA256: currentSetSHA256,
+                    previewSHA256: previewSHA256
+                )
+                self.latestReport = report
+                self.state = .dryRun
+                return
+            }
             let report = try await self.execute(
                 .convert,
                 arguments: [
@@ -292,8 +396,54 @@ public final class ConversionWorkflow {
     public func writeCore() async throws {
         try requireIdleForIndependentOperation()
         try requireSelectedOptionalDataConfiguration()
-        let fingerprint = try currentAuthorizedFingerprint()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
+        if mode == .repairConverted {
+            guard let fingerprint = repairDryRunFingerprint,
+                  fingerprint.source == input.source.standardizedFileURL,
+                  fingerprint.current == input.target.standardizedFileURL,
+                  fingerprint.extDataSource == components.extraSourceDirectory?.standardizedFileURL,
+                  fingerprint.fromVersion == repairFromVersion,
+                  !repairRevisionSelectionRequired
+            else { throw ConversionWorkflowError.dryRunRequired }
+            try await withOperation(.repairConverted) { lease in
+                var arguments = [
+                    ConverterOperation.repairConverted.rawValue,
+                    input.source.path,
+                    "--current", input.target.path,
+                ]
+                if self.components.includeGuildCards,
+                   let extData = self.components.extraSourceDirectory {
+                    arguments += ["--source-extdata-dir", extData.path]
+                }
+                if let revision = fingerprint.fromVersion {
+                    arguments += ["--from-version", revision.rawValue]
+                }
+                arguments += [
+                    "--write",
+                    "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                    "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                    "--expected-preview-sha256", fingerprint.previewSHA256,
+                ]
+                let report = try await self.execute(
+                    .repairConverted,
+                    arguments: arguments,
+                    lease: lease
+                )
+                guard report.status == "written" || report.status == "no-changes" else {
+                    throw self.failureAndRethrow(
+                        .repairConverted,
+                        ConversionWorkflowError.invalidReport("expected written or no-changes status"),
+                        stderr: report.stderr ?? ""
+                    )
+                }
+                self.latestReport = report
+                self.state = .success
+                self.coreWriteCompleted = true
+                self.repairDryRunFingerprint = nil
+            }
+            return
+        }
+        let fingerprint = try currentAuthorizedFingerprint()
         try await withOperation(.convert) { lease in
             let report = try await self.execute(
                 .convert,
@@ -574,7 +724,13 @@ public final class ConversionWorkflow {
         cec: Bool = false
     ) async throws {
         try requireIdleForIndependentOperation()
-        let operation: ConverterOperation = cec ? .rollbackCEC : (extraGroup ? .rollbackExtras : .rollback)
+        let compatibilityRepair = !system
+            && !extraGroup
+            && !cec
+            && manifest.lastPathComponent.hasPrefix(".mh3g-compatibility-repair-")
+        let operation: ConverterOperation = cec
+            ? .rollbackCEC
+            : (extraGroup ? .rollbackExtras : (compatibilityRepair ? .rollbackRepair : .rollback))
         let authorizationScope: AuthorizationScope = cec ? .cec : (extraGroup ? .extras : (system ? .system : .core))
         try await withOperation(operation) { lease in
             let report = try await self.execute(
@@ -834,11 +990,19 @@ public final class ConversionWorkflow {
                 stderr: report.stderr ?? ""
             )
         }
+        let fingerprints = components.compactMap { $0.fingerprint() }
+        guard fingerprints.count == components.count else {
+            throw failureAndRethrow(
+                .convertExtras,
+                ConversionWorkflowError.invalidReport("ExtData stage components are missing source/output fingerprints"),
+                stderr: report.stderr ?? ""
+            )
+        }
         return ExtrasStageDryRunFingerprint(
             sourceDirectory: paths.source,
             stagingDirectory: paths.staging,
             groups: self.components.selectedGroups,
-            components: components.map { $0.fingerprint() }
+            components: fingerprints
         )
     }
 
@@ -925,6 +1089,9 @@ public final class ConversionWorkflow {
 
     private func invalidateCoreAuthorization(nextState: WorkflowState, clearsPresentation: Bool) {
         dryRunFingerprint = nil
+        repairDryRunFingerprint = nil
+        repairRevisionCandidates = []
+        repairRevisionSelectionRequired = false
         if clearsPresentation {
             latestReport = nil
             failure = nil
@@ -936,6 +1103,7 @@ public final class ConversionWorkflow {
         switch scope {
         case .core:
             dryRunFingerprint = nil
+            repairDryRunFingerprint = nil
         case .system:
             systemDryRunFingerprint = nil
         case .extras:
@@ -954,7 +1122,7 @@ public final class ConversionWorkflow {
         switch expectedStatus {
         case "written":
             switch operation {
-            case .convert:
+            case .convert, .repairConverted:
                 coreWriteCompleted = true
             case .convertSystem:
                 systemWriteCompleted = true
@@ -964,7 +1132,7 @@ public final class ConversionWorkflow {
                 extrasInstallCompleted = true
             case .convertCEC:
                 break
-            case .inspect, .rollback, .rollbackExtras, .rollbackCEC:
+            case .inspect, .rollback, .rollbackRepair, .rollbackExtras, .rollbackCEC:
                 break
             }
         case "rolled-back":
@@ -985,7 +1153,7 @@ public final class ConversionWorkflow {
 
     private func authorizationScope(for operation: ConverterOperation) -> AuthorizationScope {
         switch operation {
-        case .inspect, .convert, .rollback:
+        case .inspect, .convert, .repairConverted, .rollback, .rollbackRepair:
             .core
         case .convertSystem:
             .system

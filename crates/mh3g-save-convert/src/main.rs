@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     process,
 };
@@ -11,6 +13,10 @@ use mh3g_save_convert::{
     cec::{
         CecInstallExpectations, convert_cec_records, empty_cemu_cec, inspect_cec,
         install_cec_from_source_with_expectations, rollback_cec,
+    },
+    compatibility::{
+        CompatibilityMerge, DetectionConfidence, RevisionDetection, combine_revision_detections,
+        detect_component_revision, merge_component,
     },
     converter::{
         EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
@@ -24,12 +30,15 @@ use mh3g_save_convert::{
     io_at_path,
     profile::{SaveProfile, inspect_bytes, validate_slot_path, validate_system_path},
     progress::quest_progress,
+    revision::ConverterRevision,
     transaction::{
-        InstallExpectations, existing_target_sha256, install_with_expectations,
-        manifest_path_for_target, rollback, sha256_hex,
+        InstallExpectations, existing_target_sha256, install_compatibility_merge_with_expectations,
+        install_with_expectations, manifest_path_for_target, rollback, sha256_hex,
     },
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(name = "mh3g-save-convert", version)]
@@ -126,6 +135,39 @@ enum Command {
         #[arg(long, conflicts_with = "dry_run")]
         write: bool,
     },
+    /// Repair an older converted save without replacing later Wii U progress.
+    RepairConverted {
+        /// Original Japanese 3DS user1/user2/user3 used for the old conversion.
+        source: PathBuf,
+        /// Current same-numbered Wii U/Cemu slot after continued play.
+        #[arg(long)]
+        current: PathBuf,
+        /// Optional complete 3DS ExtData `user` directory. When present, the
+        /// current Cemu directory must contain all card*/quest* components.
+        #[arg(long)]
+        source_extdata_dir: Option<PathBuf>,
+        /// Override automatic historical-version classification.
+        #[arg(long, value_enum)]
+        from_version: Option<ConverterRevision>,
+        /// Require the complete original 3DS input-set SHA-256 from Dry Run.
+        #[arg(long, requires = "write")]
+        expected_source_set_sha256: Option<String>,
+        /// Require the complete current Cemu input-set SHA-256 from Dry Run.
+        #[arg(long, requires = "write")]
+        expected_current_set_sha256: Option<String>,
+        /// Require the exact merge-preview SHA-256 from Dry Run.
+        #[arg(long, requires = "write")]
+        expected_preview_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Roll back a compatibility repair as one coordinated transaction.
+    RollbackRepair {
+        #[arg(long)]
+        manifest: PathBuf,
+    },
     /// Convert the Japanese MH3G 3DS shared system data, dry-running unless --write is given.
     ConvertSystem {
         source: PathBuf,
@@ -221,6 +263,15 @@ struct CecConversionOptions {
     dry_run: bool,
     write: bool,
     experimental: bool,
+}
+
+#[derive(Debug)]
+struct RepairWriteOptions {
+    expected_source_set_sha256: Option<String>,
+    expected_current_set_sha256: Option<String>,
+    expected_preview_sha256: Option<String>,
+    dry_run: bool,
+    write: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -359,6 +410,62 @@ struct CecRollbackReport {
     status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct RepairComponentReport {
+    component: String,
+    detection: RevisionDetection,
+    merge: CompatibilityMerge,
+    target: PathBuf,
+    modified: bool,
+}
+
+struct RepairComponentInput {
+    component: String,
+    source: Vec<u8>,
+    current: Vec<u8>,
+    target: PathBuf,
+    detection: RevisionDetection,
+}
+
+#[derive(Debug, Serialize)]
+struct RepairConvertedReport {
+    operation: &'static str,
+    status: &'static str,
+    source: PathBuf,
+    current: PathBuf,
+    source_extdata_dir: Option<PathBuf>,
+    source_set_sha256: String,
+    current_set_sha256: String,
+    preview_sha256: String,
+    detection: RevisionDetection,
+    components: Vec<RepairComponentReport>,
+    preserved_components: Vec<String>,
+    manifests: Vec<PathBuf>,
+    compatibility_manifest: Option<PathBuf>,
+}
+
+const COMPATIBILITY_REPAIR_MANIFEST_VERSION: u32 = 1;
+const COMPATIBILITY_REPAIR_MANIFEST_PREFIX: &str = ".mh3g-compatibility-repair-";
+
+#[derive(Debug, Serialize, serde::Deserialize)]
+struct CompatibilityRepairManifest {
+    version: u32,
+    transaction_id: String,
+    current_dir: PathBuf,
+    source_set_sha256: String,
+    current_set_sha256: String,
+    preview_sha256: String,
+    core_manifest: Option<PathBuf>,
+    extras_manifest: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompatibilityRollbackReport {
+    operation: &'static str,
+    manifest: PathBuf,
+    status: &'static str,
+}
+
 fn main() {
     if let Err(error) = run(Cli::parse()) {
         eprintln!("{error}");
@@ -465,6 +572,35 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
         Command::RollbackExtras { manifest } => {
             println!("{}", serde_json::to_string(&rollback_extras(manifest)?)?)
         }
+        Command::RepairConverted {
+            source,
+            current,
+            source_extdata_dir,
+            from_version,
+            expected_source_set_sha256,
+            expected_current_set_sha256,
+            expected_preview_sha256,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&repair_converted(
+                source,
+                current,
+                source_extdata_dir,
+                from_version,
+                RepairWriteOptions {
+                    expected_source_set_sha256,
+                    expected_current_set_sha256,
+                    expected_preview_sha256,
+                    dry_run,
+                    write,
+                },
+            )?)?
+        ),
+        Command::RollbackRepair { manifest } => {
+            println!("{}", serde_json::to_string(&rollback_repair(manifest)?)?)
+        }
         command => {
             let report = match command {
                 Command::Inspect { source } => inspect(source)?,
@@ -510,7 +646,9 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 | Command::RollbackCec { .. }
                 | Command::ConvertExtras { .. }
                 | Command::InstallExtras { .. }
-                | Command::RollbackExtras { .. } => unreachable!(),
+                | Command::RollbackExtras { .. }
+                | Command::RepairConverted { .. }
+                | Command::RollbackRepair { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
         }
@@ -908,6 +1046,503 @@ fn convert_component(
 
 fn read_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, ConversionError> {
     io_at_path(fs::read(path), operation, path)
+}
+
+fn repair_converted(
+    source: PathBuf,
+    current: PathBuf,
+    source_extdata_dir: Option<PathBuf>,
+    from_version: Option<ConverterRevision>,
+    options: RepairWriteOptions,
+) -> Result<RepairConvertedReport, ConversionError> {
+    debug_assert!(!(options.dry_run && options.write));
+    validate_slot_path(&source)?;
+    validate_slot_path(&current)?;
+    if source.file_name() != current.file_name() {
+        return Err(ConversionError::InvalidSave(format!(
+            "original 3DS and current Cemu slots must have the same basename: {} vs {}",
+            source.display(),
+            current.display()
+        )));
+    }
+    let slot_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| ConversionError::InvalidSave("save slot name is invalid".to_owned()))?;
+    let current_parent = current.parent().ok_or_else(|| {
+        ConversionError::InvalidSave("current Cemu slot has no parent directory".to_owned())
+    })?;
+    let current_dir = io_at_path(
+        fs::canonicalize(current_parent),
+        "resolving compatibility target directory",
+        current_parent,
+    )?;
+
+    let source_slot = read_file(&source, "reading original 3DS compatibility source")?;
+    let current_slot = read_file(&current, "reading current Cemu compatibility target")?;
+    let mut source_set = BTreeMap::from([(slot_name.to_owned(), source_slot.clone())]);
+    let mut current_set = BTreeMap::from([(slot_name.to_owned(), current_slot.clone())]);
+
+    let slot_detection = detect_component_revision(&source_slot, &current_slot, slot_name)?;
+    let mut repair_inputs = vec![RepairComponentInput {
+        component: slot_name.to_owned(),
+        detection: slot_detection,
+        source: source_slot.clone(),
+        current: current_slot.clone(),
+        target: current.clone(),
+    }];
+    let mut preserved_components = Vec::new();
+
+    if let Some(extdata_dir) = source_extdata_dir.as_deref() {
+        if !extdata_dir.is_dir() {
+            return Err(ConversionError::InvalidSave(format!(
+                "3DS ExtData source is not a directory: {}",
+                extdata_dir.display()
+            )));
+        }
+        for component in EXTERNAL_COMPONENT_NAMES {
+            let source_path = extdata_dir.join(component);
+            let current_path = current_dir.join(component);
+            if !source_path.is_file() || !current_path.is_file() {
+                return Err(ConversionError::InvalidSave(format!(
+                    "compatibility merge requires matching complete ExtData components: {} and {}",
+                    source_path.display(),
+                    current_path.display()
+                )));
+            }
+            let source_bytes = read_file(&source_path, "reading original 3DS ExtData")?;
+            let current_bytes = read_file(&current_path, "reading current Cemu ExtData")?;
+            // This validates both profiles even for payload-preserving quest
+            // components that are not changed by compatibility repair.
+            let latest = convert_external_component_to_cemu_named(&source_bytes, component)?;
+            mh3g_save_convert::converter::validate_cemu_external_component_named(
+                &current_bytes,
+                component,
+            )?;
+            debug_assert_eq!(latest.len(), current_bytes.len());
+            source_set.insert(component.to_owned(), source_bytes.clone());
+            current_set.insert(component.to_owned(), current_bytes.clone());
+
+            if matches!(component, "card1" | "card2" | "card3" | "cardbox") {
+                let detection =
+                    detect_component_revision(&source_bytes, &current_bytes, component)?;
+                repair_inputs.push(RepairComponentInput {
+                    component: component.to_owned(),
+                    detection,
+                    source: source_bytes,
+                    current: current_bytes,
+                    target: current_path,
+                });
+            } else {
+                preserved_components.push(component.to_owned());
+            }
+        }
+    }
+
+    let detection = combine_revision_detections(
+        &repair_inputs
+            .iter()
+            .map(|input| input.detection.clone())
+            .collect::<Vec<_>>(),
+    );
+    let revision = select_repair_revision(&detection, from_version, !options.write)?;
+    let components = repair_inputs
+        .into_iter()
+        .map(|input| {
+            let merge = merge_component(&input.source, &input.current, &input.component, revision)?;
+            Ok(RepairComponentReport {
+                component: input.component,
+                detection: input.detection,
+                modified: merge.current_sha256 != merge.merged_sha256,
+                merge,
+                target: input.target,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+
+    let source_set_sha256 = component_set_sha256(&source_set);
+    let current_set_sha256 = component_set_sha256(&current_set);
+    let preview_bytes = serde_json::to_vec(&(
+        &source_set_sha256,
+        &current_set_sha256,
+        &detection,
+        &components,
+        &preserved_components,
+    ))?;
+    let preview_sha256 = hex::encode(Sha256::digest(preview_bytes));
+
+    if options.write {
+        require_repair_expectation(
+            options.expected_source_set_sha256.as_deref(),
+            &source_set_sha256,
+            "source set",
+        )?;
+        require_repair_expectation(
+            options.expected_current_set_sha256.as_deref(),
+            &current_set_sha256,
+            "current set",
+        )?;
+        require_repair_expectation(
+            options.expected_preview_sha256.as_deref(),
+            &preview_sha256,
+            "preview",
+        )?;
+    }
+
+    let mut manifests = Vec::new();
+    let mut core_manifest = None;
+    let mut extras_manifest = None;
+    if options.write && components[0].modified {
+        let manifest_path = manifest_path_for_target(&current)?;
+        install_compatibility_merge_with_expectations(
+            &source_slot,
+            &components[0].merge.bytes,
+            &current,
+            &manifest_path,
+            InstallExpectations {
+                source_sha256: Some(components[0].merge.source_sha256.as_str()),
+                target_sha256: Some(components[0].merge.current_sha256.as_str()),
+                target_must_be_absent: false,
+            },
+        )?;
+        manifests.push(manifest_path.clone());
+        core_manifest = Some(manifest_path);
+    }
+
+    let card_components = components
+        .iter()
+        .skip(1)
+        .filter(|component| {
+            matches!(
+                component.component.as_str(),
+                "card1" | "card2" | "card3" | "cardbox"
+            )
+        })
+        .collect::<Vec<_>>();
+    let cards_modified = card_components.iter().any(|component| component.modified);
+    if options.write && cards_modified {
+        let staging_parent = current_dir.parent().ok_or_else(|| {
+            ConversionError::InvalidSave(
+                "current Cemu save directory has no parent for compatibility staging".to_owned(),
+            )
+        })?;
+        let staging_dir = staging_parent.join(format!(".mh3g-compat-staging-{}", Uuid::new_v4()));
+        io_at_path(
+            fs::create_dir(&staging_dir),
+            "creating compatibility staging directory",
+            &staging_dir,
+        )?;
+        let install_result = (|| {
+            for component in EXTERNAL_COMPONENT_NAMES {
+                let bytes = if let Some(merged) = card_components
+                    .iter()
+                    .find(|candidate| candidate.component == component)
+                {
+                    merged.merge.bytes.as_slice()
+                } else {
+                    current_set
+                        .get(component)
+                        .expect("complete current ExtData set was validated")
+                        .as_slice()
+                };
+                let path = staging_dir.join(component);
+                io_at_path(
+                    fs::write(&path, bytes),
+                    "writing compatibility staging component",
+                    &path,
+                )?;
+            }
+            let groups = [ExtraGroup::GuildCards];
+            let dry_run = dry_run_extra_groups(&staging_dir, &current_dir, &groups, None, None)?;
+            install_extra_groups(
+                &staging_dir,
+                &current_dir,
+                &groups,
+                Some(&dry_run.staging_set_sha256),
+                Some(&dry_run.target_set_sha256),
+            )
+        })();
+        let _ = fs::remove_dir_all(&staging_dir);
+        match install_result {
+            Ok(report) => {
+                manifests.push(report.manifest_path.clone());
+                extras_manifest = Some(report.manifest_path);
+            }
+            Err(error) => {
+                if let Some(manifest) = core_manifest.as_deref()
+                    && let Err(rollback_error) = rollback(manifest)
+                {
+                    return Err(ConversionError::UnsafeInstall(format!(
+                        "guild-card compatibility install failed: {error}; core rollback also failed: {rollback_error}; retain {}",
+                        manifest.display()
+                    )));
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    let any_modified = components.iter().any(|component| component.modified);
+    let compatibility_manifest = if options.write && !manifests.is_empty() {
+        let transaction_id = Uuid::new_v4().hyphenated().to_string();
+        let manifest_path = current_dir.join(format!(
+            "{COMPATIBILITY_REPAIR_MANIFEST_PREFIX}{transaction_id}.json"
+        ));
+        let manifest = CompatibilityRepairManifest {
+            version: COMPATIBILITY_REPAIR_MANIFEST_VERSION,
+            transaction_id,
+            current_dir: current_dir.clone(),
+            source_set_sha256: source_set_sha256.clone(),
+            current_set_sha256: current_set_sha256.clone(),
+            preview_sha256: preview_sha256.clone(),
+            core_manifest: core_manifest.clone(),
+            extras_manifest: extras_manifest.clone(),
+        };
+        if let Err(error) = write_compatibility_manifest(&manifest_path, &manifest) {
+            let mut rollback_errors = Vec::new();
+            if let Some(extras) = extras_manifest.as_deref()
+                && let Err(rollback_error) = rollback_extra_groups(extras)
+            {
+                rollback_errors.push(format!(
+                    "guild-card rollback {}: {rollback_error}",
+                    extras.display()
+                ));
+            }
+            if let Some(core) = core_manifest.as_deref()
+                && let Err(rollback_error) = rollback(core)
+            {
+                rollback_errors.push(format!(
+                    "core rollback {}: {rollback_error}",
+                    core.display()
+                ));
+            }
+            if rollback_errors.is_empty() {
+                return Err(error);
+            }
+            return Err(ConversionError::UnsafeInstall(format!(
+                "compatibility repair succeeded but coordinator manifest publication failed: {error}; compensation also failed: {}",
+                rollback_errors.join("; ")
+            )));
+        }
+        Some(manifest_path)
+    } else {
+        None
+    };
+    Ok(RepairConvertedReport {
+        operation: "repair-converted",
+        status: if options.write {
+            if any_modified {
+                "written"
+            } else {
+                "no-changes"
+            }
+        } else {
+            "dry-run"
+        },
+        source,
+        current,
+        source_extdata_dir,
+        source_set_sha256,
+        current_set_sha256,
+        preview_sha256,
+        detection,
+        components,
+        preserved_components,
+        manifests,
+        compatibility_manifest,
+    })
+}
+
+fn write_compatibility_manifest(
+    path: &Path,
+    manifest: &CompatibilityRepairManifest,
+) -> Result<(), ConversionError> {
+    let bytes = serde_json::to_vec_pretty(manifest)?;
+    let mut file = io_at_path(
+        OpenOptions::new().write(true).create_new(true).open(path),
+        "creating compatibility repair manifest",
+        path,
+    )?;
+    io_at_path(
+        file.write_all(&bytes).and_then(|_| file.sync_all()),
+        "writing compatibility repair manifest",
+        path,
+    )
+}
+
+fn rollback_repair(manifest_path: PathBuf) -> Result<CompatibilityRollbackReport, ConversionError> {
+    let manifest_path = io_at_path(
+        fs::canonicalize(&manifest_path),
+        "resolving compatibility repair manifest",
+        &manifest_path,
+    )?;
+    let parent = manifest_path.parent().ok_or_else(|| {
+        ConversionError::InvalidSave(
+            "compatibility repair manifest has no parent directory".to_owned(),
+        )
+    })?;
+    let filename = manifest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConversionError::InvalidSave(
+                "compatibility repair manifest filename is invalid".to_owned(),
+            )
+        })?;
+    let transaction_id = filename
+        .strip_prefix(COMPATIBILITY_REPAIR_MANIFEST_PREFIX)
+        .and_then(|name| name.strip_suffix(".json"))
+        .ok_or_else(|| {
+            ConversionError::InvalidSave(
+                "compatibility repair manifest filename is not controlled".to_owned(),
+            )
+        })?;
+    let parsed_id = Uuid::parse_str(transaction_id).map_err(|_| {
+        ConversionError::InvalidSave(
+            "compatibility repair manifest transaction ID is invalid".to_owned(),
+        )
+    })?;
+    if parsed_id.hyphenated().to_string() != transaction_id {
+        return Err(ConversionError::InvalidSave(
+            "compatibility repair manifest transaction ID is not canonical".to_owned(),
+        ));
+    }
+
+    let bytes = read_file(&manifest_path, "reading compatibility repair manifest")?;
+    let manifest: CompatibilityRepairManifest = serde_json::from_slice(&bytes)?;
+    if manifest.version != COMPATIBILITY_REPAIR_MANIFEST_VERSION
+        || manifest.transaction_id != transaction_id
+        || manifest.current_dir != parent
+        || manifest.core_manifest.is_none() && manifest.extras_manifest.is_none()
+    {
+        return Err(ConversionError::InvalidSave(
+            "compatibility repair manifest metadata is inconsistent".to_owned(),
+        ));
+    }
+    for (label, hash) in [
+        ("source set", &manifest.source_set_sha256),
+        ("current set", &manifest.current_set_sha256),
+        ("preview", &manifest.preview_sha256),
+    ] {
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ConversionError::InvalidSave(format!(
+                "compatibility repair {label} SHA-256 is invalid"
+            )));
+        }
+    }
+    for child in [
+        manifest.core_manifest.as_deref(),
+        manifest.extras_manifest.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !child.is_absolute() || !child.starts_with(parent) {
+            return Err(ConversionError::InvalidSave(format!(
+                "compatibility repair child manifest is outside its target directory: {}",
+                child.display()
+            )));
+        }
+    }
+
+    if let Some(extras) = manifest.extras_manifest.as_deref() {
+        rollback_extra_groups(extras)?;
+    }
+    if let Some(core) = manifest.core_manifest.as_deref() {
+        rollback(core)?;
+    }
+    io_at_path(
+        fs::remove_file(&manifest_path),
+        "removing consumed compatibility repair manifest",
+        &manifest_path,
+    )?;
+    Ok(CompatibilityRollbackReport {
+        operation: "rollback-repair",
+        manifest: manifest_path,
+        status: "rolled-back",
+    })
+}
+
+fn select_repair_revision(
+    detection: &RevisionDetection,
+    override_revision: Option<ConverterRevision>,
+    allow_ambiguous_preview: bool,
+) -> Result<ConverterRevision, ConversionError> {
+    if let Some(revision) = override_revision {
+        let supported = detection.scores.iter().any(|score| {
+            score.revision == revision && (score.matching_fields > 0 || score.already_current > 0)
+        });
+        let has_discriminators = detection
+            .scores
+            .iter()
+            .any(|score| score.matching_fields > 0 || score.already_current > 0);
+        if !supported && has_discriminators {
+            return Err(ConversionError::InvalidSave(format!(
+                "requested converter revision {} is contradicted by the selected component",
+                revision.label()
+            )));
+        }
+        return Ok(revision);
+    }
+
+    match detection.confidence {
+        DetectionConfidence::Exact | DetectionConfidence::CompatibleRange => detection
+            .candidates
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                ConversionError::InvalidSave(
+                    "converter revision detection returned no candidate".to_owned(),
+                )
+            }),
+        DetectionConfidence::Ambiguous if allow_ambiguous_preview => detection
+            .candidates
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                ConversionError::InvalidSave(
+                    "ambiguous converter revision detection returned no candidate".to_owned(),
+                )
+            }),
+        DetectionConfidence::Ambiguous => Err(ConversionError::InvalidSave(
+            "historical converter revision is ambiguous; run Dry Run, inspect the candidates, and repeat with --from-version"
+                .to_owned(),
+        )),
+        DetectionConfidence::Unknown => Err(ConversionError::InvalidSave(
+            "current Wii U component does not match a supported 0.0.3-0.0.6 conversion"
+                .to_owned(),
+        )),
+    }
+}
+
+fn component_set_sha256(components: &BTreeMap<String, Vec<u8>>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"mh3g-compatibility-component-set-v1\0");
+    for (name, bytes) in components {
+        let content_sha256 = sha256_hex(bytes);
+        digest.update((name.len() as u64).to_be_bytes());
+        digest.update(name.as_bytes());
+        digest.update(content_sha256.as_bytes());
+    }
+    hex::encode(digest.finalize())
+}
+
+fn require_repair_expectation(
+    expected: Option<&str>,
+    observed: &str,
+    label: &str,
+) -> Result<(), ConversionError> {
+    let expected = expected.ok_or_else(|| {
+        ConversionError::UnsafeInstall(format!(
+            "compatibility write requires the expected {label} SHA-256 from Dry Run"
+        ))
+    })?;
+    if expected != observed {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "compatibility {label} SHA-256 changed after Dry Run: expected {expected}, observed {observed}"
+        )));
+    }
+    Ok(())
 }
 
 fn convert_extras(
