@@ -21,7 +21,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250606001" />
+    <!-- 1.8.8+ repairs the Windows App SDK XAML compiler's CI diagnostic path;
+         1.8.10 is the current stable servicing release and retains the same
+         Windows 10 1809 minimum supported OS as the existing 1.7 shell. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
   </ItemGroup>
 
   <ItemGroup>
