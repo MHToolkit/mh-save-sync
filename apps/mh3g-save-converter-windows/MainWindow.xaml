@@ -262,7 +262,7 @@
                             <Button Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.WriteSelectedSave}" /></StackPanel>
                             </Button>
-                            <TextBlock Text="{Binding Copy.WriteUnavailable}" Visibility="{Binding CanWriteCore, Converter={StaticResource BooleanNegationConverter}}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding Copy.WriteUnavailable}" Visibility="{Binding WriteUnavailableVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
                             <Border Padding="12" Background="#FFF3F6FA" CornerRadius="8">
                                 <StackPanel Spacing="3">
                                     <TextBlock Text="{Binding Copy.TransactionDetails}" FontWeight="SemiBold" />
@@ -432,7 +432,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.15*" /><ColumnDefinition Width="0.85*" /></Grid.ColumnDefinitions>
                     <StackPanel Spacing="10">
                         <TextBlock Text="{Binding Copy.ResultTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <TextBlock Text="{Binding Copy.ResultEmpty}" Visibility="{Binding HasLatestReport, Converter={StaticResource BooleanNegationConverter}}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        <TextBlock Text="{Binding Copy.ResultEmpty}" Visibility="{Binding LatestReportEmptyVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
                         <TextBox Text="{Binding LatestReport}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="12" MinHeight="194" MaxHeight="280" ScrollViewer.VerticalScrollBarVisibility="Auto" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Spacing="10">

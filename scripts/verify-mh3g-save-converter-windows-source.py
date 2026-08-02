@@ -479,6 +479,13 @@ def main() -> int:
         and 'ScrollViewer.VerticalScrollBarVisibility="Auto"' in window,
         "WinUI XAML must use valid Symbol and TextBox scrollbar members",
     )
+    app_xaml = read("App.xaml")
+    require(
+        "BooleanNegationConverter" not in app_xaml
+        and 'Visibility="{Binding WriteUnavailableVisibility}"' in window
+        and 'Visibility="{Binding LatestReportEmptyVisibility}"' in window,
+        "WinUI must avoid an App-resource converter that dotnet publish cannot resolve",
+    )
     require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
     require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
