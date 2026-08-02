@@ -32,7 +32,7 @@
                 </StackPanel>
             </Border>
             <Grid Grid.Column="1" VerticalAlignment="Center">
-                <Path Data="M4,24 L34,24 M25,15 L34,24 L25,33" Stroke="#FF0A7AFF" StrokeThickness="3" StrokeLineCap="Round" StrokeLineJoin="Round" />
+                <Path Data="M4,24 L34,24 L25,15 M34,24 L25,33" Stroke="#FF0A7AFF" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
             </Grid>
             <Border Grid.Column="2" Padding="20,18" Background="#FF18212F" CornerRadius="8">
                 <StackPanel Spacing="7">

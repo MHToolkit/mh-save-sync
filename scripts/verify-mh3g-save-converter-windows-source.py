@@ -474,6 +474,11 @@ def main() -> int:
     )
 
     window = read("MainWindow.xaml")
+    require(
+        'Symbol="ProtectedDocument"' in window
+        and 'ScrollViewer.VerticalScrollBarVisibility="Auto"' in window,
+        "WinUI XAML must use valid Symbol and TextBox scrollbar members",
+    )
     require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
     require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
