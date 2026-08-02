@@ -32,7 +32,9 @@ def bootstrap(api: object) -> tuple[str, str]:
             "account_handle": account,
             "root_public_key_b64": identity["root_public_key_b64"],
         },
-        (201,),
+        # The commit-ordering probe runs first against the same fresh Compose
+        # stack and already registers this deterministic identity.
+        (201, 409),
     )
     api.request(
         "POST",
@@ -43,8 +45,9 @@ def bootstrap(api: object) -> tuple[str, str]:
             "device_public_key_b64": identity["device_public_key_b64"],
             "certificate_b64": identity["certificate_b64"],
         },
-        (201,),
+        (201, 409),
     )
+    api.authenticate_as_fixture()
     return account, device
 
 
@@ -90,6 +93,9 @@ def main() -> None:
         print(json.dumps({"prepared": True, "logical_save_id": logical_save}))
         return
 
+    # `finish` is a fresh process after a container restart. Reinstall the
+    # deterministic test signing identity before resuming authenticated calls.
+    api.authenticate_as_fixture()
     state = json.loads(args.state_file.read_text())
     COMMON.put_object(
         api,

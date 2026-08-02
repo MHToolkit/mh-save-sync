@@ -205,6 +205,7 @@ jobs:
           curl -fsS http://127.0.0.1:18080/ready
       - name: Run commit-ordering, conflict and resume E2E
         run: |
+          python3 scripts/test-compose-e2e-auth.py
           python3 scripts/compose-e2e.py
           python3 scripts/compose-resume-e2e.py prepare artifacts/ci-compose-resume-state.json
           docker compose -f deploy/compose/compose.yaml restart server
