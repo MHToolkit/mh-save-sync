@@ -41,20 +41,42 @@ fn binary() -> Command {
 }
 
 fn stderr_mentions_path(stderr: &str, path: &Path) -> bool {
+    stderr_mentions_path_for_platform(stderr, path, cfg!(windows))
+}
+
+fn stderr_mentions_path_for_platform(stderr: &str, path: &Path, windows: bool) -> bool {
     let displayed = path.to_string_lossy();
     if stderr.contains(displayed.as_ref()) {
         return true;
     }
 
-    // `std::fs::canonicalize` returns a verbatim path (\\?\C:\\...) on
-    // Windows. The transaction internals deliberately retain that path for
-    // filesystem safety, while the CLI contract only requires that the user
-    // supplied path remains identifiable in the diagnostic.
-    #[cfg(windows)]
-    return stderr.contains(&format!("\\\\?\\{displayed}"));
+    // `std::fs::canonicalize` can return a verbatim path (\\?\C:\\...) on
+    // Windows. Its exact prefix rendering is not stable across the standard
+    // library and error formatter, so require the final two caller-provided
+    // path components rather than comparing a formatter-owned absolute prefix.
+    windows
+        && path
+            .file_name()
+            .is_some_and(|file_name| stderr.contains(file_name.to_string_lossy().as_ref()))
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| stderr.contains(parent.to_string_lossy().as_ref()))
+}
 
-    #[cfg(not(windows))]
-    false
+#[test]
+fn diagnostic_path_matcher_accepts_a_windows_verbatim_path_without_losing_resource_identity() {
+    let path = Path::new(r"C:\Temp\slot\.user2.mh3g-install.lock");
+    assert!(stderr_mentions_path_for_platform(
+        r"I/O error `\\?\C:\Temp\slot\.user2.mh3g-install.lock`",
+        path,
+        true,
+    ));
+    assert!(!stderr_mentions_path_for_platform(
+        r"I/O error `\\?\C:\Temp\other\.user2.mh3g-install.lock`",
+        path,
+        true,
+    ));
 }
 
 fn source_fixture(temp: &TempDir) -> PathBuf {
