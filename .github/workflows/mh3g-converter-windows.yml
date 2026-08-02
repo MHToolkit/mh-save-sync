@@ -15,6 +15,7 @@ on:
       - scripts/mh3g-windows-launcher.ps1
       - scripts/package-mh3g-save-converter-windows.ps1
       - scripts/verify-mh3g-save-converter-windows-source.py
+      - scripts/verify-github-hosted-actions.py
       - .github/workflows/mh3g-converter-windows.yml
   push:
     branches: [main]
@@ -29,6 +30,7 @@ on:
       - scripts/mh3g-windows-launcher.ps1
       - scripts/package-mh3g-save-converter-windows.ps1
       - scripts/verify-mh3g-save-converter-windows-source.py
+      - scripts/verify-github-hosted-actions.py
       - .github/workflows/mh3g-converter-windows.yml
 
 permissions:
@@ -37,8 +39,10 @@ permissions:
 jobs:
   package-windows-x64:
     name: package Windows x64 executable
+    # The package script uses VsDevCmd from Visual Studio 2022. Pin this
+    # standard public runner instead of the moving windows-latest image.
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -47,18 +51,26 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
+      - name: Provision Visual C++ workload on the disposable hosted runner
+        shell: pwsh
+        run: |
+          choco install visualstudio2022-workload-vctools --yes --no-progress --package-parameters "--includeRecommended"
       - uses: Swatinem/rust-cache@v2
         timeout-minutes: 8
         continue-on-error: true
       - name: Verify WinUI source contract
-        run: python scripts/verify-mh3g-save-converter-windows-source.py
+        run: |
+          python scripts/verify-mh3g-save-converter-windows-source.py
+          python scripts/verify-github-hosted-actions.py
       # Keep CI and the Windows tester on one implementation. The script does
       # not launch the WinUI process, Cemu, or any real save; it runs only the
       # packaged sidecar and a disposable synthetic write/rollback smoke.
       - name: Package and self-verify Windows x64 archive
         shell: pwsh
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mh3g-save-converter-windows.ps1
+          # Hosted runners are disposable. Bootstrap only this fresh VM rather
+          # than requiring every runner image to preinstall the VS C++ workload.
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mh3g-save-converter-windows.ps1 -Bootstrap
       - name: Upload Windows package transcript on failure
         if: failure()
         uses: actions/upload-artifact@v5
@@ -66,7 +78,7 @@ jobs:
           name: mh3g-save-convert-windows-build-transcript-${{ github.sha }}
           path: artifacts/mh3g-save-convert-windows-build-transcript.txt
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 3
       - uses: actions/upload-artifact@v5
         if: success()
         with:
@@ -81,4 +93,4 @@ jobs:
             artifacts/mh3g-save-convert.exe.sha256
             artifacts/mh3g-save-convert-windows-build-transcript.txt
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3

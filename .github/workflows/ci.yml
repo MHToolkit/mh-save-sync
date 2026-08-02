@@ -3,16 +3,8 @@ name: ci
 on:
   workflow_dispatch:
   pull_request:
-    # The MHToolkit org currently has one 2c4g self-hosted ci-general runner.
-    # Do not burn Rust+Android capacity on documentation-only PR updates.
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
@@ -22,15 +14,12 @@ permissions:
   contents: read
 
 jobs:
-  # MHToolkit currently exposes a single 2c4g self-hosted runner for ci-general.
-  # Keep heavy jobs serialized so Rust+Android do not contend for CPU/RAM on the
-  # same limited host; the workflow-level concurrency above still cancels stale
-  # pushes before they consume runner time.
   dependency-review:
-    # Private repositories require GitHub Advanced Security for dependency review.
-    # Opt in only after GHAS is enabled to avoid a permanently failing PR check.
+    # This is a policy-dependent security check, not a hosted-runner quota
+    # check. Keep it opt-in until repository Dependency Graph/GHAS settings are
+    # configured; all build, test and package gates remain always enabled.
     if: github.event_name == 'pull_request' && vars.DEPENDENCY_REVIEW_ENABLED == 'true'
-    runs-on: [self-hosted, Linux, X64, ci-general]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -42,11 +31,8 @@ jobs:
           fail-on-severity: critical
 
   rust:
-    runs-on: [self-hosted, Linux, X64, ci-general]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      RUSTUP_DIST_SERVER: https://rsproxy.cn
-      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -131,18 +117,19 @@ jobs:
           path: |
             artifacts/sbom/mh-save-sync.cdx.json
             artifacts/checksums/rust.sha256
+          retention-days: 3
 
   android:
     needs: rust
-    runs-on: [self-hosted, Linux, X64, ci-general]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-      - name: Use runner-provided Java 17
-        run: |
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          java -version
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
       - uses: android-actions/setup-android@v3
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -181,9 +168,9 @@ jobs:
             apps/android/app/build/outputs/apk/debug/app-debug.apk
             artifacts/android-alpha/*
             artifacts/checksums/android.sha256
+          retention-days: 3
 
   macos-smoke:
-    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -200,9 +187,9 @@ jobs:
         with:
           name: macos-smoke-checksums
           path: artifacts/checksums/macos.sha256
+          retention-days: 3
 
   compose-e2e:
-    if: vars.ENABLE_GITHUB_HOSTED_JOBS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
