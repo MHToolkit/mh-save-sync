@@ -40,6 +40,23 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mh3g-save-convert"))
 }
 
+fn stderr_mentions_path(stderr: &str, path: &Path) -> bool {
+    let displayed = path.to_string_lossy();
+    if stderr.contains(displayed.as_ref()) {
+        return true;
+    }
+
+    // `std::fs::canonicalize` returns a verbatim path (\\?\C:\\...) on
+    // Windows. The transaction internals deliberately retain that path for
+    // filesystem safety, while the CLI contract only requires that the user
+    // supplied path remains identifiable in the diagnostic.
+    #[cfg(windows)]
+    return stderr.contains(&format!("\\\\?\\{displayed}"));
+
+    #[cfg(not(windows))]
+    false
+}
+
 fn source_fixture(temp: &TempDir) -> PathBuf {
     write_source(temp.path().join("source.bin"))
 }
@@ -1276,7 +1293,6 @@ fn install_extras_dry_run_reports_one_complete_group_without_writing() {
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group() {
     #[cfg(target_os = "macos")]
@@ -1350,71 +1366,6 @@ fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group()
             .contains("mh3g-extra-backup-")
     }));
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
-}
-
-#[cfg(windows)]
-#[test]
-fn install_extras_write_is_refused_before_mutating_the_complete_group() {
-    let temp = tempfile::tempdir().unwrap();
-    let staging_dir = staged_extras_fixture(&temp);
-    let target_dir = initialized_extra_target(&temp, &staging_dir);
-    let guild_card_before = ["card1", "card2", "card3", "cardbox"]
-        .into_iter()
-        .map(|component| {
-            (
-                component.to_owned(),
-                fs::read(target_dir.join(component)).unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let target_entries_before = fs::read_dir(&target_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>();
-
-    let dry_run = run_json(&[
-        "install-extras".into(),
-        "--staging-dir".into(),
-        staging_dir.to_string_lossy().into_owned(),
-        "--target-dir".into(),
-        target_dir.to_string_lossy().into_owned(),
-        "--groups".into(),
-        "guild-cards".into(),
-        "--dry-run".into(),
-    ]);
-    assert_eq!(dry_run["status"], "dry-run");
-
-    let output = run_output_with_stopped_emulators(&[
-        "install-extras".into(),
-        "--staging-dir".into(),
-        staging_dir.to_string_lossy().into_owned(),
-        "--target-dir".into(),
-        target_dir.to_string_lossy().into_owned(),
-        "--groups".into(),
-        "guild-cards".into(),
-        "--expected-staging-set-sha256".into(),
-        dry_run["staging_set_sha256"].as_str().unwrap().into(),
-        "--expected-target-set-sha256".into(),
-        dry_run["target_set_sha256_before"].as_str().unwrap().into(),
-        "--write".into(),
-    ]);
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("multi-file ExtData installation is unavailable on Windows"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    for (component, before) in guild_card_before {
-        assert_eq!(fs::read(target_dir.join(component)).unwrap(), before);
-    }
-    let target_entries_after = fs::read_dir(&target_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(target_entries_after, target_entries_before);
 }
 
 #[test]
@@ -1528,7 +1479,10 @@ fn convert_write_failure_identifies_the_output_path_and_operation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lock_path = occupied_parent.join(".user2.mh3g-install.lock");
     assert!(stderr.contains("I/O error while creating save install lock"));
-    assert!(stderr.contains(lock_path.to_str().unwrap()));
+    assert!(
+        stderr_mentions_path(&stderr, &lock_path),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -1615,7 +1569,7 @@ fn rollback_commands_identify_the_manifest_path() {
             "command: {command}; stderr: {stderr}"
         );
         assert!(
-            stderr.contains(manifest.to_str().unwrap()),
+            stderr_mentions_path(&stderr, &manifest),
             "command: {command}; stderr: {stderr}"
         );
     }
