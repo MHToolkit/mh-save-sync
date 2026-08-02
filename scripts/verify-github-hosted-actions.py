@@ -53,6 +53,7 @@ def main() -> int:
     windows = read_workflow("mh3g-converter-windows.yml")
     macos = read_workflow("mh3g-converter-macos.yml")
     release = read_workflow("mh3g-converter-release.yml")
+    auto_patch_release = read_workflow("mh3g-converter-auto-patch-release.yml")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh_cn = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
 
@@ -62,6 +63,7 @@ def main() -> int:
         "mh3g-converter-windows.yml": windows,
         "mh3g-converter-macos.yml": macos,
         "mh3g-converter-release.yml": release,
+        "mh3g-converter-auto-patch-release.yml": auto_patch_release,
     }.items():
         assert_no_self_hosted(name, content)
         assert_short_lived_artifacts(name, content)
@@ -118,6 +120,23 @@ def main() -> int:
         raise AssertionError(
             "release workflow must derive the macOS bundle version from the v* tag"
         )
+    if "pull_request:" not in auto_patch_release or "types: [closed]" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must run after closed pull requests")
+    if "github.event.pull_request.merged == true" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must only process merged pull requests")
+    if "github.event.pull_request.base.ref == 'main'" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must only process merges into main")
+    if "contents: write" not in auto_patch_release or "actions: write" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must be allowed to push its tag and dispatch")
+    if "mh3g-converter-version.py --next-patch --write" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must use the exact package version helper")
+    if "git tag -a" not in auto_patch_release or "refs/tags/${tag}" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must create and push an annotated v* tag")
+    if "gh workflow run mh3g-converter-release.yml --ref \"$TAG\"" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must explicitly dispatch the tagged release workflow")
+    macos_packager = (ROOT / "scripts/build-mh3g-save-converter-macos-app.sh").read_text(encoding="utf-8")
+    if 'mh3g-converter-version.py" --print' not in macos_packager:
+        raise AssertionError("macOS packager must derive its default version from the package manifest")
     if "## Public GitHub Actions CI and releases" not in readme:
         raise AssertionError("README.md must document the public hosted CI policy")
     if "## 公开仓库 GitHub Actions CI 与发布" not in readme_zh_cn:

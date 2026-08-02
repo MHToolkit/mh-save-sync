@@ -1,0 +1,59 @@
+name: mh3g-converter-auto-patch-release
+
+on:
+  pull_request:
+    types: [closed]
+
+# This workflow serializes patch releases.  It checks out the current main
+# branch (not only the event SHA), so two close-together merged PRs become two
+# ordered patch releases rather than competing for the same tag.
+concurrency:
+  group: mh3g-converter-auto-patch-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump-tag-and-dispatch:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    name: bump MH3G Converter patch and dispatch release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Calculate, commit, and tag the next exact patch version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force origin
+          version="$(python3 scripts/mh3g-converter-version.py --next-patch --write)"
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "refusing to reuse existing tag: ${tag}" >&2
+            exit 1
+          fi
+          git add crates/mh3g-save-convert/Cargo.toml
+          git commit -m "release: mh3g-save-convert ${version}"
+          git tag -a "$tag" -m "MH3G Save Converter ${version}"
+          git push origin HEAD:main "refs/tags/${tag}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - name: Dispatch the verified cross-platform release workflow for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run mh3g-converter-release.yml --ref "$TAG"
