@@ -7,6 +7,7 @@ is unavailable. A Windows x64 build remains the release gate.
 
 from __future__ import annotations
 
+import json
 import sys
 import xml.etree.ElementTree as element_tree
 from pathlib import Path
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "apps" / "mh3g-save-converter-windows"
 WINDOWS_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-windows.yml"
 WINDOWS_PACKAGE_SCRIPT = ROOT / "scripts" / "package-mh3g-save-converter-windows.ps1"
+GLOBAL_JSON = ROOT / "global.json"
 
 
 def require(condition: bool, message: str) -> None:
@@ -41,8 +43,14 @@ def public_method_body(source: str, method: str) -> str:
 def verify_release_workflow() -> None:
     """Keep the shipped WinUI application and its Rust sidecar inseparable."""
     workflow = WINDOWS_WORKFLOW.read_text(encoding="utf-8")
+    sdk = json.loads(GLOBAL_JSON.read_text(encoding="utf-8")).get("sdk", {})
+    require(
+        sdk.get("version") == "8.0.100" and sdk.get("rollForward") == "latestFeature",
+        "global.json must pin WinUI builds to the .NET 8 feature band",
+    )
 
     for expected in (
+        "- global.json",
         "- apps/mh3g-save-converter-windows/**",
         "- scripts/package-mh3g-save-converter-windows.ps1",
         "- scripts/verify-mh3g-save-converter-windows-source.py",
