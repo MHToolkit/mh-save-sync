@@ -5,8 +5,10 @@
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
     xmlns:infrastructure="using:MHToolkit.MH3GSaveConverter.Windows.Infrastructure">
     <Application.Resources>
-        <controls:XamlControlsResources />
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <controls:XamlControlsResources />
+            </ResourceDictionary.MergedDictionaries>
             <infrastructure:BooleanNegationConverter x:Key="BooleanNegationConverter" />
             <Color x:Key="ConverterInk">#FF18212F</Color>
             <Color x:Key="ConverterSlate">#FF526175</Color>

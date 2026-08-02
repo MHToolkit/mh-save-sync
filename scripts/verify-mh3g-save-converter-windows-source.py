@@ -303,6 +303,12 @@ def main() -> int:
 
     for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
         element_tree.parse(APP / relative)
+    app_xaml = read("App.xaml")
+    require(
+        "<ResourceDictionary.MergedDictionaries>" in app_xaml
+        and "<controls:XamlControlsResources />" in app_xaml,
+        "App resources must merge WinUI control resources into one ResourceDictionary",
+    )
 
     installer_definition = ROOT / "packaging" / "mh3g-save-convert" / "MH3GSaveConverter.iss"
     require(installer_definition.is_file(), "Inno Setup installer definition is missing")
