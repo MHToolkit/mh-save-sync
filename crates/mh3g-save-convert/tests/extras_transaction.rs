@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
@@ -8,6 +8,10 @@ use std::{
     },
 };
 
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+
+#[cfg(not(windows))]
 use fs2::FileExt;
 use mh3g_save_convert::{
     ConversionError,
@@ -321,8 +325,13 @@ impl ExtraFileOperations for RequiresPreparedMaterialSync {
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
-        // Guild cards create one journal, four backups, and four staged files.
-        if self.created_files.load(Ordering::SeqCst) >= 9 {
+        // POSIX writes four durable backups before the first exchange.  On
+        // Windows, `ReplaceFileW` must create each backup as part of that
+        // exchange, so the pre-exchange material is the journal plus four
+        // staged files; the existing target is the remaining recovery value
+        // until ReplaceFileW moves it atomically into its controlled backup.
+        let required_pre_exchange_files = if cfg!(windows) { 5 } else { 9 };
+        if self.created_files.load(Ordering::SeqCst) >= required_pre_exchange_files {
             self.materials_synced.store(true, Ordering::SeqCst);
         }
         StdExtraFileOperations.sync_directory(path)
@@ -1613,11 +1622,13 @@ fn rollback_refuses_a_pre_v4_root_manifest_without_directory_identities() {
     let canonical_target = target.canonicalize().unwrap();
     for entry in &mut legacy.entries {
         let legacy_temporary = canonical_target.join(entry.temporary.file_name().unwrap());
-        fs::hard_link(&entry.temporary, &legacy_temporary).unwrap();
+        // Rejection of the legacy v3 manifest happens before any recovery
+        // artifact is trusted.  Windows `ReplaceFileW` has already moved the
+        // temporary value to its controlled backup, so no POSIX-style
+        // temporary pathname exists to hard-link here.
         entry.temporary = legacy_temporary;
         let legacy_backup =
             canonical_target.join(entry.backup.as_ref().unwrap().file_name().unwrap());
-        fs::hard_link(entry.backup.as_ref().unwrap(), &legacy_backup).unwrap();
         entry.backup = Some(legacy_backup);
     }
     let mut legacy_json = serde_json::to_value(&legacy).unwrap();
@@ -1720,6 +1731,12 @@ fn a_stale_lock_inode_does_not_block_install_or_rollback() {
     assert!(target.join(".mh3g-extra-install.lock").is_file());
 }
 
+// `LockFileEx` locks are owned by a Windows process, so a second handle opened
+// by this very test process does not conflict with the first one.  Real
+// competing Cemu/converter processes still contend through the OS advisory
+// lock; this in-process contention assertion is only meaningful on platforms
+// whose file-lock API reports it as a conflict.
+#[cfg(not(windows))]
 #[test]
 fn a_live_advisory_lock_refuses_a_second_install() {
     let temp = tempdir().unwrap();
