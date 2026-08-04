@@ -52,7 +52,7 @@ def main() -> int:
     root = args.repo_root.resolve()
     artwork_dir = root / "apps/mh3g-save-converter-macos/Resources/Artwork"
     mac_icon = root / "apps/mh3g-save-converter-macos/Resources/AppIcon/MH3GSaveConverter.icns"
-    windows_icon = root / "apps/mh3g-save-converter-windows/assets/MH3GSaveConverter.ico"
+    windows_icon = root / "apps/mh3g-save-converter-windows/Assets/MH3GSaveConverter.ico"
 
     failures: list[str] = []
     for name in ARTWORK_NAMES:

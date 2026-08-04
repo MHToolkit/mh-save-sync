@@ -5,7 +5,7 @@
     xmlns:local="using:MHToolkit.MH3GSaveConverter.Windows.Controls">
     <Border MinHeight="278" CornerRadius="8" Background="#FFF4F7FB">
         <Grid>
-        <Image x:Name="SceneImage" Source="ms-appx:///assets/Artwork/input-route.png" Stretch="UniformToFill" Opacity="0.28" IsHitTestVisible="False" />
+        <Image x:Name="SceneImage" Source="ms-appx:///Assets/Artwork/input-route.png" Stretch="UniformToFill" Opacity="0.28" IsHitTestVisible="False" />
         <Canvas Opacity="0.8">
             <Path x:Name="InputRoute" Fill="#1A0A7AFF" Data="M0,32 L620,0 L620,58 L0,102 Z" />
             <Path x:Name="InspectRoute" Fill="#1A1B8A6B" Data="M0,170 L620,96 L620,154 L0,240 Z" Visibility="Collapsed" />

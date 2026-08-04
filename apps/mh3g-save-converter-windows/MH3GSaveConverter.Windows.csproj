@@ -10,7 +10,7 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>assets\MH3GSaveConverter.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\MH3GSaveConverter.ico</ApplicationIcon>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -28,12 +28,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="assets\MH3GSaveConverter.ico">
+    <Content Update="Assets\MH3GSaveConverter.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="assets\Artwork\*.png">
+    </Content>
+    <Content Update="Assets\Artwork\*.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    </Content>
     <!-- Release packaging places the signed Rust CLI here. The UI remains
          usable for path selection and report review until that sidecar exists. -->
     <None Update="tools\mh3g-save-convert.exe">

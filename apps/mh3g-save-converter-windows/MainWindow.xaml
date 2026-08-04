@@ -408,7 +408,7 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="10">
                                 <Border Height="116" CornerRadius="8" Background="#FF18212F">
-                                    <Image Source="ms-appx:///assets/Artwork/cec-mailbox.png" Stretch="UniformToFill" Opacity="0.78" />
+                                    <Image Source="ms-appx:///Assets/Artwork/cec-mailbox.png" Stretch="UniformToFill" Opacity="0.78" />
                                 </Border>
                                 <CheckBox IsChecked="{Binding IsCecAcknowledged, Mode=TwoWay}" Content="{Binding Copy.CecAcknowledge}" />
                                 <Button Click="WriteCec_Click" IsEnabled="{Binding CanWriteCec}" HorizontalAlignment="Left">

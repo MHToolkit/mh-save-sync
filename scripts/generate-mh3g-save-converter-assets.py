@@ -264,7 +264,7 @@ def main() -> int:
         image = icon_canvas(size).png()
         (iconset / name).write_bytes(image)
         icon_pngs[size] = image
-    windows_icon = root / "apps/mh3g-save-converter-windows/assets/MH3GSaveConverter.ico"
+    windows_icon = root / "apps/mh3g-save-converter-windows/Assets/MH3GSaveConverter.ico"
     write_ico(windows_icon, [(16, icon_pngs[16]), (32, icon_pngs[32]), (48, icon_canvas(48).png()), (256, icon_pngs[256])])
     print(f"Generated artwork in {artwork}")
     print(f"Generated iconset in {iconset}")

@@ -897,14 +897,16 @@ public sealed class MainViewModel : ObservableObject
                 RaiseCoreActionAvailability();
                 return;
             }
+            var conversionAuthorization = authorization
+                ?? throw new InvalidOperationException(Copy.WriteUnavailable);
             var arguments = new List<string>
             {
                 "convert", paths.Source, "--output", paths.Target,
-                "--expected-source-sha256", authorization.SourceReportHash,
+                "--expected-source-sha256", conversionAuthorization.SourceReportHash,
             };
-            if (authorization.Target.Exists)
+            if (conversionAuthorization.Target.Exists)
             {
-                var expectedTargetSha256 = authorization.Target.Sha256
+                var expectedTargetSha256 = conversionAuthorization.Target.Sha256
                     ?? throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
                 arguments.Add("--expected-target-sha256");
                 arguments.Add(expectedTargetSha256);

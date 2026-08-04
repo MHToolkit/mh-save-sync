@@ -331,6 +331,13 @@ def main() -> int:
         "<IncludeInSingleFile>true</IncludeInSingleFile>",
     ):
         require(expected in project, f"project is missing {expected}")
+    require(
+        "assets\\" not in project
+        and '<Content Update="Assets\\Artwork\\*.png">' in project
+        and '<Content Update="Assets\\MH3GSaveConverter.ico">' in project
+        and '<None Update="Assets\\Artwork\\*.png">' not in project,
+        "WinUI package assets must use one canonical Windows-relative casing",
+    )
     for artwork in (
         "input-route.png",
         "components-workshop.png",
@@ -338,7 +345,7 @@ def main() -> int:
         "rollback-harbor.png",
         "cec-mailbox.png",
     ):
-        require((APP / "assets" / "Artwork" / artwork).is_file(), f"missing packaged artwork {artwork}")
+        require((APP / "Assets" / "Artwork" / artwork).is_file(), f"missing packaged artwork {artwork}")
 
     bridge = read("Services/ConverterCliClient.cs")
     for expected in (
@@ -439,9 +446,10 @@ def main() -> int:
         "public async Task RollbackCoreAsync()", 1
     )[0]
     for expected in (
-        '"--expected-source-sha256", authorization.SourceReportHash',
-        "var expectedTargetSha256 = authorization.Target.Sha256",
-        "if (authorization.Target.Exists)",
+        "var conversionAuthorization = authorization",
+        '"--expected-source-sha256", conversionAuthorization.SourceReportHash',
+        "var expectedTargetSha256 = conversionAuthorization.Target.Sha256",
+        "if (conversionAuthorization.Target.Exists)",
         'arguments.Add("--expected-target-sha256");',
         "arguments.Add(expectedTargetSha256);",
         'arguments.Add("--expected-target-absent");',

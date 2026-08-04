@@ -46,7 +46,7 @@ public sealed partial class StageArtwork : UserControl
             WorkflowStage.Writing or WorkflowStage.Written or WorkflowStage.RolledBack => "rollback-harbor.png",
             _ => "input-route.png",
         };
-        SceneImage.Source = new BitmapImage(new Uri($"ms-appx:///assets/Artwork/{artwork}"));
+        SceneImage.Source = new BitmapImage(new Uri($"ms-appx:///Assets/Artwork/{artwork}"));
         VisualStateManager.GoToState(this, state, useTransitions: true);
     }
 }
