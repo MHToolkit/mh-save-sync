@@ -491,6 +491,27 @@ def main() -> int:
     require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
     require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
     code_behind = read("MainWindow.xaml.cs")
+    require(
+        "RootGrid.DataContext = ViewModel;" in code_behind
+        and "DataContext = ViewModel;" not in code_behind.replace("RootGrid.DataContext = ViewModel;", ""),
+        "WinUI Window must set DataContext on its root FrameworkElement",
+    )
+    require(
+        "using Microsoft.UI.Xaml.Media;" in code_behind
+        and "SystemBackdrop = new MicaBackdrop();" in code_behind,
+        "MicaBackdrop must resolve from Microsoft.UI.Xaml.Media",
+    )
+    require(
+        "sender == SourcePathBox" not in code_behind
+        and "ReferenceEquals(sender, SourcePathBox)" in code_behind,
+        "WinUI TextChanged routing must use explicit reference equality",
+    )
+    write_core = public_method_body(workflow, "WriteCoreAsync")
+    require(
+        "var repairArguments = new List<string>" in write_core
+        and "ExecuteAsync(operation, repairArguments, cancellationToken)" in write_core,
+        "repair write arguments must not shadow the normal conversion arguments",
+    )
     require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
     require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
     require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")

@@ -1,6 +1,7 @@
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -18,7 +19,7 @@ public sealed partial class MainWindow : Window
     {
         ViewModel = new MainViewModel();
         InitializeComponent();
-        DataContext = ViewModel;
+        RootGrid.DataContext = ViewModel;
         ConfigureWindowMaterial();
         SelectLanguage(ViewModel.LanguageOverride);
         SelectConversionMode(ViewModel.SelectedConversionMode);
@@ -263,11 +264,11 @@ public sealed partial class MainWindow : Window
 
     private void CorePath_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (sender == SourcePathBox)
+        if (ReferenceEquals(sender, SourcePathBox))
         {
             ViewModel.SourcePath = SourcePathBox.Text;
         }
-        else if (sender == TargetPathBox)
+        else if (ReferenceEquals(sender, TargetPathBox))
         {
             ViewModel.TargetPath = TargetPathBox.Text;
         }
@@ -313,11 +314,11 @@ public sealed partial class MainWindow : Window
 
     private void CecPath_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (sender == CecSourceBox)
+        if (ReferenceEquals(sender, CecSourceBox))
         {
             ViewModel.CecSourceDirectory = CecSourceBox.Text;
         }
-        else if (sender == CecTargetBox)
+        else if (ReferenceEquals(sender, CecTargetBox))
         {
             ViewModel.CecTargetPath = CecTargetBox.Text;
         }
@@ -325,11 +326,11 @@ public sealed partial class MainWindow : Window
 
     private void SystemPath_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (sender == SystemSourceBox)
+        if (ReferenceEquals(sender, SystemSourceBox))
         {
             ViewModel.SystemSourcePath = SystemSourceBox.Text;
         }
-        else if (sender == SystemTargetBox)
+        else if (ReferenceEquals(sender, SystemTargetBox))
         {
             ViewModel.SystemTargetPath = SystemTargetBox.Text;
         }
@@ -337,15 +338,15 @@ public sealed partial class MainWindow : Window
 
     private void ExtrasPath_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (sender == ExtrasSourceBox)
+        if (ReferenceEquals(sender, ExtrasSourceBox))
         {
             ViewModel.ExtrasSourceDirectory = ExtrasSourceBox.Text;
         }
-        else if (sender == ExtrasStagingBox)
+        else if (ReferenceEquals(sender, ExtrasStagingBox))
         {
             ViewModel.ExtrasStagingDirectory = ExtrasStagingBox.Text;
         }
-        else if (sender == ExtrasTargetBox)
+        else if (ReferenceEquals(sender, ExtrasTargetBox))
         {
             ViewModel.ExtrasTargetDirectory = ExtrasTargetBox.Text;
         }

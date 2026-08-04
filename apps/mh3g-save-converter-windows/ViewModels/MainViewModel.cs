@@ -860,29 +860,29 @@ public sealed class MainViewModel : ObservableObject
             Stage = WorkflowStage.Writing;
             if (IsRepairMode)
             {
-                var arguments = new List<string>
+                var repairArguments = new List<string>
                 {
                     "repair-converted", paths.Source,
                     "--current", paths.Target,
                 };
                 if (!string.IsNullOrWhiteSpace(repairAuthorization!.ExtDataSource))
                 {
-                    arguments.Add("--source-extdata-dir");
-                    arguments.Add(repairAuthorization.ExtDataSource);
+                    repairArguments.Add("--source-extdata-dir");
+                    repairArguments.Add(repairAuthorization.ExtDataSource);
                 }
                 if (!string.IsNullOrWhiteSpace(repairAuthorization.FromVersion))
                 {
-                    arguments.Add("--from-version");
-                    arguments.Add(repairAuthorization.FromVersion);
+                    repairArguments.Add("--from-version");
+                    repairArguments.Add(repairAuthorization.FromVersion);
                 }
-                arguments.AddRange(new[]
+                repairArguments.AddRange(new[]
                 {
                     "--write",
                     "--expected-source-set-sha256", repairAuthorization.SourceSetSha256,
                     "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
                     "--expected-preview-sha256", repairAuthorization.PreviewSha256,
                 });
-                var repairResult = await ExecuteAsync(operation, arguments, cancellationToken);
+                var repairResult = await ExecuteAsync(operation, repairArguments, cancellationToken);
                 RequireSuccess(repairResult, "repair converted save");
                 if (repairResult.Status is not ("written" or "no-changes"))
                 {
