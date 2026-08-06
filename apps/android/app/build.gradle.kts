@@ -23,13 +23,13 @@ val androidVersionCode = providers.environmentVariable("MH_SAVE_SYNC_ANDROID_VER
         value.toIntOrNull()?.takeIf { it > 0 }
             ?: throw GradleException("MH_SAVE_SYNC_ANDROID_VERSION_CODE must be a positive integer")
     }
-    .getOrElse(3)
+    .getOrElse(5)
 val androidVersionName = providers.environmentVariable("MH_SAVE_SYNC_ANDROID_VERSION_NAME")
     .map { value ->
         value.takeIf { it.isNotBlank() }
             ?: throw GradleException("MH_SAVE_SYNC_ANDROID_VERSION_NAME must not be blank")
     }
-    .getOrElse("0.1.0-alpha.3")
+    .getOrElse("0.1.0-alpha.4")
 
 if (releaseSigningPartiallyConfigured) {
     throw GradleException(
