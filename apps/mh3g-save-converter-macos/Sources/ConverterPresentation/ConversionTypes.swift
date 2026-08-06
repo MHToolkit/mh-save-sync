@@ -238,13 +238,18 @@ public struct DryRunFingerprint: Equatable, Sendable {
     /// explicit new-export authorization and is protected by the CLI's
     /// `--expected-target-absent` precondition instead.
     public let targetSHA256: String?
+    /// Hash of the exact bytes the read-only converter preview said it would
+    /// install. A later `written` report must echo this value as `output`.
+    public let outputSHA256: String
 
     public init(
         sourceSHA256: String,
-        targetSHA256: String?
+        targetSHA256: String?,
+        outputSHA256: String
     ) {
         self.sourceSHA256 = sourceSHA256
         self.targetSHA256 = targetSHA256
+        self.outputSHA256 = outputSHA256
     }
 
     public var exportsNewTarget: Bool {
@@ -260,6 +265,7 @@ public struct RepairDryRunFingerprint: Equatable, Sendable {
     public let sourceSetSHA256: String
     public let currentSetSHA256: String
     public let previewSHA256: String
+    public let components: [RepairComponentFingerprint]
 
     public init(
         source: URL,
@@ -268,7 +274,8 @@ public struct RepairDryRunFingerprint: Equatable, Sendable {
         fromVersion: HistoricalConverterRevision?,
         sourceSetSHA256: String,
         currentSetSHA256: String,
-        previewSHA256: String
+        previewSHA256: String,
+        components: [RepairComponentFingerprint]
     ) {
         self.source = source.standardizedFileURL
         self.current = current.standardizedFileURL
@@ -277,7 +284,17 @@ public struct RepairDryRunFingerprint: Equatable, Sendable {
         self.sourceSetSHA256 = sourceSetSHA256
         self.currentSetSHA256 = currentSetSHA256
         self.previewSHA256 = previewSHA256
+        self.components = components
     }
+}
+
+public struct RepairComponentFingerprint: Equatable, Sendable {
+    public let component: String
+    public let target: URL
+    public let sourceSHA256: String
+    public let currentSHA256: String
+    public let mergedSHA256: String
+    public let modified: Bool
 }
 
 /// `system` is a distinct 3DS/Wii U file pair, so it must retain its own
@@ -287,12 +304,20 @@ public struct SystemDryRunFingerprint: Equatable, Sendable {
     public let target: URL
     public let sourceSHA256: String
     public let targetSHA256: String
+    public let outputSHA256: String
 
-    public init(source: URL, target: URL, sourceSHA256: String, targetSHA256: String) {
+    public init(
+        source: URL,
+        target: URL,
+        sourceSHA256: String,
+        targetSHA256: String,
+        outputSHA256: String
+    ) {
         self.source = source.standardizedFileURL
         self.target = target.standardizedFileURL
         self.sourceSHA256 = sourceSHA256
         self.targetSHA256 = targetSHA256
+        self.outputSHA256 = outputSHA256
     }
 }
 
@@ -342,20 +367,32 @@ public struct ExtrasInstallDryRunFingerprint: Equatable, Sendable {
     public let groups: Set<ExtraGroup>
     public let stagingSetSHA256: String
     public let targetSetSHA256: String
+    public let entries: [ExtraInstallEntryFingerprint]
 
     public init(
         stagingDirectory: URL,
         targetDirectory: URL,
         groups: Set<ExtraGroup>,
         stagingSetSHA256: String,
-        targetSetSHA256: String
+        targetSetSHA256: String,
+        entries: [ExtraInstallEntryFingerprint]
     ) {
         self.stagingDirectory = stagingDirectory.standardizedFileURL
         self.targetDirectory = targetDirectory.standardizedFileURL
         self.groups = groups
         self.stagingSetSHA256 = stagingSetSHA256
         self.targetSetSHA256 = targetSetSHA256
+        self.entries = entries
     }
+}
+
+public struct ExtraInstallEntryFingerprint: Equatable, Sendable {
+    public let group: ExtraGroup
+    public let component: String
+    public let target: URL
+    public let beforeSHA256: String?
+    public let afterSHA256: String
+    public let targetPreviouslyExisted: Bool
 }
 
 /// CEC is a mailbox directory plus a separate Cemu cache, not a `user#`
@@ -367,17 +404,23 @@ public struct CECDryRunFingerprint: Equatable, Sendable {
     public let target: URL
     public let sourceRecordSetSHA256: String
     public let targetSHA256Before: String
+    public let targetSHA256After: String
+    public let targetExisted: Bool
 
     public init(
         sourceDirectory: URL,
         target: URL,
         sourceRecordSetSHA256: String,
-        targetSHA256Before: String
+        targetSHA256Before: String,
+        targetSHA256After: String,
+        targetExisted: Bool
     ) {
         self.sourceDirectory = sourceDirectory.standardizedFileURL
         self.target = target.standardizedFileURL
         self.sourceRecordSetSHA256 = sourceRecordSetSHA256
         self.targetSHA256Before = targetSHA256Before
+        self.targetSHA256After = targetSHA256After
+        self.targetExisted = targetExisted
     }
 }
 
@@ -467,6 +510,15 @@ public struct ConverterReport: Decodable, Sendable {
     public let detection: ConverterRevisionDetection?
     public let manifests: [String]?
     public let compatibilityManifest: String?
+    public let sourceDirectory: String?
+    public let outputDirectory: String?
+    public let stagingDirectory: String?
+    public let targetDirectory: String?
+    public let source: String?
+    public let current: String?
+    public let target: String?
+    public let entries: [ConverterExtraInstallEntry]?
+    public let backupPaths: [String]?
     public let output: String?
     public let backup: String?
     public let manifest: String?
@@ -474,7 +526,13 @@ public struct ConverterReport: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case operation, status, profile, size, hashes, output, backup, manifest, stderr, components, groups, manifests, detection
+        case source, current, target, entries
         case compatibilityManifest = "compatibility_manifest"
+        case sourceDirectory = "source_dir"
+        case outputDirectory = "output_dir"
+        case stagingDirectory = "staging_dir"
+        case targetDirectory = "target_dir"
+        case backupPaths = "backup_paths"
         case sourceSHA256 = "source_sha256"
         case targetSHA256Before = "target_sha256_before"
         case targetSHA256After = "target_sha256_after"
@@ -502,9 +560,14 @@ public struct ConverterExtraComponent: Decodable, Sendable {
     public let sourceSHA256: String?
     public let outputSHA256: String?
     public let detection: ConverterRevisionDetection?
+    public let output: String?
+    public let size: Int?
+    public let target: String?
+    public let modified: Bool?
+    public let merge: ConverterCompatibilityMerge?
 
     enum CodingKeys: String, CodingKey {
-        case component, detection
+        case component, detection, output, size, target, modified, merge
         case sourceSHA256 = "source_sha256"
         case outputSHA256 = "output_sha256"
     }
@@ -515,6 +578,67 @@ public struct ConverterExtraComponent: Decodable, Sendable {
             component: component,
             sourceSHA256: sourceSHA256,
             outputSHA256: outputSHA256
+        )
+    }
+
+    public func repairFingerprint() -> RepairComponentFingerprint? {
+        guard let target,
+              let modified,
+              let merge,
+              merge.component == component,
+              ConverterEvidence.isValidSHA256(merge.sourceSHA256),
+              ConverterEvidence.isValidSHA256(merge.currentSHA256),
+              ConverterEvidence.isValidSHA256(merge.mergedSHA256)
+        else { return nil }
+        return RepairComponentFingerprint(
+            component: component,
+            target: URL(fileURLWithPath: target).standardizedFileURL,
+            sourceSHA256: merge.sourceSHA256,
+            currentSHA256: merge.currentSHA256,
+            mergedSHA256: merge.mergedSHA256,
+            modified: modified
+        )
+    }
+}
+
+public struct ConverterCompatibilityMerge: Decodable, Sendable {
+    public let component: String
+    public let sourceSHA256: String
+    public let currentSHA256: String
+    public let mergedSHA256: String
+
+    enum CodingKeys: String, CodingKey {
+        case component
+        case sourceSHA256 = "source_sha256"
+        case currentSHA256 = "current_sha256"
+        case mergedSHA256 = "merged_sha256"
+    }
+}
+
+public struct ConverterExtraInstallEntry: Decodable, Sendable {
+    public let group: ExtraGroup
+    public let component: String
+    public let target: String
+    public let beforeSHA256: String?
+    public let afterSHA256: String
+    public let backup: String?
+    public let targetPreviouslyExisted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case group, component, target, backup
+        case beforeSHA256 = "before_sha256"
+        case afterSHA256 = "after_sha256"
+        case targetPreviouslyExisted = "target_previously_existed"
+    }
+
+    public func fingerprint() -> ExtraInstallEntryFingerprint {
+        ExtraInstallEntryFingerprint(
+            group: group,
+            component: component,
+            target: URL(fileURLWithPath: target).standardizedFileURL,
+            beforeSHA256: beforeSHA256,
+            afterSHA256: afterSHA256,
+            targetPreviouslyExisted: targetPreviouslyExisted
         )
     }
 }

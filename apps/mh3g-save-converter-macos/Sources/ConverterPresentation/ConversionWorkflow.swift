@@ -102,7 +102,8 @@ public final class ConversionWorkflow {
               let authorized = dryRunFingerprint,
               let current = currentFingerprint()
         else { return false }
-        return authorized == current
+        return authorized.sourceSHA256 == current.sourceSHA256
+            && authorized.targetSHA256 == current.targetSHA256
     }
 
     public var canWriteCEC: Bool {
@@ -296,11 +297,15 @@ public final class ConversionWorkflow {
                 )
                 guard report.status == "dry-run",
                       let sourceSetSHA256 = report.sourceSetSHA256,
+                      ConverterEvidence.isValidSHA256(sourceSetSHA256),
                       let currentSetSHA256 = report.currentSetSHA256,
+                      ConverterEvidence.isValidSHA256(currentSetSHA256),
                       let previewSHA256 = report.previewSHA256,
+                      ConverterEvidence.isValidSHA256(previewSHA256),
                       let detection = report.detection,
                       let repairComponents = report.components,
-                      !repairComponents.isEmpty
+                      !repairComponents.isEmpty,
+                      repairComponents.allSatisfy({ $0.repairFingerprint() != nil })
                 else {
                     throw self.failureAndRethrow(
                         .repairConverted,
@@ -324,7 +329,8 @@ public final class ConversionWorkflow {
                     fromVersion: self.repairFromVersion,
                     sourceSetSHA256: sourceSetSHA256,
                     currentSetSHA256: currentSetSHA256,
-                    previewSHA256: previewSHA256
+                    previewSHA256: previewSHA256,
+                    components: repairComponents.compactMap { $0.repairFingerprint() }
                 )
                 self.latestReport = report
                 self.state = .dryRun
@@ -348,10 +354,14 @@ public final class ConversionWorkflow {
                 )
             }
             let current = try self.requireCurrentFingerprint()
-            guard let reportedSource = report.hash(named: "source") else {
+            guard let reportedSource = report.hash(named: "source"),
+                  ConverterEvidence.isValidSHA256(reportedSource),
+                  let reportedOutput = report.hash(named: "output"),
+                  ConverterEvidence.isValidSHA256(reportedOutput)
+            else {
                 throw self.failureAndRethrow(
                     .convert,
-                    ConversionWorkflowError.invalidReport("Dry Run requires a source SHA-256"),
+                    ConversionWorkflowError.invalidReport("Dry Run requires valid source and output SHA-256"),
                     stderr: report.stderr ?? ""
                 )
             }
@@ -364,7 +374,8 @@ public final class ConversionWorkflow {
             }
             let reportedTarget = report.hash(named: "target_before")
             switch (current.targetSHA256, reportedTarget) {
-            case let (.some(expected), .some(reported)) where expected == reported:
+            case let (.some(expected), .some(reported))
+                where ConverterEvidence.isValidSHA256(reported) && expected == reported:
                 break
             case (nil, nil):
                 break
@@ -387,7 +398,11 @@ public final class ConversionWorkflow {
                     stderr: report.stderr ?? ""
                 )
             }
-            self.dryRunFingerprint = current
+            self.dryRunFingerprint = DryRunFingerprint(
+                sourceSHA256: current.sourceSHA256,
+                targetSHA256: current.targetSHA256,
+                outputSHA256: reportedOutput
+            )
             self.latestReport = report
             self.state = .dryRun
         }
@@ -429,17 +444,7 @@ public final class ConversionWorkflow {
                     arguments: arguments,
                     lease: lease
                 )
-                guard report.status == "written" || report.status == "no-changes" else {
-                    throw self.failureAndRethrow(
-                        .repairConverted,
-                        ConversionWorkflowError.invalidReport("expected written or no-changes status"),
-                        stderr: report.stderr ?? ""
-                    )
-                }
-                self.latestReport = report
-                self.state = .success
-                self.coreWriteCompleted = true
-                self.repairDryRunFingerprint = nil
+                try self.completeRepair(with: report, fingerprint: fingerprint, input: input)
             }
             return
         }
@@ -477,7 +482,11 @@ public final class ConversionWorkflow {
             )
             guard report.status == "dry-run",
                   let sourceSHA256 = report.hash(named: "source"),
-                  let targetSHA256 = report.hash(named: "target_before")
+                  ConverterEvidence.isValidSHA256(sourceSHA256),
+                  let targetSHA256 = report.hash(named: "target_before"),
+                  ConverterEvidence.isValidSHA256(targetSHA256),
+                  let outputSHA256 = report.hash(named: "output"),
+                  ConverterEvidence.isValidSHA256(outputSHA256)
             else {
                 throw self.failureAndRethrow(
                     .convertSystem,
@@ -489,7 +498,8 @@ public final class ConversionWorkflow {
                 source: source,
                 target: target,
                 sourceSHA256: sourceSHA256,
-                targetSHA256: targetSHA256
+                targetSHA256: targetSHA256,
+                outputSHA256: outputSHA256
             )
             self.latestReport = report
             self.state = .dryRun
@@ -594,7 +604,17 @@ public final class ConversionWorkflow {
                   let reportedGroups = report.groups,
                   Set(reportedGroups) == self.components.selectedGroups,
                   let stagingSetSHA256 = report.stagingSetSHA256,
-                  let targetSetSHA256 = report.targetSetSHA256Before
+                  ConverterEvidence.isValidSHA256(stagingSetSHA256),
+                  let targetSetSHA256 = report.targetSetSHA256Before,
+                  ConverterEvidence.isValidSHA256(targetSetSHA256),
+                  ConverterEvidence.path(report.stagingDirectory, equals: paths.staging),
+                  ConverterEvidence.path(report.targetDirectory, equals: paths.target),
+                  let entries = report.entries,
+                  self.validExtraInstallEntries(
+                      entries,
+                      groups: self.components.selectedGroups,
+                      targetDirectory: paths.target
+                  )
             else {
                 throw self.failureAndRethrow(
                     .installExtras,
@@ -607,7 +627,8 @@ public final class ConversionWorkflow {
                 targetDirectory: paths.target,
                 groups: self.components.selectedGroups,
                 stagingSetSHA256: stagingSetSHA256,
-                targetSetSHA256: targetSetSHA256
+                targetSetSHA256: targetSetSHA256,
+                entries: entries.map { $0.fingerprint() }
             )
             self.latestReport = report
             self.state = .dryRun
@@ -651,7 +672,10 @@ public final class ConversionWorkflow {
             )
             guard verification.status == "dry-run",
                   verification.sourceRecordSetSHA256 == fingerprint.sourceRecordSetSHA256,
-                  verification.targetSHA256Before == fingerprint.targetSHA256Before
+                  verification.targetSHA256Before == fingerprint.targetSHA256Before,
+                  verification.targetSHA256After == fingerprint.targetSHA256After,
+                  ConverterEvidence.path(verification.sourceDirectory, equals: source),
+                  ConverterEvidence.path(verification.target, equals: target)
             else {
                 self.cecDryRunFingerprint = nil
                 throw self.failureAndRethrow(
@@ -697,8 +721,16 @@ public final class ConversionWorkflow {
             )
             guard report.status == "dry-run",
                   let sourceRecordSetSHA256 = report.sourceRecordSetSHA256,
-                  !sourceRecordSetSHA256.isEmpty,
-                  let targetSHA256Before = report.targetSHA256Before
+                  ConverterEvidence.isValidSHA256(sourceRecordSetSHA256),
+                  let targetSHA256Before = report.targetSHA256Before,
+                  ConverterEvidence.isValidSHA256(targetSHA256Before),
+                  let targetSHA256After = report.targetSHA256After,
+                  ConverterEvidence.isValidSHA256(targetSHA256After),
+                  let recordHashes = report.sourceRecordSHA256,
+                  !recordHashes.isEmpty,
+                  recordHashes.allSatisfy(ConverterEvidence.isValidSHA256),
+                  ConverterEvidence.path(report.sourceDirectory, equals: source),
+                  ConverterEvidence.path(report.target, equals: target)
             else {
                 throw self.failureAndRethrow(
                     .convertCEC,
@@ -710,7 +742,9 @@ public final class ConversionWorkflow {
                 sourceDirectory: source,
                 target: target,
                 sourceRecordSetSHA256: sourceRecordSetSHA256,
-                targetSHA256Before: targetSHA256Before
+                targetSHA256Before: targetSHA256Before,
+                targetSHA256After: targetSHA256After,
+                targetExisted: FileManager.default.fileExists(atPath: target.path)
             )
             self.latestReport = report
             self.state = .dryRun
@@ -742,7 +776,8 @@ public final class ConversionWorkflow {
                 with: report,
                 expectedStatus: "rolled-back",
                 operation: operation,
-                scope: authorizationScope
+                scope: authorizationScope,
+                rollbackManifest: manifest
             )
         }
     }
@@ -823,7 +858,12 @@ public final class ConversionWorkflow {
     /// deterministic authorization state without replacing the production
     /// Dry Run path with a fake UI-only bypass.
     func authorizeDryRunForTesting() throws {
-        dryRunFingerprint = try requireCurrentFingerprint()
+        let current = try requireCurrentFingerprint()
+        dryRunFingerprint = DryRunFingerprint(
+            sourceSHA256: current.sourceSHA256,
+            targetSHA256: current.targetSHA256,
+            outputSHA256: String(repeating: "d", count: 64)
+        )
         state = .dryRun
     }
 
@@ -845,8 +885,10 @@ public final class ConversionWorkflow {
         guard let current = currentFingerprint(), let authorized = dryRunFingerprint else {
             throw ConversionWorkflowError.dryRunRequired
         }
-        guard current == authorized else { throw ConversionWorkflowError.staleDryRun }
-        return current
+        guard current.sourceSHA256 == authorized.sourceSHA256,
+              current.targetSHA256 == authorized.targetSHA256
+        else { throw ConversionWorkflowError.staleDryRun }
+        return authorized
     }
 
     private func currentAuthorizedSystemFingerprint(source: URL, target: URL) throws -> SystemDryRunFingerprint {
@@ -904,7 +946,8 @@ public final class ConversionWorkflow {
         guard let sourceInspection else { return nil }
         return DryRunFingerprint(
             sourceSHA256: sourceInspection.sha256,
-            targetSHA256: targetInspection?.sha256
+            targetSHA256: targetInspection?.sha256,
+            outputSHA256: ""
         )
     }
 
@@ -991,7 +1034,16 @@ public final class ConversionWorkflow {
             )
         }
         let fingerprints = components.compactMap { $0.fingerprint() }
-        guard fingerprints.count == components.count else {
+        guard fingerprints.count == components.count,
+              components.allSatisfy({ component in
+                  ConverterEvidence.isValidSHA256(component.sourceSHA256)
+                      && ConverterEvidence.isValidSHA256(component.outputSHA256)
+                      && ConverterEvidence.hasPath(component.output)
+                      && (component.size ?? 0) > 0
+              }),
+              ConverterEvidence.path(report.sourceDirectory, equals: paths.source),
+              ConverterEvidence.path(report.outputDirectory, equals: paths.staging)
+        else {
             throw failureAndRethrow(
                 .convertExtras,
                 ConversionWorkflowError.invalidReport("ExtData stage components are missing source/output fingerprints"),
@@ -1064,7 +1116,8 @@ public final class ConversionWorkflow {
         with report: ConverterReport,
         expectedStatus: String,
         operation: ConverterOperation,
-        scope: AuthorizationScope? = nil
+        scope: AuthorizationScope? = nil,
+        rollbackManifest: URL? = nil
     ) throws {
         guard report.status == expectedStatus else {
             throw failureAndRethrow(
@@ -1073,11 +1126,334 @@ public final class ConversionWorkflow {
                 stderr: report.stderr ?? ""
             )
         }
+        do {
+            try validateCompletionEvidence(
+                report,
+                operation: operation,
+                rollbackManifest: rollbackManifest
+            )
+        } catch {
+            throw failureAndRethrow(
+                operation,
+                error,
+                stderr: report.stderr ?? "",
+                scope: scope
+            )
+        }
         latestReport = report
         state = .success
         let completionScope = scope ?? authorizationScope(for: operation)
         recordCompletion(expectedStatus: expectedStatus, operation: operation, scope: completionScope)
         invalidateAuthorization(in: completionScope)
+    }
+
+    private func completeRepair(
+        with report: ConverterReport,
+        fingerprint: RepairDryRunFingerprint,
+        input: ConversionInput
+    ) throws {
+        guard report.status == "written" || report.status == "no-changes" else {
+            throw failureAndRethrow(
+                .repairConverted,
+                ConversionWorkflowError.invalidReport("expected written or no-changes status"),
+                stderr: report.stderr ?? ""
+            )
+        }
+        do {
+            guard report.operation == ConverterOperation.repairConverted.rawValue,
+                  ConverterEvidence.path(report.source, equals: input.source),
+                  ConverterEvidence.path(report.current, equals: input.target),
+                  report.sourceSetSHA256 == fingerprint.sourceSetSHA256,
+                  report.currentSetSHA256 == fingerprint.currentSetSHA256,
+                  report.previewSHA256 == fingerprint.previewSHA256,
+                  ConverterEvidence.isValidSHA256(report.sourceSetSHA256),
+                  ConverterEvidence.isValidSHA256(report.currentSetSHA256),
+                  ConverterEvidence.isValidSHA256(report.previewSHA256),
+                  let components = report.components,
+                  !components.isEmpty,
+                  components.compactMap({ $0.repairFingerprint() }) == fingerprint.components
+            else {
+                throw ConversionWorkflowError.invalidReport(
+                    "repair completion requires exact source/current paths, set hashes, preview hash, and components"
+                )
+            }
+            if report.status == "written" {
+                guard let manifests = report.manifests,
+                      !manifests.isEmpty,
+                      manifests.allSatisfy(ConverterEvidence.hasPath),
+                      ConverterEvidence.hasPath(report.compatibilityManifest)
+                else {
+                    throw ConversionWorkflowError.invalidReport(
+                        "written repair requires component manifests and a compatibility manifest"
+                    )
+                }
+            } else {
+                guard report.manifests?.isEmpty != false,
+                      !ConverterEvidence.hasPath(report.compatibilityManifest)
+                else {
+                    throw ConversionWorkflowError.invalidReport(
+                        "no-changes repair must not claim write manifests"
+                    )
+                }
+            }
+        } catch {
+            throw failureAndRethrow(
+                .repairConverted,
+                error,
+                stderr: report.stderr ?? "",
+                scope: .core
+            )
+        }
+        latestReport = report
+        state = .success
+        coreWriteCompleted = true
+        invalidateAuthorization(in: .core)
+    }
+
+    private func validateCompletionEvidence(
+        _ report: ConverterReport,
+        operation: ConverterOperation,
+        rollbackManifest: URL?
+    ) throws {
+        switch operation {
+        case .convert:
+            guard let input, let fingerprint = dryRunFingerprint else {
+                throw ConversionWorkflowError.invalidReport("core write authorization is missing")
+            }
+            try validateFileWriteReport(
+                report,
+                output: input.target,
+                sourceSHA256: fingerprint.sourceSHA256,
+                targetSHA256Before: fingerprint.targetSHA256,
+                outputSHA256: fingerprint.outputSHA256
+            )
+        case .convertSystem:
+            guard let fingerprint = systemDryRunFingerprint else {
+                throw ConversionWorkflowError.invalidReport("system write authorization is missing")
+            }
+            try validateFileWriteReport(
+                report,
+                output: fingerprint.target,
+                sourceSHA256: fingerprint.sourceSHA256,
+                targetSHA256Before: fingerprint.targetSHA256,
+                outputSHA256: fingerprint.outputSHA256
+            )
+        case .convertExtras:
+            try validateExtrasStageWrite(report)
+        case .installExtras:
+            try validateExtrasInstallWrite(report)
+        case .convertCEC:
+            try validateCECWrite(report)
+        case .rollback, .rollbackRepair, .rollbackExtras, .rollbackCEC:
+            try validateRollbackReport(report, operation: operation, manifest: rollbackManifest)
+        case .inspect, .repairConverted:
+            throw ConversionWorkflowError.invalidReport("unsupported completion operation")
+        }
+    }
+
+    private func validateFileWriteReport(
+        _ report: ConverterReport,
+        output: URL,
+        sourceSHA256: String,
+        targetSHA256Before: String?,
+        outputSHA256: String
+    ) throws {
+        guard ConverterEvidence.path(report.output, equals: output),
+              ConverterEvidence.hasPath(report.manifest),
+              report.hash(named: "source") == sourceSHA256,
+              report.hash(named: "output") == outputSHA256,
+              ConverterEvidence.isValidSHA256(report.hash(named: "source")),
+              ConverterEvidence.isValidSHA256(report.hash(named: "output"))
+        else {
+            throw ConversionWorkflowError.invalidReport(
+                "written file requires exact output path, manifest, source hash, and output hash"
+            )
+        }
+        if let targetSHA256Before {
+            guard report.hash(named: "target_before") == targetSHA256Before,
+                  ConverterEvidence.isValidSHA256(report.hash(named: "target_before")),
+                  ConverterEvidence.hasPath(report.backup)
+            else {
+                throw ConversionWorkflowError.invalidReport(
+                    "replacing an existing target requires its exact before hash and backup"
+                )
+            }
+        } else {
+            guard report.hash(named: "target_before") == nil,
+                  !ConverterEvidence.hasPath(report.backup)
+            else {
+                throw ConversionWorkflowError.invalidReport(
+                    "new export must not claim an existing-target hash or backup"
+                )
+            }
+        }
+    }
+
+    private func validateExtrasStageWrite(_ report: ConverterReport) throws {
+        guard let fingerprint = extrasStageDryRunFingerprint,
+              ConverterEvidence.path(report.sourceDirectory, equals: fingerprint.sourceDirectory),
+              ConverterEvidence.path(report.outputDirectory, equals: fingerprint.stagingDirectory),
+              let components = report.components,
+              !components.isEmpty,
+              components.allSatisfy({ component in
+                  ConverterEvidence.isValidSHA256(component.sourceSHA256)
+                      && ConverterEvidence.isValidSHA256(component.outputSHA256)
+                      && ConverterEvidence.hasPath(component.output)
+                      && (component.size ?? 0) > 0
+              }),
+              components.compactMap({ $0.fingerprint() }) == fingerprint.components
+        else {
+            throw ConversionWorkflowError.invalidReport(
+                "ExtData staging requires exact source/output directories and component output evidence"
+            )
+        }
+    }
+
+    private func validateExtrasInstallWrite(_ report: ConverterReport) throws {
+        guard let fingerprint = extrasInstallDryRunFingerprint,
+              report.operation == ConverterOperation.installExtras.rawValue,
+              Set(report.groups ?? []) == fingerprint.groups,
+              ConverterEvidence.hasPath(report.manifest),
+              ConverterEvidence.path(report.stagingDirectory, equals: fingerprint.stagingDirectory),
+              ConverterEvidence.path(report.targetDirectory, equals: fingerprint.targetDirectory),
+              report.stagingSetSHA256 == fingerprint.stagingSetSHA256,
+              report.targetSetSHA256Before == fingerprint.targetSetSHA256,
+              ConverterEvidence.isValidSHA256(report.stagingSetSHA256),
+              ConverterEvidence.isValidSHA256(report.targetSetSHA256Before),
+              let entries = report.entries,
+              !entries.isEmpty
+        else {
+            throw ConversionWorkflowError.invalidReport(
+                "ExtData install requires exact groups, directories, set hashes, manifest, and entries"
+            )
+        }
+        let expectedComponents = Set(fingerprint.groups.flatMap(\.componentNames))
+        guard Set(entries.map(\.component)) == expectedComponents,
+              entries.count == expectedComponents.count,
+              Set(entries.map(\.group)) == fingerprint.groups,
+              validExtraInstallEntries(
+                  entries,
+                  groups: fingerprint.groups,
+                  targetDirectory: fingerprint.targetDirectory
+              ),
+              entries.map({ $0.fingerprint() }) == fingerprint.entries
+        else {
+            throw ConversionWorkflowError.invalidReport(
+                "ExtData install entries do not prove every selected component replacement"
+            )
+        }
+        let reportedBackups = Set((report.backupPaths ?? []).filter(ConverterEvidence.hasPath))
+        let entryBackups = Set(entries.compactMap(\.backup).filter(ConverterEvidence.hasPath))
+        guard report.backupPaths?.count == entryBackups.count,
+              reportedBackups.count == entryBackups.count,
+              reportedBackups == entryBackups
+        else {
+            throw ConversionWorkflowError.invalidReport("ExtData backup list does not match entry evidence")
+        }
+    }
+
+    private func validExtraInstallEntries(
+        _ entries: [ConverterExtraInstallEntry],
+        groups: Set<ExtraGroup>,
+        targetDirectory: URL
+    ) -> Bool {
+        let expectedPairs = Set(groups.flatMap { group in
+            group.componentNames.map { "\(group.rawValue):\($0)" }
+        })
+        let reportedPairs = entries.map { "\($0.group.rawValue):\($0.component)" }
+        guard entries.count == expectedPairs.count,
+              Set(reportedPairs) == expectedPairs,
+              Set(reportedPairs).count == reportedPairs.count
+        else { return false }
+        return entries.allSatisfy { entry in
+            let target = URL(fileURLWithPath: entry.target).standardizedFileURL
+            let targetMatches = target.deletingLastPathComponent() == targetDirectory.standardizedFileURL
+                && target.lastPathComponent == entry.component
+            return targetMatches
+                && ConverterEvidence.isValidSHA256(entry.afterSHA256)
+                && entry.targetPreviouslyExisted
+                && ConverterEvidence.isValidSHA256(entry.beforeSHA256)
+                && ConverterEvidence.hasPath(entry.backup)
+        }
+    }
+
+    private func validateCECWrite(_ report: ConverterReport) throws {
+        guard let fingerprint = cecDryRunFingerprint,
+              ConverterEvidence.path(report.sourceDirectory, equals: fingerprint.sourceDirectory),
+              ConverterEvidence.path(report.target, equals: fingerprint.target),
+              report.sourceRecordSetSHA256 == fingerprint.sourceRecordSetSHA256,
+              report.targetSHA256Before == fingerprint.targetSHA256Before,
+              report.targetSHA256After == fingerprint.targetSHA256After,
+              ConverterEvidence.isValidSHA256(report.sourceRecordSetSHA256),
+              ConverterEvidence.isValidSHA256(report.targetSHA256Before),
+              ConverterEvidence.isValidSHA256(report.targetSHA256After),
+              let recordHashes = report.sourceRecordSHA256,
+              !recordHashes.isEmpty,
+              recordHashes.allSatisfy(ConverterEvidence.isValidSHA256),
+              ConverterEvidence.hasPath(report.manifest),
+              !fingerprint.targetExisted || ConverterEvidence.hasPath(report.backup)
+        else {
+            throw ConversionWorkflowError.invalidReport(
+                "CEC write requires exact mailbox/target hashes, manifest, and conditional backup evidence"
+            )
+        }
+    }
+
+    private func validateRollbackReport(
+        _ report: ConverterReport,
+        operation: ConverterOperation,
+        manifest: URL?
+    ) throws {
+        guard let manifest,
+              ConverterEvidence.path(report.manifest, equals: manifest)
+        else {
+            throw ConversionWorkflowError.invalidReport("rollback must echo the exact recovery manifest")
+        }
+        switch operation {
+        case .rollbackRepair:
+            guard report.operation == operation.rawValue else {
+                throw ConversionWorkflowError.invalidReport("repair rollback operation evidence is missing")
+            }
+        case .rollbackExtras:
+            guard report.operation == operation.rawValue,
+                  let groups = report.groups, !groups.isEmpty,
+                  let entries = report.entries, !entries.isEmpty,
+                  validExtraRollbackEntries(entries, groups: Set(groups))
+            else {
+                throw ConversionWorkflowError.invalidReport(
+                    "ExtData rollback requires operation, groups, and restored entry evidence"
+                )
+            }
+        case .rollback, .rollbackCEC:
+            break
+        case .inspect, .convert, .repairConverted, .convertSystem, .convertExtras, .installExtras, .convertCEC:
+            throw ConversionWorkflowError.invalidReport("unsupported rollback operation")
+        }
+    }
+
+    private func validExtraRollbackEntries(
+        _ entries: [ConverterExtraInstallEntry],
+        groups: Set<ExtraGroup>
+    ) -> Bool {
+        let expectedPairs = Set(groups.flatMap { group in
+            group.componentNames.map { "\(group.rawValue):\($0)" }
+        })
+        let reportedPairs = entries.map { "\($0.group.rawValue):\($0.component)" }
+        guard entries.count == expectedPairs.count,
+              Set(reportedPairs) == expectedPairs,
+              Set(reportedPairs).count == reportedPairs.count
+        else { return false }
+        let targetParents = Set(entries.map {
+            URL(fileURLWithPath: $0.target).standardizedFileURL.deletingLastPathComponent()
+        })
+        return targetParents.count == 1 && entries.allSatisfy { entry in
+            let target = URL(fileURLWithPath: entry.target).standardizedFileURL
+            return target.lastPathComponent == entry.component
+                && ConverterEvidence.isValidSHA256(entry.afterSHA256)
+                && entry.targetPreviouslyExisted
+                && ConverterEvidence.isValidSHA256(entry.beforeSHA256)
+                && ConverterEvidence.hasPath(entry.backup)
+        }
     }
 
     private enum AuthorizationScope {
