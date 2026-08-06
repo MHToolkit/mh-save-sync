@@ -872,6 +872,12 @@ final class MenuController: NSObject, NSApplicationDelegate {
             item.button?.imagePosition = .imageLeading
         }
         item.button?.title = context.menuBarTitle
+        item.button?.setAccessibilityLabel(
+            statusItemAccessibilityLabel(menuBarTitle: context.menuBarTitle)
+        )
+        item.button?.setAccessibilityHelp(
+            statusItemAccessibilityHelp(nextAction: nextActionText(context))
+        )
         item.button?.toolTip = "MH 云存档同步 · macOS Alpha"
         let menu = NSMenu()
         let routeItem = NSMenuItem(title: "MH3G · macOS Nemessix", action: nil, keyEquivalent: "")
@@ -989,7 +995,14 @@ final class MenuController: NSObject, NSApplicationDelegate {
 
     private func refreshMenuLabels() {
         statusItem?.button?.title = context.menuBarTitle
-        statusItem?.button?.toolTip = "下一步：\(nextActionText(context))"
+        let nextAction = nextActionText(context)
+        statusItem?.button?.setAccessibilityLabel(
+            statusItemAccessibilityLabel(menuBarTitle: context.menuBarTitle)
+        )
+        statusItem?.button?.setAccessibilityHelp(
+            statusItemAccessibilityHelp(nextAction: nextAction)
+        )
+        statusItem?.button?.toolTip = "下一步：\(nextAction)"
         routeMenuItem?.title = context.onboardingComplete ? "MH3G · 配置完成" : "MH3G · 需要完成设置"
         autoUploadMenuItem?.title = "自动同步：\(context.autoUploadOnExit ? "退出后自动上传" : "关闭")"
         autoUploadMenuItem?.state = context.autoUploadOnExit ? .on : .off

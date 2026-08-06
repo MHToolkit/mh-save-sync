@@ -14,6 +14,21 @@ public enum MenuCopy {
     public static let cloudStatus = "云端状态"
 }
 
+/// The status item lives outside the app's windows, so its current state and
+/// next action must be explicit to VoiceOver instead of being encoded only by
+/// an icon or abbreviated title.
+public func statusItemAccessibilityLabel(menuBarTitle: String) -> String {
+    let prefix = "MH 云存档 · "
+    let state = menuBarTitle.hasPrefix(prefix)
+        ? String(menuBarTitle.dropFirst(prefix.count))
+        : menuBarTitle
+    return "MH 云存档 · \(state)"
+}
+
+public func statusItemAccessibilityHelp(nextAction: String) -> String {
+    "下一步：\(nextAction)"
+}
+
 public func onboardingPrompt(
     missingServer: Bool,
     missingSaveRoot: Bool,

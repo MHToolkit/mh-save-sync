@@ -133,6 +133,13 @@ import Testing
     #expect(MenuCopy.cloudStatus == "云端状态")
 }
 
+@Test func statusItemAccessibilityNamesTheCurrentStateAndNextAction() {
+    #expect(statusItemAccessibilityLabel(menuBarTitle: "MH 云存档 · 选目录") ==
+        "MH 云存档 · 选目录")
+    #expect(statusItemAccessibilityHelp(nextAction: "请选择 Nemessix 存档目录") ==
+        "下一步：请选择 Nemessix 存档目录")
+}
+
 @Test func onboardingPromptIsShortAndActionable() {
     let text = onboardingPrompt(missingServer: true, missingSaveRoot: true, missingSecret: true)
     #expect(text == "还差 3 项设置。先填写服务器地址。")
