@@ -9,7 +9,9 @@ if command -v cargo-deny >/dev/null 2>&1 && command -v cargo-audit >/dev/null 2>
   ./scripts/supply-chain-gate.sh
 else
   echo "cargo-deny/cargo-audit not installed; supply-chain advisory gate skipped locally" >&2
-  python3 scripts/generate-sbom.py artifacts/sbom/mh-save-sync.cdx.json
+  python3 scripts/generate-sbom.py dependencies artifacts/sbom/mh-save-sync.cdx.json
+  python3 scripts/generate-sbom.py verify-dependencies \
+    --sbom artifacts/sbom/mh-save-sync.cdx.json
 fi
 cargo build --workspace --bins
 mkdir -p artifacts/checksums

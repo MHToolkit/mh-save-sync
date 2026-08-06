@@ -31,5 +31,6 @@ for advisory in ${CARGO_AUDIT_IGNORE_IDS:-RUSTSEC-2026-0194 RUSTSEC-2026-0195}; 
 done
 cargo audit "${audit_ignore_args[@]}"
 
-python3 scripts/generate-sbom.py artifacts/sbom/mh-save-sync.cdx.json
-test -s artifacts/sbom/mh-save-sync.cdx.json
+python3 scripts/generate-sbom.py dependencies artifacts/sbom/mh-save-sync.cdx.json
+python3 scripts/generate-sbom.py verify-dependencies \
+  --sbom artifacts/sbom/mh-save-sync.cdx.json
