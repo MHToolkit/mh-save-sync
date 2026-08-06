@@ -42,7 +42,8 @@ jobs:
             echo "refusing to reuse existing tag: ${tag}" >&2
             exit 1
           fi
-          git add crates/mh3g-save-convert/Cargo.toml
+          cargo update -p mh3g-save-convert --precise "$version"
+          git add crates/mh3g-save-convert/Cargo.toml Cargo.lock
           git commit -m "release: mh3g-save-convert ${version}"
           git tag -a "$tag" -m "MH3G Save Converter ${version}"
           git push origin HEAD:main "refs/tags/${tag}"

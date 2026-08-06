@@ -130,6 +130,10 @@ def main() -> int:
         raise AssertionError("auto patch workflow must be allowed to push its tag and dispatch")
     if "mh3g-converter-version.py --next-patch --write" not in auto_patch_release:
         raise AssertionError("auto patch workflow must use the exact package version helper")
+    if 'cargo update -p mh3g-save-convert --precise "$version"' not in auto_patch_release:
+        raise AssertionError("auto patch workflow must keep Cargo.lock in sync with the bumped package")
+    if "git add crates/mh3g-save-convert/Cargo.toml Cargo.lock" not in auto_patch_release:
+        raise AssertionError("auto patch workflow must commit both Cargo.toml and Cargo.lock")
     if "git tag -a" not in auto_patch_release or "refs/tags/${tag}" not in auto_patch_release:
         raise AssertionError("auto patch workflow must create and push an annotated v* tag")
     if "gh workflow run mh3g-converter-release.yml --ref \"$TAG\"" not in auto_patch_release:
