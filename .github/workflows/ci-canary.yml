@@ -3,8 +3,7 @@ name: ci-canary
 on:
   workflow_dispatch:
   schedule:
-    # Low-frequency runner health check for the shared 2c4g MHToolkit host.
-    # Heavy Rust/Android/Compose gates stay in ci.yml and PR-triggered only.
+    # Low-frequency hosted-runner health check. Heavy gates stay in ci.yml.
     - cron: "17 4 * * 1"
 
 concurrency:
@@ -16,10 +15,11 @@ permissions:
 
 jobs:
   light-health:
-    runs-on: [self-hosted, Linux, X64, ci-general]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
       - name: Tool sanity
         run: |
           rustc --version

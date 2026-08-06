@@ -17,6 +17,36 @@ backup product until the data-integrity gates in `docs/ROADMAP.md` pass.
 - A restore snapshots the current state before replacing anything.
 - The service never receives recovery secrets or plaintext save contents.
 
+## Public GitHub Actions CI and releases
+
+This public repository uses **standard GitHub-hosted runners** for normal CI
+and MH3G converter packaging. The intentionally short-lived GitHub Actions
+artifacts are diagnostic handoffs only (`retention-days: 3`); signed-off public
+distribution files are GitHub Release assets with individual SHA-256 files.
+
+| Workflow | Trigger | Hosted validation or output |
+| --- | --- | --- |
+| `ci.yml` | pull request, `main`, manual | Rust, Android, macOS smoke and compose gates |
+| `mh3g-converter-windows.yml` | converter changes, manual | Windows x64 ZIP, portable EXE and setup EXE packaging smoke |
+| `mh3g-converter-macos.yml` | converter changes, manual | Apple Silicon SwiftUI app, bundled CLI and macOS arm64 archive smoke |
+| `mh3g-converter-auto-patch-release.yml` | merged PR into `main` | atomically increments MH3G Converter patch version, commits it, creates `v*`, then dispatches the verified release workflow |
+| `mh3g-converter-release.yml` | `v*` tag, manual | repeat converter gates, package Windows/macOS, verify SHA-256, then publish Release assets |
+
+Release publishing is tag-only: the final job checks `refs/tags/v*` and alone
+gets `contents: write`. Pull-request jobs have read-only repository access and
+never receive release/signing secrets. CI proves file-format, CLI, package and
+native-app build contracts; it never launches Cemu, writes a real MLC, or
+claims game-runtime verification.
+
+After any PR is merged into `main`, `mh3g-converter-auto-patch-release.yml`
+serializes the next patch release (`0.0.7` -> `0.0.8`), commits the manifest
+version, creates an annotated `v0.0.8` tag, and explicitly dispatches
+`mh3g-converter-release.yml` at that tag. Explicit dispatch is intentional:
+tags created by the repository `GITHUB_TOKEN` do not reliably emit a second
+push workflow event. The release workflow still performs all gates and creates
+the GitHub Release only after Windows/macOS packages and SHA-256 verification
+succeed.
+
 ## Japanese MH3G 3DS -> Cemu conversion (offline)
 
 `mh3g-save-convert` migrates **one Japanese MH3G 3DS slot** to the matching

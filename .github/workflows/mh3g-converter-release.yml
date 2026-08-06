@@ -1,0 +1,150 @@
+name: mh3g-converter-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  converter-gate:
+    name: validate converter release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 8
+        continue-on-error: true
+      - name: Validate converter source contracts
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p mh3g-save-convert
+          cargo clippy -p mh3g-save-convert --all-targets -- -D warnings
+          python3 scripts/mh3g-docs-contract.py
+          python3 scripts/verify-mh3g-save-converter-windows-source.py
+          python3 scripts/verify-github-hosted-actions.py
+
+  package-windows-x64:
+    needs: converter-gate
+    name: package Windows x64 release artifacts
+    # Keep release builds on the image that ships the VS 2022 C++ toolchain
+    # expected by the WinUI + Rust MSVC package script.
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - name: Provision Visual C++ workload on the disposable hosted runner
+        shell: pwsh
+        run: |
+          choco install visualstudio2022-workload-vctools --yes --no-progress --package-parameters "--includeRecommended"
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 8
+        continue-on-error: true
+      - name: Package and self-verify Windows x64 release artifacts
+        shell: pwsh
+        run: |
+          python scripts/verify-mh3g-save-converter-windows-source.py
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mh3g-save-converter-windows.ps1 -Bootstrap
+      - uses: actions/upload-artifact@v5
+        with:
+          name: mh3g-release-windows-${{ github.sha }}
+          path: |
+            artifacts/mh3g-save-convert-windows-x64.zip
+            artifacts/mh3g-save-convert-windows-x64.zip.sha256
+            artifacts/MH3GSaveConverter-Setup-x64.exe
+            artifacts/MH3GSaveConverter-Setup-x64.exe.sha256
+            artifacts/MH3GSaveConverter-Portable-x64.exe
+            artifacts/MH3GSaveConverter-Portable-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  package-macos-arm64:
+    needs: converter-gate
+    name: package macOS arm64 release artifacts
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 8
+        continue-on-error: true
+      - name: Package and self-verify macOS arm64 release archive
+        run: |
+          MH3G_CONVERTER_UI_VERSION="${GITHUB_REF_NAME#v}" \
+            bash scripts/package-mh3g-save-converter-macos.sh
+      - uses: actions/upload-artifact@v5
+        with:
+          name: mh3g-release-macos-${{ github.sha }}
+          path: |
+            artifacts/MH3G-Save-Converter-macOS-arm64.zip
+            artifacts/MH3G-Save-Converter-macOS-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-release:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [converter-gate, package-windows-x64, package-macos-arm64]
+    name: publish verified GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified Windows artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: mh3g-release-windows-${{ github.sha }}
+          path: dist/windows
+      - name: Download verified macOS artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: mh3g-release-macos-${{ github.sha }}
+          path: dist/macos
+      - name: Recheck every release checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r checksum; do
+            directory="$(dirname "$checksum")"
+            filename="$(basename "$checksum")"
+            (cd "$directory" && sha256sum -c "$filename")
+          done < <(find dist -type f -name '*.sha256' -print | sort)
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" \
+            dist/windows/mh3g-save-convert-windows-x64.zip \
+            dist/windows/mh3g-save-convert-windows-x64.zip.sha256 \
+            dist/windows/MH3GSaveConverter-Portable-x64.exe \
+            dist/windows/MH3GSaveConverter-Portable-x64.exe.sha256 \
+            dist/windows/MH3GSaveConverter-Setup-x64.exe \
+            dist/windows/MH3GSaveConverter-Setup-x64.exe.sha256 \
+            dist/macos/MH3G-Save-Converter-macOS-arm64.zip \
+            dist/macos/MH3G-Save-Converter-macOS-arm64.zip.sha256 \
+            --clobber

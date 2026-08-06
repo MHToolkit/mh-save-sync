@@ -179,8 +179,13 @@ pub trait ExtraFileOperations {
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError>;
     /// Windows `ReplaceFileW` moves the former target directly to the
     /// transaction backup path instead of retaining it at `staged`.
+    ///
+    /// The default deliberately follows the platform primitive.  Synthetic
+    /// operation wrappers normally delegate `replace_staged`/`restore_target`
+    /// to [`StdExtraFileOperations`], so they must inherit the same recovery
+    /// artifact layout unless they explicitly provide a different primitive.
     fn previous_value_moves_to_backup(&self) -> bool {
-        false
+        cfg!(windows)
     }
 }
 

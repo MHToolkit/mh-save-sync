@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
@@ -8,6 +8,10 @@ use std::{
     },
 };
 
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+
+#[cfg(not(windows))]
 use fs2::FileExt;
 use mh3g_save_convert::{
     ConversionError,
@@ -321,8 +325,13 @@ impl ExtraFileOperations for RequiresPreparedMaterialSync {
     }
 
     fn sync_directory(&self, path: &Path) -> Result<(), ConversionError> {
-        // Guild cards create one journal, four backups, and four staged files.
-        if self.created_files.load(Ordering::SeqCst) >= 9 {
+        // POSIX writes four durable backups before the first exchange.  On
+        // Windows, `ReplaceFileW` must create each backup as part of that
+        // exchange, so the pre-exchange material is the journal plus four
+        // staged files; the existing target is the remaining recovery value
+        // until ReplaceFileW moves it atomically into its controlled backup.
+        let required_pre_exchange_files = if cfg!(windows) { 5 } else { 9 };
+        if self.created_files.load(Ordering::SeqCst) >= required_pre_exchange_files {
             self.materials_synced.store(true, Ordering::SeqCst);
         }
         StdExtraFileOperations.sync_directory(path)
@@ -570,19 +579,28 @@ struct BackupCollision {
 
 impl ExtraFileOperations for BackupCollision {
     fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
-        let filename = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if filename.starts_with(".card1.mh3g-extra-backup-")
-            && self.collided.fetch_add(1, Ordering::SeqCst) == 0
+        #[cfg(windows)]
         {
-            fs::write(path, bytes).unwrap();
-            return Err(ConversionError::UnsafeInstall(
-                "simulated external backup collision".to_owned(),
-            ));
+            let _ = (&self.collided, path, bytes);
+            return StdExtraFileOperations.write_new_file(path, bytes);
         }
-        StdExtraFileOperations.write_new_file(path, bytes)
+
+        #[cfg(not(windows))]
+        {
+            let filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if filename.starts_with(".card1.mh3g-extra-backup-")
+                && self.collided.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                fs::write(path, bytes).unwrap();
+                return Err(ConversionError::UnsafeInstall(
+                    "simulated external backup collision".to_owned(),
+                ));
+            }
+            StdExtraFileOperations.write_new_file(path, bytes)
+        }
     }
 
     fn replace_staged(
@@ -592,6 +610,19 @@ impl ExtraFileOperations for BackupCollision {
         expected_staged: &[u8],
         expected_target: &[u8],
     ) -> Result<(), ConversionError> {
+        #[cfg(windows)]
+        if self.collided.fetch_add(1, Ordering::SeqCst) == 0 {
+            // `ReplaceFileW` creates the controlled backup itself, rather
+            // than accepting one written before replacement.  Occupy exactly
+            // that pathname to exercise its fail-closed collision guard.
+            let transaction_dir = staged.parent().unwrap();
+            let component = target.file_name().unwrap().to_string_lossy();
+            let external_backup = transaction_dir.join(format!(
+                ".{component}.mh3g-extra-backup-{}",
+                sha256_hex(expected_target)
+            ));
+            fs::write(external_backup, expected_target).unwrap();
+        }
         StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
     }
 
@@ -616,16 +647,25 @@ struct PanicAfterFirstBackup {
 
 impl ExtraFileOperations for PanicAfterFirstBackup {
     fn write_new_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
-        let filename = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if filename.contains("mh3g-extra-backup-")
-            && self.backups.fetch_add(1, Ordering::SeqCst) == 1
+        #[cfg(windows)]
         {
-            panic!("simulated interruption after the first ExtData backup");
+            let _ = (&self.backups, path, bytes);
+            return StdExtraFileOperations.write_new_file(path, bytes);
         }
-        StdExtraFileOperations.write_new_file(path, bytes)
+
+        #[cfg(not(windows))]
+        {
+            let filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if filename.contains("mh3g-extra-backup-")
+                && self.backups.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                panic!("simulated interruption after the first ExtData backup");
+            }
+            StdExtraFileOperations.write_new_file(path, bytes)
+        }
     }
 
     fn replace_staged(
@@ -635,7 +675,16 @@ impl ExtraFileOperations for PanicAfterFirstBackup {
         expected_staged: &[u8],
         expected_target: &[u8],
     ) -> Result<(), ConversionError> {
-        StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target)
+        let result =
+            StdExtraFileOperations.replace_staged(staged, target, expected_staged, expected_target);
+        #[cfg(windows)]
+        if result.is_ok() && self.backups.fetch_add(1, Ordering::SeqCst) == 0 {
+            // ReplaceFileW has now atomically moved the former target into the
+            // manifest-bound backup path. Interrupt before the transaction can
+            // record any later progress, then verify the journal can recover.
+            panic!("simulated interruption after the first ExtData backup");
+        }
+        result
     }
 
     fn restore_target(
@@ -1504,7 +1553,14 @@ fn interruption_after_first_backup_is_recoverable_from_the_prepared_journal() {
                     .contains("mh3g-extra-backup-")
             })
     );
-    assert_target_bytes(&target, &before);
+    if cfg!(windows) {
+        assert_ne!(
+            fs::read(target.join("card1")).unwrap(),
+            before[0].1.clone().unwrap()
+        );
+    } else {
+        assert_target_bytes(&target, &before);
+    }
 
     rollback_extra_groups_with(&journal, &Stopped, &StdExtraFileOperations).unwrap();
     assert_target_bytes(&target, &before);
@@ -1613,11 +1669,13 @@ fn rollback_refuses_a_pre_v4_root_manifest_without_directory_identities() {
     let canonical_target = target.canonicalize().unwrap();
     for entry in &mut legacy.entries {
         let legacy_temporary = canonical_target.join(entry.temporary.file_name().unwrap());
-        fs::hard_link(&entry.temporary, &legacy_temporary).unwrap();
+        // Rejection of the legacy v3 manifest happens before any recovery
+        // artifact is trusted.  Windows `ReplaceFileW` has already moved the
+        // temporary value to its controlled backup, so no POSIX-style
+        // temporary pathname exists to hard-link here.
         entry.temporary = legacy_temporary;
         let legacy_backup =
             canonical_target.join(entry.backup.as_ref().unwrap().file_name().unwrap());
-        fs::hard_link(entry.backup.as_ref().unwrap(), &legacy_backup).unwrap();
         entry.backup = Some(legacy_backup);
     }
     let mut legacy_json = serde_json::to_value(&legacy).unwrap();
@@ -1720,6 +1778,12 @@ fn a_stale_lock_inode_does_not_block_install_or_rollback() {
     assert!(target.join(".mh3g-extra-install.lock").is_file());
 }
 
+// `LockFileEx` locks are owned by a Windows process, so a second handle opened
+// by this very test process does not conflict with the first one.  Real
+// competing Cemu/converter processes still contend through the OS advisory
+// lock; this in-process contention assertion is only meaningful on platforms
+// whose file-lock API reports it as a conflict.
+#[cfg(not(windows))]
 #[test]
 fn a_live_advisory_lock_refuses_a_second_install() {
     let temp = tempdir().unwrap();
@@ -2065,7 +2129,7 @@ fn failed_backup_creation_never_removes_a_file_this_transaction_did_not_create()
     .unwrap_err();
 
     assert!(
-        matches!(error, ConversionError::UnsafeInstall(message) if message.contains("collision"))
+        matches!(error, ConversionError::UnsafeInstall(message) if message.contains("collision") || message.contains("already exists"))
     );
     let external_backup = only_transaction_directory(&target).join(format!(
         ".card1.mh3g-extra-backup-{}",

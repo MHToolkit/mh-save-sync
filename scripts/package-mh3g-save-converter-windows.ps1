@@ -1049,7 +1049,11 @@ try {
     Push-Location $repoRoot
     try {
         # Do not clear NuGet/Cargo/target caches: restore and rustup are naturally cache-aware.
-        Invoke-External -FilePath $dotnet -Arguments @("restore", $project) -Description "dotnet restore"
+        # Self-contained publish with --no-restore requires the exact runtime
+        # pack to have been resolved during restore. A framework-only restore
+        # succeeds locally but leaves Microsoft.NETCore.App.Runtime.win-x64
+        # absent on a clean hosted runner.
+        Invoke-External -FilePath $dotnet -Arguments @("restore", $project, "-r", "win-x64") -Description "dotnet restore for win-x64"
 
         $previousRustFlags = [Environment]::GetEnvironmentVariable("RUSTFLAGS", "Process")
         if ([string]::IsNullOrWhiteSpace($previousRustFlags)) {

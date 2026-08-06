@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using Microsoft.UI.Xaml;
 using MHToolkit.MH3GSaveConverter.Windows.Infrastructure;
 using MHToolkit.MH3GSaveConverter.Windows.Models;
 using MHToolkit.MH3GSaveConverter.Windows.Services;
@@ -138,6 +139,7 @@ public sealed class MainViewModel : ObservableObject
         IsRepairRevisionSelectionRequired = false;
         RepairDetectionSummary = string.Empty;
         OnPropertyChanged(nameof(CanWriteCore));
+        OnPropertyChanged(nameof(WriteUnavailableVisibility));
     }
 
     public void SetConversionMode(string? tag)
@@ -474,6 +476,7 @@ public sealed class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(CanInspectEvents));
                 OnPropertyChanged(nameof(CanRunCoreDryRun));
                 OnPropertyChanged(nameof(CanWriteCore));
+                OnPropertyChanged(nameof(WriteUnavailableVisibility));
                 OnPropertyChanged(nameof(CanRollbackCore));
                 OnPropertyChanged(nameof(CanRunSystemDryRun));
                 OnPropertyChanged(nameof(CanWriteSystem));
@@ -511,6 +514,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _latestReport, value))
             {
                 OnPropertyChanged(nameof(HasLatestReport));
+                OnPropertyChanged(nameof(LatestReportEmptyVisibility));
             }
         }
     }
@@ -528,6 +532,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public bool HasLatestReport => !string.IsNullOrWhiteSpace(LatestReport);
+    public Visibility LatestReportEmptyVisibility => HasLatestReport ? Visibility.Collapsed : Visibility.Visible;
     public bool HasLatestError => !string.IsNullOrWhiteSpace(LatestError);
     public bool ShowPostInspectGuidance => _workflowGuidance == WorkflowGuidance.CoreInspected;
     public bool ShowPostDryRunGuidance => _workflowGuidance == WorkflowGuidance.CoreDryRunAuthorized;
@@ -559,6 +564,7 @@ public sealed class MainViewModel : ObservableObject
         && SelectedOptionalDataIsConfigured
         && (IsRepairMode ? _repairAuthorization is not null : _coreAuthorization is not null)
         && HasValidCorePaths();
+    public Visibility WriteUnavailableVisibility => CanWriteCore ? Visibility.Collapsed : Visibility.Visible;
     public bool CanRollbackCore => !IsBusy && !string.IsNullOrWhiteSpace(RollbackManifestPath);
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
     public bool CanWriteSystem => !IsBusy && IsSystemEnabled && _systemAuthorization is not null && HasSystemPaths();
@@ -706,6 +712,7 @@ public sealed class MainViewModel : ObservableObject
         _coreAuthorization = null;
         _repairAuthorization = null;
         OnPropertyChanged(nameof(CanWriteCore));
+        OnPropertyChanged(nameof(WriteUnavailableVisibility));
 
         var operation = IsRepairMode ? "repair-converted --dry-run" : "convert --dry-run";
         await RunOperationAsync(operation, async cancellationToken =>
@@ -853,29 +860,29 @@ public sealed class MainViewModel : ObservableObject
             Stage = WorkflowStage.Writing;
             if (IsRepairMode)
             {
-                var arguments = new List<string>
+                var repairArguments = new List<string>
                 {
                     "repair-converted", paths.Source,
                     "--current", paths.Target,
                 };
                 if (!string.IsNullOrWhiteSpace(repairAuthorization!.ExtDataSource))
                 {
-                    arguments.Add("--source-extdata-dir");
-                    arguments.Add(repairAuthorization.ExtDataSource);
+                    repairArguments.Add("--source-extdata-dir");
+                    repairArguments.Add(repairAuthorization.ExtDataSource);
                 }
                 if (!string.IsNullOrWhiteSpace(repairAuthorization.FromVersion))
                 {
-                    arguments.Add("--from-version");
-                    arguments.Add(repairAuthorization.FromVersion);
+                    repairArguments.Add("--from-version");
+                    repairArguments.Add(repairAuthorization.FromVersion);
                 }
-                arguments.AddRange(new[]
+                repairArguments.AddRange(new[]
                 {
                     "--write",
                     "--expected-source-set-sha256", repairAuthorization.SourceSetSha256,
                     "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
                     "--expected-preview-sha256", repairAuthorization.PreviewSha256,
                 });
-                var repairResult = await ExecuteAsync(operation, arguments, cancellationToken);
+                var repairResult = await ExecuteAsync(operation, repairArguments, cancellationToken);
                 RequireSuccess(repairResult, "repair converted save");
                 if (repairResult.Status is not ("written" or "no-changes"))
                 {
@@ -890,14 +897,16 @@ public sealed class MainViewModel : ObservableObject
                 RaiseCoreActionAvailability();
                 return;
             }
+            var conversionAuthorization = authorization
+                ?? throw new InvalidOperationException(Copy.WriteUnavailable);
             var arguments = new List<string>
             {
                 "convert", paths.Source, "--output", paths.Target,
-                "--expected-source-sha256", authorization.SourceReportHash,
+                "--expected-source-sha256", conversionAuthorization.SourceReportHash,
             };
-            if (authorization.Target.Exists)
+            if (conversionAuthorization.Target.Exists)
             {
-                var expectedTargetSha256 = authorization.Target.Sha256
+                var expectedTargetSha256 = conversionAuthorization.Target.Sha256
                     ?? throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
                 arguments.Add("--expected-target-sha256");
                 arguments.Add(expectedTargetSha256);
@@ -1740,6 +1749,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanInspectEvents));
         OnPropertyChanged(nameof(CanRunCoreDryRun));
         OnPropertyChanged(nameof(CanWriteCore));
+        OnPropertyChanged(nameof(WriteUnavailableVisibility));
     }
 
     private void RaiseOptionalConfigurationAvailability()
@@ -1750,6 +1760,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(PostWriteGuidanceAction));
         OnPropertyChanged(nameof(CanRunCoreDryRun));
         OnPropertyChanged(nameof(CanWriteCore));
+        OnPropertyChanged(nameof(WriteUnavailableVisibility));
     }
 
     private void SetWorkflowGuidance(WorkflowGuidance guidance)

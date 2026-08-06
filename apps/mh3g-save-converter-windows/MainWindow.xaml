@@ -53,7 +53,7 @@
                         <TextBlock Text="{Binding Copy.HeroDescription}" FontSize="15" LineHeight="22" TextWrapping="Wrap" Foreground="{StaticResource ConverterSlateBrush}" />
                         <Border Padding="12,9" Background="#FFF0F7F5" BorderBrush="#331B8A6B" BorderThickness="1" CornerRadius="8">
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <SymbolIcon Symbol="Shield" Foreground="{StaticResource ConverterJadeBrush}" />
+                                <SymbolIcon Symbol="ProtectedDocument" Foreground="{StaticResource ConverterJadeBrush}" />
                                 <TextBlock Text="{Binding Copy.HeroSafety}" TextWrapping="Wrap" Foreground="{StaticResource ConverterJadeBrush}" />
                             </StackPanel>
                         </Border>
@@ -262,7 +262,7 @@
                             <Button Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.WriteSelectedSave}" /></StackPanel>
                             </Button>
-                            <TextBlock Text="{Binding Copy.WriteUnavailable}" Visibility="{Binding CanWriteCore, Converter={StaticResource BooleanNegationConverter}}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding Copy.WriteUnavailable}" Visibility="{Binding WriteUnavailableVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
                             <Border Padding="12" Background="#FFF3F6FA" CornerRadius="8">
                                 <StackPanel Spacing="3">
                                     <TextBlock Text="{Binding Copy.TransactionDetails}" FontWeight="SemiBold" />
@@ -408,7 +408,7 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="10">
                                 <Border Height="116" CornerRadius="8" Background="#FF18212F">
-                                    <Image Source="ms-appx:///assets/Artwork/cec-mailbox.png" Stretch="UniformToFill" Opacity="0.78" />
+                                    <Image Source="ms-appx:///Assets/Artwork/cec-mailbox.png" Stretch="UniformToFill" Opacity="0.78" />
                                 </Border>
                                 <CheckBox IsChecked="{Binding IsCecAcknowledged, Mode=TwoWay}" Content="{Binding Copy.CecAcknowledge}" />
                                 <Button Click="WriteCec_Click" IsEnabled="{Binding CanWriteCec}" HorizontalAlignment="Left">
@@ -432,8 +432,8 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="1.15*" /><ColumnDefinition Width="0.85*" /></Grid.ColumnDefinitions>
                     <StackPanel Spacing="10">
                         <TextBlock Text="{Binding Copy.ResultTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <TextBlock Text="{Binding Copy.ResultEmpty}" Visibility="{Binding HasLatestReport, Converter={StaticResource BooleanNegationConverter}}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        <TextBox Text="{Binding LatestReport}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="12" MinHeight="194" MaxHeight="280" VerticalScrollBarVisibility="Auto" />
+                        <TextBlock Text="{Binding Copy.ResultEmpty}" Visibility="{Binding LatestReportEmptyVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        <TextBox Text="{Binding LatestReport}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="12" MinHeight="194" MaxHeight="280" ScrollViewer.VerticalScrollBarVisibility="Auto" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Spacing="10">
                         <TextBlock Text="{Binding Copy.OperationHistory}" Style="{StaticResource SectionTitleTextStyle}" />

@@ -15,6 +15,30 @@
 - 恢复操作会先为当前状态创建快照，然后才替换数据。
 - 服务端不会收到恢复密钥或明文存档内容。
 
+## 公开仓库 GitHub Actions CI 与发布
+
+本公开仓库的日常 CI 与 MH3G Converter 打包统一使用 GitHub 的**标准托管 Runner**。
+GitHub Actions 中上传的产物只用于短期诊断与交接，统一设置为 `retention-days: 3`；正式面向玩家的
+分发文件以附带独立 SHA-256 的 GitHub Release assets 为准。
+
+| 工作流 | 触发条件 | 托管验证或产物 |
+| --- | --- | --- |
+| `ci.yml` | PR、`main`、手动触发 | Rust、Android、macOS smoke 与 Compose 门禁 |
+| `mh3g-converter-windows.yml` | Converter 相关变更、手动触发 | Windows x64 ZIP、便携 EXE、安装器 EXE 的打包自检 |
+| `mh3g-converter-macos.yml` | Converter 相关变更、手动触发 | Apple Silicon SwiftUI App、内置 CLI、macOS arm64 ZIP 的打包自检 |
+| `mh3g-converter-auto-patch-release.yml` | 合并到 `main` 的 PR | 原子地递增 MH3G Converter 补丁版本、提交版本、创建 `v*`，再调度已验证的发布工作流 |
+| `mh3g-converter-release.yml` | `v*` tag、手动触发 | 重跑 Converter 门禁、构建 Windows/macOS、复核 SHA-256、上传 Release assets |
+
+发布严格以 tag 为边界：最终发布 job 会检查 `refs/tags/v*`，只有它拥有 `contents: write`。
+PR job 只有仓库只读权限，绝不获取发布或签名 secret。CI 只证明文件格式、CLI、打包与原生 App 的
+构建契约；不会启动 Cemu、不会写入真实 MLC，也不会把它表述为游戏内运行时验证。
+
+任意 PR 合并到 `main` 后，`mh3g-converter-auto-patch-release.yml` 会串行生成下一补丁版本
+（例如 `0.0.7` -> `0.0.8`）：原子更新 manifest、创建提交、创建带注释的 `v0.0.8` tag，随后显式在
+该 tag 上调度 `mh3g-converter-release.yml`。这里刻意使用显式调度：由仓库 `GITHUB_TOKEN` 创建的 tag
+不保证会再触发新的 push 工作流事件。真正的 Release 仍然必须先完成 Windows/macOS 打包和 SHA-256
+复核，才会创建并上传 GitHub Release assets。
+
 ## 日版 MH3G 3DS -> Cemu 离线转换
 
 `mh3g-save-convert` 用于把**一个日版 MH3G 3DS 角色槽位**转换到编号相同的日版 MH3G HD Cemu 槽位。它是仅在本地执行的单向工具：不会上传存档、不会修改 3DS 源文件、不支持其他地区版本，也不能把 Cemu 存档反向转换成 3DS 存档。转换器会保留已记录转换范围以外的字节，但字节得到保留并不能证明两个平台中所有游戏字段的含义完全相同。

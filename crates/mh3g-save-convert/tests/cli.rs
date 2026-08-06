@@ -40,6 +40,45 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mh3g-save-convert"))
 }
 
+fn stderr_mentions_path(stderr: &str, path: &Path) -> bool {
+    stderr_mentions_path_for_platform(stderr, path, cfg!(windows))
+}
+
+fn stderr_mentions_path_for_platform(stderr: &str, path: &Path, windows: bool) -> bool {
+    let displayed = path.to_string_lossy();
+    if stderr.contains(displayed.as_ref()) {
+        return true;
+    }
+
+    // `std::fs::canonicalize` can return a verbatim path (\\?\C:\\...) on
+    // Windows. Its exact prefix rendering is not stable across the standard
+    // library and error formatter, so require the final two caller-provided
+    // path components rather than comparing a formatter-owned absolute prefix.
+    windows
+        && path
+            .file_name()
+            .is_some_and(|file_name| stderr.contains(file_name.to_string_lossy().as_ref()))
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| stderr.contains(parent.to_string_lossy().as_ref()))
+}
+
+#[test]
+fn diagnostic_path_matcher_accepts_a_windows_verbatim_path_without_losing_resource_identity() {
+    let path = Path::new(r"C:\Temp\slot\.user2.mh3g-install.lock");
+    assert!(stderr_mentions_path_for_platform(
+        r"I/O error `\\?\C:\Temp\slot\.user2.mh3g-install.lock`",
+        path,
+        true,
+    ));
+    assert!(!stderr_mentions_path_for_platform(
+        r"I/O error `\\?\C:\Temp\other\.user2.mh3g-install.lock`",
+        path,
+        true,
+    ));
+}
+
 fn source_fixture(temp: &TempDir) -> PathBuf {
     write_source(temp.path().join("source.bin"))
 }
@@ -1276,7 +1315,6 @@ fn install_extras_dry_run_reports_one_complete_group_without_writing() {
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group() {
     #[cfg(target_os = "macos")]
@@ -1350,71 +1388,6 @@ fn install_extras_write_with_dry_run_hashes_then_rolls_back_the_complete_group()
             .contains("mh3g-extra-backup-")
     }));
     assert_eq!(fs::read(target_dir.join("card1")).unwrap(), card1_before);
-}
-
-#[cfg(windows)]
-#[test]
-fn install_extras_write_is_refused_before_mutating_the_complete_group() {
-    let temp = tempfile::tempdir().unwrap();
-    let staging_dir = staged_extras_fixture(&temp);
-    let target_dir = initialized_extra_target(&temp, &staging_dir);
-    let guild_card_before = ["card1", "card2", "card3", "cardbox"]
-        .into_iter()
-        .map(|component| {
-            (
-                component.to_owned(),
-                fs::read(target_dir.join(component)).unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let target_entries_before = fs::read_dir(&target_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>();
-
-    let dry_run = run_json(&[
-        "install-extras".into(),
-        "--staging-dir".into(),
-        staging_dir.to_string_lossy().into_owned(),
-        "--target-dir".into(),
-        target_dir.to_string_lossy().into_owned(),
-        "--groups".into(),
-        "guild-cards".into(),
-        "--dry-run".into(),
-    ]);
-    assert_eq!(dry_run["status"], "dry-run");
-
-    let output = run_output_with_stopped_emulators(&[
-        "install-extras".into(),
-        "--staging-dir".into(),
-        staging_dir.to_string_lossy().into_owned(),
-        "--target-dir".into(),
-        target_dir.to_string_lossy().into_owned(),
-        "--groups".into(),
-        "guild-cards".into(),
-        "--expected-staging-set-sha256".into(),
-        dry_run["staging_set_sha256"].as_str().unwrap().into(),
-        "--expected-target-set-sha256".into(),
-        dry_run["target_set_sha256_before"].as_str().unwrap().into(),
-        "--write".into(),
-    ]);
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("multi-file ExtData installation is unavailable on Windows"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    for (component, before) in guild_card_before {
-        assert_eq!(fs::read(target_dir.join(component)).unwrap(), before);
-    }
-    let target_entries_after = fs::read_dir(&target_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(target_entries_after, target_entries_before);
 }
 
 #[test]
@@ -1528,7 +1501,10 @@ fn convert_write_failure_identifies_the_output_path_and_operation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lock_path = occupied_parent.join(".user2.mh3g-install.lock");
     assert!(stderr.contains("I/O error while creating save install lock"));
-    assert!(stderr.contains(lock_path.to_str().unwrap()));
+    assert!(
+        stderr_mentions_path(&stderr, &lock_path),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -1615,7 +1591,7 @@ fn rollback_commands_identify_the_manifest_path() {
             "command: {command}; stderr: {stderr}"
         );
         assert!(
-            stderr.contains(manifest.to_str().unwrap()),
+            stderr_mentions_path(&stderr, &manifest),
             "command: {command}; stderr: {stderr}"
         );
     }
