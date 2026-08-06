@@ -24,8 +24,12 @@ struct ConversionWorkbenchView: View {
             .navigationTitle(ConverterCopy.text("App.Title", language: language))
             .listStyle(.sidebar)
         } detail: {
-            detailView
-                .frame(minWidth: 680, minHeight: 560)
+            VStack(spacing: 0) {
+                WorkflowStatusBanner(workflow: workflow, language: language)
+                Divider()
+                detailView
+            }
+            .frame(minWidth: 680, minHeight: 560)
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -87,10 +91,10 @@ private struct StatusPill: View {
     let language: ConverterLanguage
 
     var body: some View {
-        Label(title, systemImage: image)
+        Label(title, systemImage: statusAppearance.image)
             .labelStyle(.titleAndIcon)
             .font(.caption)
-            .foregroundStyle(color)
+            .foregroundStyle(statusAppearance.color)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
             .background(.quaternary, in: Capsule())
@@ -98,54 +102,104 @@ private struct StatusPill: View {
     }
 
     private var title: String {
-        switch presentation {
-        case .notReady: ConverterCopy.text("Status.NotReady", language: language)
-        case .authorized: ConverterCopy.text("Status.Authorized", language: language)
-        case .running: ConverterCopy.text("Status.Running", language: language)
-        case .succeeded: ConverterCopy.text("Status.Succeeded", language: language)
-        case .failed: ConverterCopy.text("Status.Failed", language: language)
-        }
+        ConverterCopy.text(workflow.statusPresentation.titleKey, language: language)
     }
 
-    private var image: String {
-        switch presentation {
-        case .notReady: "circle.dotted"
-        case .authorized: "checkmark.shield.fill"
-        case .running: "arrow.triangle.2.circlepath"
-        case .succeeded: "checkmark.circle.fill"
-        case .failed: "exclamationmark.triangle.fill"
-        }
+    private var statusAppearance: WorkflowStatusAppearance {
+        WorkflowStatusAppearance(workflow.statusPresentation.kind)
     }
+}
 
-    private var color: Color {
-        switch presentation {
-        case .notReady: .secondary
-        case .authorized: .blue
-        case .running: .orange
-        case .succeeded: .green
-        case .failed: .red
+private struct WorkflowStatusBanner: View {
+    let workflow: ConversionWorkflow
+    let language: ConverterLanguage
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var presentation: WorkflowStatusPresentation { workflow.statusPresentation }
+    private var appearance: WorkflowStatusAppearance { WorkflowStatusAppearance(presentation.kind) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: appearance.image)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(appearance.color)
+                .symbolEffect(.pulse, options: .repeating, isActive: presentation.kind == .running && !reduceMotion)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ConverterCopy.text(presentation.titleKey, language: language))
+                    .font(.headline)
+                Text(ConverterCopy.text(presentation.detailKey, language: language))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if presentation.isBlocking || differentiateWithoutColor {
+                Text(presentation.isBlocking
+                    ? ConverterCopy.text("Status.Blocked", language: language)
+                    : ConverterCopy.text("Status.Ready", language: language))
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(appearance.color.opacity(0.12), in: Capsule())
+                    .foregroundStyle(appearance.color)
+            }
         }
-    }
-
-    private var presentation: Presentation {
-        if workflow.activeOperation != nil || workflow.state == .writing { return .running }
-        if workflow.state == .failure { return .failed }
-        if workflow.state == .success { return .succeeded }
-        if workflow.canWrite
-            || workflow.canWriteSystem
-            || workflow.canStageExtras
-            || workflow.canInstallExtras
-            || workflow.canWriteCEC {
-            return .authorized
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(reduceTransparency ? Color(nsColor: .controlBackgroundColor) : .clear)
+                .background(
+                    reduceTransparency ? AnyShapeStyle(.clear) : AnyShapeStyle(.thinMaterial),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
         }
-        return .notReady
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(contrast == .increased ? Color.primary : appearance.color.opacity(0.24), lineWidth: contrast == .increased ? 2 : 1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("mh3g.converter.status.\(presentation.kind.rawValue)")
+        .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 1), value: presentation.kind)
     }
+}
 
-    private enum Presentation {
-        case notReady
-        case authorized
-        case running
-        case succeeded
-        case failed
+private struct WorkflowStatusAppearance {
+    let image: String
+    let color: Color
+
+    init(_ kind: WorkflowStatusKind) {
+        switch kind {
+        case .needsInput:
+            image = "doc.badge.plus"
+            color = .secondary
+        case .needsInspection:
+            image = "doc.text.magnifyingglass"
+            color = .blue
+        case .readyForDryRun:
+            image = "checkmark.shield"
+            color = .blue
+        case .blocked:
+            image = "lock.trianglebadge.exclamationmark"
+            color = .orange
+        case .authorized:
+            image = "checkmark.shield.fill"
+            color = .blue
+        case .running:
+            image = "arrow.triangle.2.circlepath"
+            color = .orange
+        case .succeeded:
+            image = "checkmark.circle.fill"
+            color = .green
+        case .failed:
+            image = "exclamationmark.triangle.fill"
+            color = .red
+        }
     }
 }
