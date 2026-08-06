@@ -17,21 +17,22 @@
 
 ## 公开仓库 GitHub Actions CI 与发布
 
-本公开仓库的日常 CI 与 MH3G Converter 打包统一使用 GitHub 的**标准托管 Runner**。
-GitHub Actions 中上传的产物只用于短期诊断与交接，统一设置为 `retention-days: 3`；正式面向玩家的
-分发文件以附带独立 SHA-256 的 GitHub Release assets 为准。
+本公开仓库的日常 CI 与 MH3G Converter 验证统一使用 GitHub 的**标准托管 Runner**。
+PR 与 `main` 只验证单测、源码契约和打包构建成功率，不生成面向玩家分发的压缩包/安装包。正式面向玩家的
+分发文件只由 tag 驱动的 release workflow 构建，并以附带独立 SHA-256 的 GitHub Release assets 为准。
+GitHub Actions 中如有上传产物，也只用于短期诊断与交接，统一设置为 `retention-days: 3`。
 
 | 工作流 | 触发条件 | 托管验证或产物 |
 | --- | --- | --- |
 | `ci.yml` | PR、`main`、手动触发 | Rust、Android、macOS smoke 与 Compose 门禁 |
-| `mh3g-converter-windows.yml` | Converter 相关变更、手动触发 | Windows x64 ZIP、便携 EXE、安装器 EXE 的打包自检 |
-| `mh3g-converter-macos.yml` | Converter 相关变更、手动触发 | Apple Silicon SwiftUI App、内置 CLI、macOS arm64 ZIP 的打包自检 |
+| `mh3g-converter-windows.yml` | Converter 相关变更、手动触发 | Windows x64 单测与 WinUI/sidecar publish 验证；不上传 ZIP、便携 EXE、安装器 EXE |
+| `mh3g-converter-macos.yml` | Converter 相关变更、手动触发 | Apple Silicon SwiftUI App、内置 CLI 与 validation-only 打包构建验证；不上传正式发布 ZIP |
 | `mh3g-converter-auto-patch-release.yml` | 合并到 `main` 的 PR | 原子地递增 MH3G Converter 补丁版本、提交版本、创建 `v*`，再调度已验证的发布工作流 |
 | `mh3g-converter-release.yml` | `v*` tag、手动触发 | 重跑 Converter 门禁、构建 Windows/macOS、复核 SHA-256、上传 Release assets |
 
 发布严格以 tag 为边界：最终发布 job 会检查 `refs/tags/v*`，只有它拥有 `contents: write`。
-PR job 只有仓库只读权限，绝不获取发布或签名 secret。CI 只证明文件格式、CLI、打包与原生 App 的
-构建契约；不会启动 Cemu、不会写入真实 MLC，也不会把它表述为游戏内运行时验证。
+PR job 只有仓库只读权限，绝不获取发布或签名 secret。CI 只证明文件格式、CLI、打包构建与原生 App 的
+构建契约；PR/main 验证会刻意停在玩家分发包生成之前，不会启动 Cemu、不会写入真实 MLC，也不会把它表述为游戏内运行时验证。
 
 任意 PR 合并到 `main` 后，`mh3g-converter-auto-patch-release.yml` 会串行生成下一补丁版本
 （例如 `0.0.7` -> `0.0.8`）：原子更新 manifest、创建提交、创建带注释的 `v0.0.8` tag，随后显式在

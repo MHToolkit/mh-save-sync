@@ -80,9 +80,9 @@ def main() -> int:
         raise AssertionError(
             "release workflow must use windows-2022 with VS 2022 Build Tools"
         )
-    if "package-mh3g-save-converter-windows.ps1 -Bootstrap" not in windows:
+    if "package-mh3g-save-converter-windows.ps1 -Bootstrap -ValidateOnly" not in windows:
         raise AssertionError(
-            "Windows package CI must bootstrap disposable hosted-runner prerequisites"
+            "Windows PR/main CI must validate package builds without creating release artifacts"
         )
     if "package-mh3g-save-converter-windows.ps1 -Bootstrap" not in release:
         raise AssertionError(
@@ -90,7 +90,7 @@ def main() -> int:
         )
     if "timeout-minutes: 60" not in windows:
         raise AssertionError(
-            "Windows package CI must allow enough time for the one-time VS bootstrap"
+            "Windows package validation CI must allow enough time for the one-time VS bootstrap"
         )
     if "choco install visualstudio2022-workload-vctools" not in windows:
         raise AssertionError(
@@ -102,6 +102,20 @@ def main() -> int:
         )
     if "macos-latest" not in macos:
         raise AssertionError("macOS package workflow must use macos-latest")
+    if "MH3G_CONVERTER_PACKAGE_VALIDATE_ONLY=1 bash scripts/package-mh3g-save-converter-macos.sh" not in macos:
+        raise AssertionError("macOS PR/main CI must validate package builds without creating release archives")
+    for forbidden in (
+        "artifacts/mh3g-save-convert-windows-x64.zip",
+        "artifacts/MH3GSaveConverter-Portable-x64.exe",
+        "artifacts/MH3GSaveConverter-Setup-x64.exe",
+        "artifacts/MH3G-Save-Converter-macOS-arm64.zip",
+    ):
+        if forbidden in windows or forbidden in macos:
+            raise AssertionError(
+                f"PR/main package workflows must not upload release artifact {forbidden}"
+            )
+    if "-ValidateOnly" in release or "MH3G_CONVERTER_PACKAGE_VALIDATE_ONLY=1" in release:
+        raise AssertionError("tag release workflow must build real distributable artifacts")
     if "tags:" not in release or '"v*"' not in release:
         raise AssertionError("release workflow must be triggered by v* tags")
     if "contents: write" not in release:
@@ -145,6 +159,15 @@ def main() -> int:
         raise AssertionError("README.md must document the public hosted CI policy")
     if "## 公开仓库 GitHub Actions CI 与发布" not in readme_zh_cn:
         raise AssertionError("README.zh-CN.md must document the public hosted CI policy")
+    macos_release_packager = (ROOT / "scripts/package-mh3g-save-converter-macos.sh").read_text(
+        encoding="utf-8"
+    )
+    if 'shasum -a 256 "$archive" > "$checksum"' in macos_release_packager:
+        raise AssertionError("macOS release packager must not write absolute paths into .sha256")
+    if 'shasum -a 256 "$(basename "$archive")" > "$(basename "$checksum")"' not in macos_release_packager:
+        raise AssertionError("macOS release packager must checksum the archive by basename")
+    if 'basename "$target"' not in release or "invalid checksum file" not in release:
+        raise AssertionError("release workflow must verify checksums by artifact basename")
 
     print("GitHub-hosted Actions workflow contract: ok")
     return 0

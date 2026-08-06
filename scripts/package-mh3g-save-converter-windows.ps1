@@ -10,7 +10,11 @@ param(
     [switch]$SkipTests,
     # Never starts the GUI. This only skips the synthetic CLI write/rollback
     # package smoke when a caller is intentionally iterating on layout.
-    [switch]$SkipTransactionSmoke
+    [switch]$SkipTransactionSmoke,
+    # CI/main validation mode: build and publish the WinUI folder plus native
+    # sidecar, but do not create distributable ZIP/portable/installer outputs.
+    # Release artifacts are produced only by the tag-driven release workflow.
+    [switch]$ValidateOnly
 )
 
 Set-StrictMode -Version Latest
@@ -1106,6 +1110,15 @@ try {
         Copy-Item -LiteralPath $uiReadme -Destination (Join-Path $stage "README-Windows-UI.md") -Force
         Copy-Item -LiteralPath $uiChineseReadme -Destination (Join-Path $stage "README-Windows-UI.zh-CN.md") -Force
         Copy-Item -LiteralPath $packageReadme -Destination (Join-Path $stage "README-Windows.txt") -Force
+
+        if ($ValidateOnly) {
+            Write-Host ""
+            Write-Host "Windows x64 package validation complete."
+            Write-Host "Validated WinUI publish directory: $stage"
+            Write-Host "Validated sidecar: $packagedSidecar"
+            Write-Host "Transcript: $transcript"
+            return
+        }
 
         # Build all three user-facing formats from the same self-contained WinUI
         # folder and the same native Rust sidecar. The single-file form bundles
