@@ -124,8 +124,13 @@ jobs:
           set -euo pipefail
           while IFS= read -r checksum; do
             directory="$(dirname "$checksum")"
-            filename="$(basename "$checksum")"
-            (cd "$directory" && sha256sum -c "$filename")
+            expected="$(awk 'NR == 1 { print $1 }' "$checksum")"
+            target="$(awk 'NR == 1 { print $2 }' "$checksum")"
+            if [[ ! "$expected" =~ ^[0-9a-fA-F]{64}$ || -z "$target" ]]; then
+              echo "invalid checksum file: $checksum" >&2
+              exit 1
+            fi
+            (cd "$directory" && printf '%s  %s\n' "$expected" "$(basename "$target")" | sha256sum -c -)
           done < <(find dist -type f -name '*.sha256' -print | sort)
       - name: Create or update GitHub Release
         env:

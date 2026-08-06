@@ -13,9 +13,17 @@ mkdir -p "$output_dir"
 MH3G_CONVERTER_MACOS_APP_ROOT="$app_root" "$repo_root/scripts/build-mh3g-save-converter-macos-app.sh"
 "$repo_root/scripts/mh3g-save-converter-macos-smoke.sh" "$app_root"
 
+if [[ "${MH3G_CONVERTER_PACKAGE_VALIDATE_ONLY:-0}" == "1" ]]; then
+  printf 'validation-only app: %s\n' "$app"
+  exit 0
+fi
+
 rm -f "$archive" "$checksum"
 ditto -c -k --keepParent "$app" "$archive"
-shasum -a 256 "$archive" > "$checksum"
+(
+  cd "$output_dir"
+  shasum -a 256 "$(basename "$archive")" > "$(basename "$checksum")"
+)
 
 rm -rf "$verify_dir"
 mkdir -p "$verify_dir"

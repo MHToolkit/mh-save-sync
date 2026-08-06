@@ -39,8 +39,8 @@ permissions:
   contents: read
 
 jobs:
-  package-windows-x64:
-    name: package Windows x64 executable
+  validate-windows-x64:
+    name: validate Windows x64 packaging
     # The package script uses VsDevCmd from Visual Studio 2022. Pin this
     # standard public runner instead of the moving windows-latest image.
     runs-on: windows-2022
@@ -64,15 +64,15 @@ jobs:
         run: |
           python scripts/verify-mh3g-save-converter-windows-source.py
           python scripts/verify-github-hosted-actions.py
-      # Keep CI and the Windows tester on one implementation. The script does
-      # not launch the WinUI process, Cemu, or any real save; it runs only the
-      # packaged sidecar and a disposable synthetic write/rollback smoke.
-      - name: Package and self-verify Windows x64 archive
+      # PR/main validation compiles the same WinUI + Rust payload but stops
+      # before creating distributable ZIP/portable/installer files. Real
+      # release artifacts are produced only by mh3g-converter-release.yml on v*.
+      - name: Validate Windows x64 package build
         shell: pwsh
         run: |
           # Hosted runners are disposable. Bootstrap only this fresh VM rather
           # than requiring every runner image to preinstall the VS C++ workload.
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mh3g-save-converter-windows.ps1 -Bootstrap
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mh3g-save-converter-windows.ps1 -Bootstrap -ValidateOnly
       - name: Upload Windows package transcript on failure
         if: failure()
         uses: actions/upload-artifact@v5
@@ -80,19 +80,4 @@ jobs:
           name: mh3g-save-convert-windows-build-transcript-${{ github.sha }}
           path: artifacts/mh3g-save-convert-windows-build-transcript.txt
           if-no-files-found: warn
-          retention-days: 3
-      - uses: actions/upload-artifact@v5
-        if: success()
-        with:
-          name: mh3g-save-convert-windows-x64-${{ github.sha }}
-          path: |
-            artifacts/mh3g-save-convert-windows-x64.zip
-            artifacts/mh3g-save-convert-windows-x64.zip.sha256
-            artifacts/MH3GSaveConverter-Setup-x64.exe
-            artifacts/MH3GSaveConverter-Setup-x64.exe.sha256
-            artifacts/MH3GSaveConverter-Portable-x64.exe
-            artifacts/MH3GSaveConverter-Portable-x64.exe.sha256
-            artifacts/mh3g-save-convert.exe.sha256
-            artifacts/mh3g-save-convert-windows-build-transcript.txt
-          if-no-files-found: error
           retention-days: 3
