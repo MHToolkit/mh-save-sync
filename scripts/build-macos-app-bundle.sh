@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-macos_version_name="${MH_SAVE_SYNC_MACOS_VERSION_NAME:-0.1.0-alpha.3}"
-macos_version_code="${MH_SAVE_SYNC_MACOS_VERSION_CODE:-4}"
+macos_version_name="${MH_SAVE_SYNC_MACOS_VERSION_NAME:-0.1.0-alpha.4}"
+macos_version_code="${MH_SAVE_SYNC_MACOS_VERSION_CODE:-5}"
 [[ -n "$macos_version_name" ]] || { echo "MH_SAVE_SYNC_MACOS_VERSION_NAME must not be blank" >&2; exit 2; }
 [[ "$macos_version_code" =~ ^[1-9][0-9]*$ ]] || { echo "MH_SAVE_SYNC_MACOS_VERSION_CODE must be a positive integer" >&2; exit 2; }
 
