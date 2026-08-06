@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "apps" / "mh3g-save-converter-windows"
 WINDOWS_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-windows.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "mh3g-converter-release.yml"
 WINDOWS_PACKAGE_SCRIPT = ROOT / "scripts" / "package-mh3g-save-converter-windows.ps1"
 GLOBAL_JSON = ROOT / "global.json"
 
@@ -41,8 +42,9 @@ def public_method_body(source: str, method: str) -> str:
 
 
 def verify_release_workflow() -> None:
-    """Keep the shipped WinUI application and its Rust sidecar inseparable."""
-    workflow = WINDOWS_WORKFLOW.read_text(encoding="utf-8")
+    """Keep validation-only PR CI separate from tag-driven release packaging."""
+    validation_workflow = WINDOWS_WORKFLOW.read_text(encoding="utf-8")
+    release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     sdk = json.loads(GLOBAL_JSON.read_text(encoding="utf-8")).get("sdk", {})
     require(
         sdk.get("version") == "8.0.100" and sdk.get("rollForward") == "latestFeature",
@@ -57,23 +59,48 @@ def verify_release_workflow() -> None:
         "actions/setup-dotnet@v5",
         "python scripts/verify-mh3g-save-converter-windows-source.py",
         "scripts/package-mh3g-save-converter-windows.ps1",
+        "-ValidateOnly",
+        "if: failure()",
+    ):
+        require(
+            expected in validation_workflow,
+            f"Windows validation workflow is missing {expected}",
+        )
+
+    for release_artifact in (
         "mh3g-save-convert-windows-x64.zip",
         "mh3g-save-convert-windows-x64.zip.sha256",
         "MH3GSaveConverter-Setup-x64.exe",
         "MH3GSaveConverter-Setup-x64.exe.sha256",
         "MH3GSaveConverter-Portable-x64.exe",
         "MH3GSaveConverter-Portable-x64.exe.sha256",
-        "if: failure()",
     ):
-        require(expected in workflow, f"Windows release workflow is missing {expected}")
+        require(
+            release_artifact not in validation_workflow,
+            f"Windows validation workflow must not upload release artifact {release_artifact}",
+        )
+        require(
+            release_artifact in release_workflow,
+            f"tag release workflow is missing {release_artifact}",
+        )
 
-    for forbidden in (
-        "& $packagedApp",
-        "Start-Process $packagedApp",
-        'Start-Process "$packagedApp"',
-        "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
+    for expected in (
+        "tags:",
+        '"v*"',
+        "package Windows x64 release artifacts",
+        "package-mh3g-save-converter-windows.ps1 -Bootstrap",
     ):
-        require(forbidden not in workflow, "release workflow must delegate packaging without launching the WinUI GUI")
+        require(expected in release_workflow, f"tag release workflow is missing {expected}")
+    require("-ValidateOnly" not in release_workflow, "tag release workflow must build real Windows artifacts")
+
+    for workflow in (validation_workflow, release_workflow):
+        for forbidden in (
+            "& $packagedApp",
+            "Start-Process $packagedApp",
+            'Start-Process "$packagedApp"',
+            "dotnet publish apps/mh3g-save-converter-windows/MH3GSaveConverter.Windows.csproj",
+        ):
+            require(forbidden not in workflow, "workflows must delegate packaging without launching the WinUI GUI")
 
 
 def verify_local_packaging_script() -> None:
