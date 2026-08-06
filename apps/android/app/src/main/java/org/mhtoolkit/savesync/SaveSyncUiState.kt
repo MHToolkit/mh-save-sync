@@ -7,6 +7,74 @@ enum class SaveSyncUiTone {
     Error,
 }
 
+enum class SaveSyncStatusRailTone {
+    Pending,
+    Current,
+    Complete,
+    Blocked,
+}
+
+data class SaveSyncStatusRailStep(
+    val label: String,
+    val tone: SaveSyncStatusRailTone,
+)
+
+data class SaveSyncStatusRailPresentation(
+    val steps: List<SaveSyncStatusRailStep>,
+) {
+    companion object {
+        fun from(
+            uiPresentation: SaveSyncUiStatePresentation,
+            syncPhase: String,
+            syncError: String,
+        ): SaveSyncStatusRailPresentation {
+            val terminalSuccessPhase = syncPhase.contains("完成") ||
+                syncPhase.contains("已处理") ||
+                syncPhase.contains("已上传") ||
+                syncPhase.contains("已恢复")
+            val hasError = syncError.isNotBlank() ||
+                uiPresentation.tone == SaveSyncUiTone.Error ||
+                syncPhase.contains("失败")
+            val isRunning = syncPhase.contains("正在") ||
+                syncPhase.contains("检查中") ||
+                syncPhase.contains("上传中") ||
+                syncPhase.contains("恢复中")
+            val isComplete = uiPresentation.tone == SaveSyncUiTone.Success &&
+                terminalSuccessPhase &&
+                !uiPresentation.isBlocking &&
+                !isRunning &&
+                !hasError
+
+            val checkTone = when {
+                hasError -> SaveSyncStatusRailTone.Blocked
+                isComplete -> SaveSyncStatusRailTone.Complete
+                isRunning -> SaveSyncStatusRailTone.Current
+                else -> SaveSyncStatusRailTone.Pending
+            }
+            val confirmTone = when {
+                hasError -> SaveSyncStatusRailTone.Blocked
+                isRunning -> SaveSyncStatusRailTone.Pending
+                uiPresentation.isBlocking -> SaveSyncStatusRailTone.Blocked
+                isComplete -> SaveSyncStatusRailTone.Complete
+                else -> SaveSyncStatusRailTone.Current
+            }
+            val writeTone = when {
+                hasError -> SaveSyncStatusRailTone.Blocked
+                isComplete -> SaveSyncStatusRailTone.Complete
+                isRunning -> SaveSyncStatusRailTone.Current
+                else -> SaveSyncStatusRailTone.Pending
+            }
+            return SaveSyncStatusRailPresentation(
+                listOf(
+                    SaveSyncStatusRailStep(SaveSyncDesignTokens.statusRailStepLabels[0], checkTone),
+                    SaveSyncStatusRailStep(SaveSyncDesignTokens.statusRailStepLabels[1], confirmTone),
+                    SaveSyncStatusRailStep(SaveSyncDesignTokens.statusRailStepLabels[2], writeTone),
+                ),
+            )
+        }
+    }
+}
+
 data class SaveSyncUiStatePresentation(
     val tone: SaveSyncUiTone,
     val status: String,

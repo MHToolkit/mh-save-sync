@@ -25,6 +25,38 @@ final class WorkflowStatusPresentationTests: XCTestCase {
         XCTAssertFalse(workflow.canWrite)
     }
 
+    func testStageRailUsesBlockingIconBeforeInputIsSelected() {
+        let workflow = ConversionWorkflow(executable: URL(fileURLWithPath: "/tmp/converter"))
+
+        let inputStep = workflow.stageRailPresentation.first { $0.route == .input }
+
+        XCTAssertEqual(inputStep?.tone, .blocked)
+        XCTAssertEqual(inputStep?.iconName, "exclamationmark.triangle.fill")
+        XCTAssertEqual(inputStep?.accessibilityStateKey, "Status.Blocked")
+    }
+
+    func testStageRailMarksInspectedInputCompleteAndDryRunCurrent() {
+        let workflow = configuredWorkflow()
+
+        let rail = workflow.stageRailPresentation
+        let inputStep = rail.first { $0.route == .input }
+        let dryRunStep = rail.first { $0.route == .dryRun }
+
+        XCTAssertEqual(inputStep?.tone, .complete)
+        XCTAssertEqual(inputStep?.iconName, "checkmark.circle.fill")
+        XCTAssertEqual(dryRunStep?.tone, .current)
+        XCTAssertEqual(dryRunStep?.iconName, "checkmark.shield")
+    }
+
+    func testStageRailLayoutContractRequiresAdaptiveReadableFallbacks() {
+        XCTAssertEqual(
+            WorkflowStageRailLayoutContract.adaptive.fallbackOrder,
+            [.horizontal, .twoColumnGrid, .vertical]
+        )
+        XCTAssertTrue(WorkflowStageRailLayoutContract.adaptive.preservesFullLabels)
+        XCTAssertTrue(WorkflowStageRailLayoutContract.adaptive.preservesAccessibilityStateLabels)
+    }
+
     func testIncompleteOptionalSelectionOverridesAStaleCoreAuthorization() throws {
         let workflow = configuredWorkflow()
         try workflow.authorizeDryRunForTesting()
@@ -36,6 +68,10 @@ final class WorkflowStatusPresentationTests: XCTestCase {
         XCTAssertEqual(workflow.statusPresentation.titleKey, "Status.OptionalDataBlocked")
         XCTAssertTrue(workflow.statusPresentation.isBlocking)
         XCTAssertFalse(workflow.canWrite)
+        let dryRunStep = workflow.stageRailPresentation.first { $0.route == .dryRun }
+        XCTAssertEqual(dryRunStep?.tone, .blocked)
+        XCTAssertEqual(dryRunStep?.iconName, "exclamationmark.triangle.fill")
+        XCTAssertEqual(dryRunStep?.accessibilityStateKey, "Status.Blocked")
     }
 
     private func configuredWorkflow() -> ConversionWorkflow {

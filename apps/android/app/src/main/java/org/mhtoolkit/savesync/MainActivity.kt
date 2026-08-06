@@ -43,7 +43,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
@@ -648,22 +650,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("存档状态") {
-                    Text(
-                        uiPresentation.status,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        uiPresentation.nextAction,
-                        color = when (uiPresentation.tone) {
-                            SaveSyncUiTone.Success -> SaveSyncDesignTokens.success
-                            SaveSyncUiTone.Warning -> SaveSyncDesignTokens.warning
-                            SaveSyncUiTone.Error -> MaterialTheme.colorScheme.error
-                            SaveSyncUiTone.Neutral -> MaterialTheme.colorScheme.primary
-                        },
-                        modifier = Modifier
-                            .animateContentSize(animationSpec = tween(SaveSyncDesignTokens.contentMotionMillis))
-                            .semantics { liveRegion = LiveRegionMode.Polite },
-                    )
+                    StatusRail(uiPresentation, syncPhase, syncError)
                     if (syncPhase.isNotBlank() && syncPhase != uiPresentation.status) {
                         Text(syncPhase, style = MaterialTheme.typography.labelMedium)
                     }
@@ -877,10 +864,11 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun CardSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+        val motionMillis = rememberSaveSyncMotionDurationMillis()
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .animateContentSize(animationSpec = tween(SaveSyncDesignTokens.contentMotionMillis)),
+                .animateContentSize(animationSpec = tween(motionMillis)),
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -891,6 +879,94 @@ class MainActivity : ComponentActivity() {
                 content()
             }
         }
+    }
+
+    @Composable
+    private fun StatusRail(
+        uiPresentation: SaveSyncUiStatePresentation,
+        syncPhase: String,
+        syncError: String,
+    ) {
+        val toneColor = toneColor(uiPresentation.tone)
+        val motionMillis = rememberSaveSyncMotionDurationMillis()
+        val railPresentation = SaveSyncStatusRailPresentation.from(
+            uiPresentation = uiPresentation,
+            syncPhase = syncPhase,
+            syncError = syncError,
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(animationSpec = tween(motionMillis))
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .padding(SaveSyncDesignTokens.statusRailPadding),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    uiPresentation.status,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = toneColor,
+                )
+                Text(
+                    if (uiPresentation.isBlocking) "需要处理" else "可继续",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = toneColor,
+                )
+            }
+            Text(
+                uiPresentation.nextAction,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                railPresentation.steps.forEach { step ->
+                    StatusRailStep(step)
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun StatusRailStep(step: SaveSyncStatusRailStep) {
+        val color = when (step.tone) {
+            SaveSyncStatusRailTone.Blocked -> MaterialTheme.colorScheme.error
+            SaveSyncStatusRailTone.Complete -> SaveSyncDesignTokens.success
+            SaveSyncStatusRailTone.Current -> MaterialTheme.colorScheme.primary
+            SaveSyncStatusRailTone.Pending -> MaterialTheme.colorScheme.outline
+        }
+        val state = when (step.tone) {
+            SaveSyncStatusRailTone.Blocked -> "需要处理"
+            SaveSyncStatusRailTone.Complete -> "已完成"
+            SaveSyncStatusRailTone.Current -> "进行中"
+            SaveSyncStatusRailTone.Pending -> "未完成"
+        }
+        Text(
+            text = when (step.tone) {
+                SaveSyncStatusRailTone.Blocked -> "⚠ ${step.label}"
+                SaveSyncStatusRailTone.Complete -> "✓ ${step.label}"
+                SaveSyncStatusRailTone.Current -> "● ${step.label}"
+                SaveSyncStatusRailTone.Pending -> "○ ${step.label}"
+            },
+            color = color,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "${step.label}，$state" },
+        )
+    }
+
+    @Composable
+    private fun toneColor(tone: SaveSyncUiTone): Color = when (tone) {
+        SaveSyncUiTone.Success -> SaveSyncDesignTokens.success
+        SaveSyncUiTone.Warning -> SaveSyncDesignTokens.warning
+        SaveSyncUiTone.Error -> MaterialTheme.colorScheme.error
+        SaveSyncUiTone.Neutral -> MaterialTheme.colorScheme.primary
     }
 
     @Composable
