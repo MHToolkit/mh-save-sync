@@ -101,6 +101,12 @@ class ActiveSessionService : Service() {
             .edit()
             .putBoolean(SyncScheduler.SESSION_ACTIVE, false)
             .putString(SyncScheduler.LAST_SYNC_REASON, reason)
+            .putString(SyncScheduler.LAST_SYNC_PHASE, SyncMessages.queuedPhase(reason))
+            .putString(
+                SyncScheduler.LAST_SYNC_WORKFLOW_STAGE,
+                SaveSyncWorkflowStage.forTransition(reason, SyncMessages.queuedPhase(reason), "").persistedValue,
+            )
+            .putString(SyncScheduler.LAST_SYNC_ERROR, "")
             .commit()
         SyncScheduler.markDirty(this)
         SyncScheduler.enqueueCapture(this, "session-exit")

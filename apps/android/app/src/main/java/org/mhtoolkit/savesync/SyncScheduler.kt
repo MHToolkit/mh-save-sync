@@ -38,6 +38,7 @@ object SyncScheduler {
     const val LAST_SYNC_TARGET = "last_sync_target"
     const val LAST_SYNC_REASON = "last_sync_reason"
     const val LAST_SYNC_PHASE = "last_sync_phase"
+    const val LAST_SYNC_WORKFLOW_STAGE = "last_sync_workflow_stage"
     const val LAST_SYNC_NEXT_ACTION = "last_sync_next_action"
     const val LAST_SYNC_ERROR = "last_sync_error"
     const val LAST_SYNC_UNIX_MS = "last_sync_unix_ms"
@@ -80,6 +81,7 @@ object SyncScheduler {
                 .putString(LAST_SYNC_TARGET, "MH3G / Android Nemessix")
                 .putString(LAST_SYNC_SUMMARY, defaultLastSyncSummary)
                 .putString(LAST_SYNC_PHASE, defaultPhase)
+                .putString(LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Idle.persistedValue)
                 .putString(LAST_SYNC_NEXT_ACTION, defaultNextAction)
                 .putString(LAST_SYNC_ERROR, "")
                 .putString(LAUNCH_GATE_SUMMARY, defaultLaunchGateSummary)
@@ -130,6 +132,14 @@ object SyncScheduler {
                 .putString(LAUNCH_GATE_SUMMARY, cleanLaunchGateSummary)
                 .putString(LAST_SYNC_NEXT_ACTION, cleanNextAction)
                 .putString(LAST_SYNC_REASON, cleanLastReason)
+                .putString(
+                    LAST_SYNC_WORKFLOW_STAGE,
+                    SaveSyncWorkflowStage.forTransition(
+                        cleanLastReason,
+                        preferences.getString(LAST_SYNC_PHASE, null).orEmpty(),
+                        preferences.getString(LAST_SYNC_ERROR, null).orEmpty(),
+                    ).persistedValue,
+                )
                 .putString(LAUNCH_GATE_REASON, cleanLaunchReason)
                 .apply()
         }

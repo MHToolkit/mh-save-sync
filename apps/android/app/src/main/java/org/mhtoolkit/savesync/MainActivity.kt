@@ -155,6 +155,9 @@ class MainActivity : ComponentActivity() {
         var syncPhase by remember {
             mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_PHASE, "暂无后台任务").orEmpty())
         }
+        var syncReason by remember {
+            mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_REASON, null).orEmpty())
+        }
         var nextAction by remember {
             mutableStateOf(
                 preferences.getString(
@@ -165,6 +168,9 @@ class MainActivity : ComponentActivity() {
         }
         var syncError by remember {
             mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty())
+        }
+        var syncWorkflowStageKey by remember {
+            mutableStateOf(preferences.getString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, null))
         }
         var pendingUploads by remember {
             mutableStateOf(preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0))
@@ -250,11 +256,13 @@ class MainActivity : ComponentActivity() {
                 "还没有同步记录。先填写服务器地址并授权 Android Nemessix 存档目录。",
             ).orEmpty()
             syncPhase = preferences.getString(SyncScheduler.LAST_SYNC_PHASE, "暂无后台任务").orEmpty()
+            syncReason = preferences.getString(SyncScheduler.LAST_SYNC_REASON, null).orEmpty()
             nextAction = preferences.getString(
                 SyncScheduler.LAST_SYNC_NEXT_ACTION,
                 "先完成设置，再点“检查并打开 Nemessix”。",
             ).orEmpty()
             syncError = preferences.getString(SyncScheduler.LAST_SYNC_ERROR, "").orEmpty()
+            syncWorkflowStageKey = preferences.getString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, null)
             pendingUploads = preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
             pendingEndpoints = preferences.getInt(SyncScheduler.PENDING_UPLOAD_ENDPOINT_COUNT, 0)
             launchGateReason = preferences.getString(
@@ -272,7 +280,9 @@ class MainActivity : ComponentActivity() {
                         SyncScheduler.WIFI_ONLY,
                         SyncScheduler.SERVER_ENDPOINT,
                         SyncScheduler.LAST_SYNC_SUMMARY,
+                        SyncScheduler.LAST_SYNC_REASON,
                         SyncScheduler.LAST_SYNC_PHASE,
+                        SyncScheduler.LAST_SYNC_WORKFLOW_STAGE,
                         SyncScheduler.LAST_SYNC_NEXT_ACTION,
                         SyncScheduler.LAST_SYNC_ERROR,
                         SyncScheduler.PENDING_UPLOAD_COUNT,
@@ -325,15 +335,19 @@ class MainActivity : ComponentActivity() {
             phase: String,
             action: String,
             error: String = "",
+            workflowStage: SaveSyncWorkflowStage = SaveSyncWorkflowStage.forTransition(reason, phase, error),
         ) {
             lastSummary = summary
             syncPhase = phase
+            syncReason = reason
             nextAction = action
             syncError = error
+            syncWorkflowStageKey = workflowStage.persistedValue
             preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, syncWorkflowStageKey)
                 .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
                 .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                 .apply()
@@ -467,10 +481,20 @@ class MainActivity : ComponentActivity() {
 
         fun runPrelaunchCheck() {
             launchGate = "正在检查 ${SyncMessages.serverLabel(serverEndpoint)} 是否可用，并查看 MH3G 是否有云端版本；不会修改本地存档。"
+            syncPhase = "正在检查云端…"
+            syncReason = "prelaunch-checking"
+            syncError = ""
+            syncWorkflowStageKey = SaveSyncWorkflowStage.Check.persistedValue
             preferences.edit()
                 .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
                 .putString(SyncScheduler.LAUNCH_GATE_REASON, "prelaunch-checking")
                 .putString(SyncScheduler.LAST_SYNC_REASON, "prelaunch-checking")
+                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                .putString(
+                    SyncScheduler.LAST_SYNC_WORKFLOW_STAGE,
+                    syncWorkflowStageKey,
+                )
+                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                 .apply()
             scope.launch {
                 val result = SyncServerProbe.checkPrelaunch(
@@ -481,12 +505,20 @@ class MainActivity : ComponentActivity() {
                 )
                 launchGateReason = result.reason
                 launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
+                val transition = SaveSyncWorkflowStage.prelaunchTransition(result.state)
                 lastSummary = result.summary
+                syncReason = result.reason
+                syncPhase = transition.phase
+                syncError = transition.error
+                syncWorkflowStageKey = transition.stage.persistedValue
                 preferences.edit()
                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
                     .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
                     .putString(SyncScheduler.LAST_SYNC_REASON, result.reason)
+                    .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                    .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, syncWorkflowStageKey)
+                    .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                     .putString(SyncScheduler.REMOTE_VERSION_LABEL, result.remoteVersionLabel.orEmpty())
                     .apply()
             }
@@ -508,18 +540,19 @@ class MainActivity : ComponentActivity() {
                 lastSummary = SyncMessages.sessionStartSummary()
             }
             val oldSessionActive = sessionActive
+            val reason = if (!oldSessionActive) "session-start" else "session-exit"
             syncPhase = if (oldSessionActive) SyncMessages.queuedPhase("session-exit") else "游戏运行保护中"
+            syncReason = reason
             nextAction = if (oldSessionActive) SyncMessages.queuedNextAction("session-exit", false) else "游玩期间不会把云端覆盖到本地；退出后再对账上传。"
             syncError = ""
+            syncWorkflowStageKey = SaveSyncWorkflowStage.forTransition(reason, syncPhase, syncError).persistedValue
             sessionActive = !sessionActive
             preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
-                .putString(
-                    SyncScheduler.LAST_SYNC_REASON,
-                    if (sessionActive) "session-start" else "session-exit",
-                )
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putBoolean(SyncScheduler.SESSION_ACTIVE, sessionActive)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, syncWorkflowStageKey)
                 .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, nextAction)
                 .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                 .apply()
@@ -650,7 +683,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 CardSection("存档状态") {
-                    StatusRail(uiPresentation, syncPhase, syncError)
+                    StatusRail(uiPresentation, syncPhase, syncError, syncReason, syncWorkflowStageKey)
                     if (syncPhase.isNotBlank() && syncPhase != uiPresentation.status) {
                         Text(syncPhase, style = MaterialTheme.typography.labelMedium)
                     }
@@ -729,6 +762,18 @@ class MainActivity : ComponentActivity() {
                         enabled = authorized && gameEnabled,
                         onClick = {
                             launchGate = "正在检查云端…"
+                            syncPhase = "正在检查云端…"
+                            syncReason = "prelaunch-checking"
+                            syncError = ""
+                            syncWorkflowStageKey = SaveSyncWorkflowStage.Check.persistedValue
+                            preferences.edit()
+                                .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
+                                .putString(SyncScheduler.LAUNCH_GATE_REASON, "prelaunch-checking")
+                                .putString(SyncScheduler.LAST_SYNC_REASON, syncReason)
+                                .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, syncWorkflowStageKey)
+                                .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
+                                .apply()
                             scope.launch {
                                 val result = SyncServerProbe.checkPrelaunch(
                                     context = this@MainActivity,
@@ -738,15 +783,24 @@ class MainActivity : ComponentActivity() {
                                 )
                                 launchGateReason = result.reason
                                 launchGate = DashboardContentPolicy.launchStatus(launchGateReason)
+                                val transition = SaveSyncWorkflowStage.prelaunchTransition(result.state)
                                 lastSummary = if (PrelaunchLaunchPolicy.launchAutomatically(result.state)) {
                                     launchNemessixOrExplain()
                                 } else {
                                     result.summary
                                 }
+                                syncReason = result.reason
+                                syncPhase = transition.phase
+                                syncError = transition.error
+                                syncWorkflowStageKey = transition.stage.persistedValue
                                 preferences.edit()
                                     .putString(SyncScheduler.LAUNCH_GATE_SUMMARY, launchGate)
                                     .putString(SyncScheduler.LAUNCH_GATE_REASON, launchGateReason)
                                     .putString(SyncScheduler.LAST_SYNC_SUMMARY, lastSummary)
+                                    .putString(SyncScheduler.LAST_SYNC_REASON, syncReason)
+                                    .putString(SyncScheduler.LAST_SYNC_PHASE, syncPhase)
+                                    .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, syncWorkflowStageKey)
+                                    .putString(SyncScheduler.LAST_SYNC_ERROR, syncError)
                                     .apply()
                             }
                         },
@@ -886,6 +940,8 @@ class MainActivity : ComponentActivity() {
         uiPresentation: SaveSyncUiStatePresentation,
         syncPhase: String,
         syncError: String,
+        syncReason: String,
+        workflowStageKey: String?,
     ) {
         val toneColor = toneColor(uiPresentation.tone)
         val motionMillis = rememberSaveSyncMotionDurationMillis()
@@ -893,6 +949,13 @@ class MainActivity : ComponentActivity() {
             uiPresentation = uiPresentation,
             syncPhase = syncPhase,
             syncError = syncError,
+            workflowStage = SaveSyncWorkflowStage.resolve(
+                persistedValue = workflowStageKey,
+                reason = syncReason,
+                syncPhase = syncPhase,
+                syncError = syncError,
+                uiPresentation = uiPresentation,
+            ),
         )
         Column(
             modifier = Modifier

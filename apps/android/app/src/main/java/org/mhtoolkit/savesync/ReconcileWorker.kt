@@ -206,7 +206,9 @@ open class CaptureWorker(
             )
         }.getOrElse {
             preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, "本地队列不可用")
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Blocked.persistedValue)
                 .putString(SyncScheduler.LAST_SYNC_ERROR, "capture_claim_failed")
                 .apply()
             return Result.retry()
@@ -228,6 +230,7 @@ open class CaptureWorker(
                 .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, queued.pendingCount)
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, "已保存到本机队列")
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Write.persistedValue)
                 .putString(
                     SyncScheduler.LAST_SYNC_SUMMARY,
                     "稳定快照已端到端加密并写入手机持久队列，等待符合网络和电量条件后上传。",
@@ -249,7 +252,9 @@ open class CaptureWorker(
         val disposition = CaptureFailurePolicy.decide(capture.localError, leaseReleased)
         if (disposition == CaptureFailureDisposition.RETRY_QUEUE_UNKNOWN) {
             preferences.edit()
+                .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, "本地捕获队列暂不可用")
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Blocked.persistedValue)
                 .putString(SyncScheduler.LAST_SYNC_SUMMARY, "无法确认捕获租约已释放；不会等待十分钟后静默重复快照。")
                 .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "后台会重试；不要清除应用数据。")
                 .putString(SyncScheduler.LAST_SYNC_ERROR, "capture_lease_release_failed")
@@ -264,6 +269,7 @@ open class CaptureWorker(
             preferences.edit()
                 .putString(SyncScheduler.LAST_SYNC_REASON, reason)
                 .putString(SyncScheduler.LAST_SYNC_PHASE, if (revoked) "需要重新授权" else "本地快照未创建")
+                .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Blocked.persistedValue)
                 .putString(
                     SyncScheduler.LAST_SYNC_SUMMARY,
                     if (revoked) "无法读取新的存档候选；已有加密队列未删除。" else
@@ -293,6 +299,7 @@ open class CaptureWorker(
         preferences.edit()
             .putString(SyncScheduler.LAST_SYNC_REASON, reason)
             .putString(SyncScheduler.LAST_SYNC_PHASE, "需要重新授权")
+            .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, SaveSyncWorkflowStage.Blocked.persistedValue)
             .putString(SyncScheduler.LAST_SYNC_SUMMARY, "Android 已撤销存档目录权限；没有读取或上传新候选。")
             .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, "请重新选择 Android Nemessix 存档目录。")
             .putString(SyncScheduler.LAST_SYNC_ERROR, "saf_permission_required")
@@ -316,11 +323,13 @@ class DrainWorker(
             preferences.getInt(SyncScheduler.PENDING_UPLOAD_COUNT, 0)
         }
         val status = DrainStatusPolicy.decide(result)
+        val workflowStage = SaveSyncWorkflowStage.forTransition("constrained-drain", status.phase, status.error)
         preferences.edit()
             .putLong(SyncScheduler.LAST_SYNC_UNIX_MS, System.currentTimeMillis())
             .putString(SyncScheduler.LAST_SYNC_REASON, "constrained-drain")
             .putString(SyncScheduler.LAST_SYNC_SUMMARY, status.summary)
             .putString(SyncScheduler.LAST_SYNC_PHASE, status.phase)
+            .putString(SyncScheduler.LAST_SYNC_WORKFLOW_STAGE, workflowStage.persistedValue)
             .putString(SyncScheduler.LAST_SYNC_NEXT_ACTION, status.nextAction)
             .putString(SyncScheduler.LAST_SYNC_ERROR, status.error)
             .putInt(SyncScheduler.PENDING_UPLOAD_COUNT, displayedPendingCount)
