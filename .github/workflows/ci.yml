@@ -42,6 +42,8 @@ jobs:
         timeout-minutes: 8
         continue-on-error: true
       - run: cargo fmt --all -- --check
+      - name: Verify deterministic release SBOM contract
+        run: python3 -m unittest tests/test_release_sbom.py
       - name: Audit dependencies, enforce deny policy and generate SBOM
         env:
           MH_SAVE_SYNC_INSTALL_SUPPLY_CHAIN_TOOLS: "1"
