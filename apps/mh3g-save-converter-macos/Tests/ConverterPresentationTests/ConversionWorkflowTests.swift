@@ -79,6 +79,26 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-preview-sha256", fixtureRepairPreviewSHA256))
     }
 
+    func testRepairNoChangesCompletesWithoutInventingWriteManifests() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairDryRunResult(confidence: "selected", candidates: ["0.0.5"], modified: false)),
+            .success(repairNoChangesResult()),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        try await workflow.writeCore()
+
+        XCTAssertEqual(workflow.state, .success)
+        XCTAssertEqual(workflow.latestReport?.status, "no-changes")
+        XCTAssertTrue(workflow.coreWriteCompleted)
+        XCTAssertNil(workflow.repairDryRunFingerprint)
+    }
+
     func testCompatibilityManifestUsesRollbackRepair() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(rolledBackResult(operation: ConverterOperation.rollbackRepair.rawValue)),
@@ -99,7 +119,7 @@ final class ConversionWorkflowTests: XCTestCase {
     func testNewExportAuthorizesAnAbsentTargetAndWritesWithAbsencePrecondition() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(newExportDryRunResult()),
-            .success(writtenResult(operation: ConverterOperation.convert.rawValue)),
+            .success(newExportWrittenResult()),
         ])
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.configure(input: fixtureInput)
@@ -249,7 +269,7 @@ final class ConversionWorkflowTests: XCTestCase {
         } catch {
             XCTAssertEqual(
                 error as? ConversionWorkflowError,
-                .invalidReport("Dry Run requires source and target_before SHA-256")
+                .invalidReport("Dry Run requires valid source and output SHA-256")
             )
         }
 
@@ -431,7 +451,7 @@ final class ConversionWorkflowTests: XCTestCase {
         workflow.setComponents(
             ComponentSelection(
                 cecSourceDirectory: URL(fileURLWithPath: "/tmp/CEC/00048100"),
-                cecTarget: URL(fileURLWithPath: "/tmp/cec"),
+                cecTarget: URL(fileURLWithPath: "/tmp/cemu/cec"),
                 acknowledgeExperimentalCEC: false
             )
         )
@@ -444,7 +464,7 @@ final class ConversionWorkflowTests: XCTestCase {
         workflow.setComponents(
             ComponentSelection(
                 cecSourceDirectory: URL(fileURLWithPath: "/tmp/CEC/00048100"),
-                cecTarget: URL(fileURLWithPath: "/tmp/cec"),
+                cecTarget: URL(fileURLWithPath: "/tmp/cemu/cec"),
                 acknowledgeExperimentalCEC: true
             )
         )
@@ -684,6 +704,362 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(workflow.state, .failure)
     }
 
+    func testCoreWrittenStatusWithoutTransactionEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(dryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.convert.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        do {
+            try await workflow.writeCore()
+            XCTFail("written status without output, backup, manifest, and hashes must fail closed")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canWrite)
+        XCTAssertFalse(workflow.coreWriteCompleted)
+    }
+
+    func testCoreWrittenOutputHashMustMatchTheAuthorizedDryRun() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(dryRunResult()),
+            .success(coreWrittenResult(outputSHA256: validSHA("c"))),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        do {
+            try await workflow.writeCore()
+            XCTFail("a write report for different bytes must not consume the authorized Dry Run")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canWrite)
+        XCTAssertFalse(workflow.coreWriteCompleted)
+    }
+
+    func testEvidenceHashesRejectUppercaseShortAndEmptyValues() {
+        XCTAssertTrue(ConverterEvidence.isValidSHA256(validSHA("a")))
+        XCTAssertFalse(ConverterEvidence.isValidSHA256(validSHA("a").uppercased()))
+        XCTAssertFalse(ConverterEvidence.isValidSHA256("abc123"))
+        XCTAssertFalse(ConverterEvidence.isValidSHA256(""))
+        XCTAssertFalse(ConverterEvidence.isValidSHA256(nil))
+    }
+
+    func testSystemWrittenStatusWithoutTransactionEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(systemDryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.convertSystem.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(
+            ComponentSelection(
+                includeSystem: true,
+                systemSource: fixtureSystemSource,
+                systemTarget: fixtureSystemTarget
+            )
+        )
+
+        try await workflow.runSystemDryRun()
+        do {
+            try await workflow.writeSystem()
+            XCTFail("system written status without transaction evidence must fail closed")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canWriteSystem)
+        XCTAssertFalse(workflow.systemWriteCompleted)
+    }
+
+    func testSystemEvidenceFailureRevokesOnlySystemAuthorization() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(dryRunResult()),
+            .success(systemDryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.convertSystem.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.setComponents(
+            ComponentSelection(
+                includeSystem: true,
+                systemSource: fixtureSystemSource,
+                systemTarget: fixtureSystemTarget
+            )
+        )
+
+        try await workflow.runCoreDryRun()
+        try await workflow.runSystemDryRun()
+        do {
+            try await workflow.writeSystem()
+            XCTFail("invalid system evidence must fail")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertTrue(workflow.canWrite)
+        XCTAssertFalse(workflow.canWriteSystem)
+    }
+
+    func testExtrasStageWrittenStatusWithoutComponentEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasStageDryRunResult()),
+            .success(extrasStageDryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.convertExtras.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(fixtureExtrasSelection)
+
+        try await workflow.runExtrasStageDryRun()
+        do {
+            try await workflow.stageExtras()
+            XCTFail("staging must require exact output/component evidence")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canStageExtras)
+    }
+
+    func testExtrasInstallWrittenStatusWithoutManifestAndSetEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasInstallDryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.installExtras.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(fixtureExtrasSelection)
+
+        try await workflow.runExtrasInstallDryRun()
+        do {
+            try await workflow.installExtraGroups()
+            XCTFail("ExtData install must require manifest, set hashes, and entry evidence")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canInstallExtras)
+        XCTAssertFalse(workflow.extrasInstallCompleted)
+    }
+
+    func testExtrasInstallRejectsDuplicateComponentEvidence() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasInstallDryRunResult()),
+            .success(extrasInstallWrittenResult(components: ["card1", "card2", "card3", "card1"])),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(fixtureExtrasSelection)
+
+        try await workflow.runExtrasInstallDryRun()
+        do {
+            try await workflow.installExtraGroups()
+            XCTFail("duplicate group/component evidence must fail closed")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertFalse(workflow.canInstallExtras)
+        XCTAssertFalse(workflow.extrasInstallCompleted)
+    }
+
+    func testExtrasInstallDryRunDoesNotDependOnTargetDirectoryExisting() async throws {
+        let targetDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mh3g-nonexistent-\(UUID().uuidString)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetDirectory.path))
+
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasInstallDryRunResult(targetDirectory: targetDirectory)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(
+            ComponentSelection(
+                includeGuildCards: true,
+                extraSourceDirectory: URL(fileURLWithPath: "/tmp/extdata/user"),
+                extraStagingDirectory: URL(fileURLWithPath: "/tmp/mh3g-staging"),
+                extraTargetDirectory: targetDirectory
+            )
+        )
+
+        try await workflow.runExtrasInstallDryRun()
+
+        XCTAssertTrue(workflow.canInstallExtras)
+    }
+
+    func testCECWrittenStatusWithoutManifestAndHashEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(cecDryRunResult()),
+            .success(cecDryRunResult()),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.convertCEC.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(fixtureCECSelection)
+
+        try await workflow.runCECDryRun()
+        do {
+            try await workflow.writeCEC()
+            XCTFail("CEC write must require manifest and exact before/after hash evidence")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canWriteCEC)
+    }
+
+    func testCECWrittenTargetAfterMustMatchTheAuthorizedPreview() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(cecDryRunResult()),
+            .success(cecDryRunResult()),
+            .success(cecWrittenResult(targetAfterSHA256: validSHA("c"))),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(fixtureCECSelection)
+
+        try await workflow.runCECDryRun()
+        do {
+            try await workflow.writeCEC()
+            XCTFail("CEC target-after hash must match the authorized preview")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertFalse(workflow.canWriteCEC)
+        XCTAssertEqual(workflow.state, .failure)
+    }
+
+    func testRepairWrittenStatusWithoutCoordinatorEvidenceFailsClosed() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairDryRunResult(confidence: "selected", candidates: ["0.0.5"])),
+            .success(statusOnlyWrittenResult(operation: ConverterOperation.repairConverted.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        do {
+            try await workflow.writeCore()
+            XCTFail("repair write must require compatibility manifest and exact set hashes")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+        XCTAssertFalse(workflow.canWrite)
+        XCTAssertFalse(workflow.coreWriteCompleted)
+    }
+
+    func testRepairWrittenComponentEvidenceMustMatchTheDryRun() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairDryRunResult(confidence: "selected", candidates: ["0.0.5"])),
+            .success(
+                repairWrittenResult(
+                    manifest: "/tmp/.mh3g-compatibility-repair-test.json",
+                    mergedSHA256: validSHA("7")
+                )
+            ),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.configure(input: fixtureInput)
+        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+
+        try await workflow.runCoreDryRun()
+        do {
+            try await workflow.writeCore()
+            XCTFail("repair component evidence must match the authorized Dry Run")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertFalse(workflow.canWrite)
+        XCTAssertFalse(workflow.coreWriteCompleted)
+    }
+
+    func testRollbackStatusWithoutExactManifestEvidenceFailsClosed() async throws {
+        let manifest = URL(fileURLWithPath: "/tmp/core-rollback.json")
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(statusOnlyRolledBackResult(operation: ConverterOperation.rollback.rawValue)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+
+        do {
+            try await workflow.rollback(manifest: manifest)
+            XCTFail("rollback status without the exact manifest must fail closed")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+    }
+
+    func testRollbackWrongManifestEvidenceFailsClosed() async throws {
+        let expected = URL(fileURLWithPath: "/tmp/core-rollback.json")
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(
+                rollbackResult(
+                    operation: .rollback,
+                    manifest: URL(fileURLWithPath: "/tmp/other-rollback.json")
+                )
+            ),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+
+        do {
+            try await workflow.rollback(manifest: expected)
+            XCTFail("rollback must echo the exact selected manifest")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertEqual(workflow.state, .failure)
+    }
+
+    func testCoreAndCECRollbackAcceptOnlyTheExactEchoedManifest() async throws {
+        let coreManifest = URL(fileURLWithPath: "/tmp/core-rollback.json")
+        let cecManifest = URL(fileURLWithPath: "/tmp/cec-rollback.json")
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(rollbackResult(operation: .rollback, manifest: coreManifest)),
+            .success(rollbackResult(operation: .rollbackCEC, manifest: cecManifest)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+
+        try await workflow.rollback(manifest: coreManifest)
+        XCTAssertEqual(workflow.state, .success)
+        try await workflow.rollback(manifest: cecManifest, cec: true)
+        XCTAssertEqual(workflow.state, .success)
+    }
+
+    func testExtrasRollbackRequiresGroupAndEntryEvidence() async throws {
+        let manifest = URL(fileURLWithPath: "/tmp/extras-rollback.json")
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasRollbackResult(manifest: manifest)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+
+        try await workflow.rollback(manifest: manifest, extraGroup: true)
+
+        XCTAssertEqual(workflow.state, .success)
+        XCTAssertEqual(workflow.latestReport?.groups, [.guildCards])
+        XCTAssertEqual(workflow.latestReport?.entries?.count, 4)
+    }
+
     func testWriteRejectsSuccessfulProcessWithNonWrittenStatus() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(dryRunResult()),
@@ -732,11 +1108,22 @@ private let fixtureSystemSource = URL(fileURLWithPath: "/tmp/3ds/system")
 private let fixtureSystemTarget = URL(fileURLWithPath: "/tmp/cemu/system")
 private let fixtureSystemSourceSHA256 = "c".repeated(64)
 private let fixtureSystemTargetSHA256 = "d".repeated(64)
-private let fixtureCECSourceRecordSetSHA256 = "f".repeated(64)
-private let fixtureCECTargetSHA256 = "g".repeated(64)
-private let fixtureRepairSourceSetSHA256 = "h".repeated(64)
-private let fixtureRepairCurrentSetSHA256 = "i".repeated(64)
-private let fixtureRepairPreviewSHA256 = "j".repeated(64)
+private let fixtureCECSourceRecordSetSHA256 = validSHA("e")
+private let fixtureCECTargetSHA256 = validSHA("f")
+private let fixtureRepairSourceSetSHA256 = validSHA("1")
+private let fixtureRepairCurrentSetSHA256 = validSHA("2")
+private let fixtureRepairPreviewSHA256 = validSHA("3")
+private let fixtureExtrasSelection = ComponentSelection(
+    includeGuildCards: true,
+    extraSourceDirectory: URL(fileURLWithPath: "/tmp/extdata/user"),
+    extraStagingDirectory: URL(fileURLWithPath: "/tmp/mh3g-staging"),
+    extraTargetDirectory: URL(fileURLWithPath: "/tmp/cemu")
+)
+private let fixtureCECSelection = ComponentSelection(
+    cecSourceDirectory: URL(fileURLWithPath: "/tmp/CEC/00048100"),
+    cecTarget: URL(fileURLWithPath: "/tmp/cemu/cec"),
+    acknowledgeExperimentalCEC: true
+)
 
 private func dryRunResult() -> ConverterCommandResult {
     let json = """
@@ -752,6 +1139,13 @@ private func newExportDryRunResult() -> ConverterCommandResult {
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
+private func newExportWrittenResult() -> ConverterCommandResult {
+    let json = """
+    {"status":"written","hashes":{"source":"\(fixtureSourceInspection.sha256)","output":"\(validSHA("d"))"},"output":"\(fixtureInput.target.path)","backup":null,"manifest":"/tmp/cemu/.user2.manifest.json"}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
 private func systemDryRunResult() -> ConverterCommandResult {
     let json = """
     {"operation":"convert-system","status":"dry-run","hashes":{"source":"\(fixtureSystemSourceSHA256)","target_before":"\(fixtureSystemTargetSHA256)","output":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}}
@@ -760,47 +1154,156 @@ private func systemDryRunResult() -> ConverterCommandResult {
 }
 
 private func writtenResult(operation: String) -> ConverterCommandResult {
-    let json = "{\"operation\":\"\(operation)\",\"status\":\"written\"}"
+    let json: String
+    switch operation {
+    case ConverterOperation.convert.rawValue:
+        json = """
+        {"status":"written","hashes":{"source":"\(fixtureSourceInspection.sha256)","target_before":"\(fixtureTargetInspection.sha256)","output":"\(validSHA("d"))"},"output":"\(fixtureInput.target.path)","backup":"/tmp/cemu/.user2.backup","manifest":"/tmp/cemu/.user2.manifest.json"}
+        """
+    case ConverterOperation.convertSystem.rawValue:
+        json = """
+        {"status":"written","hashes":{"source":"\(fixtureSystemSourceSHA256)","target_before":"\(fixtureSystemTargetSHA256)","output":"\(validSHA("e"))"},"output":"\(fixtureSystemTarget.path)","backup":"/tmp/cemu/.system.backup","manifest":"/tmp/cemu/.system.manifest.json"}
+        """
+    case ConverterOperation.convertExtras.rawValue:
+        json = """
+        {"status":"written","source_dir":"/tmp/extdata/user","output_dir":"/tmp/mh3g-staging","components":[{"component":"card1","source_sha256":"\(validSHA("4"))","output_sha256":"\(validSHA("5"))","output":"/tmp/mh3g-staging/card1","size":64}]}
+        """
+    case ConverterOperation.installExtras.rawValue:
+        return extrasInstallWrittenResult()
+    case ConverterOperation.convertCEC.rawValue:
+        return cecWrittenResult()
+    default:
+        preconditionFailure("missing written fixture for \(operation)")
+    }
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
-private func repairDryRunResult(confidence: String, candidates: [String]) -> ConverterCommandResult {
-    let candidateJSON = candidates.map { "\"\($0)\"" }.joined(separator: ",")
+private func coreWrittenResult(outputSHA256: String) -> ConverterCommandResult {
     let json = """
-    {"operation":"repair-converted","status":"dry-run","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"components":[{"component":"user2","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]}}]}
+    {"status":"written","hashes":{"source":"\(fixtureSourceInspection.sha256)","target_before":"\(fixtureTargetInspection.sha256)","output":"\(outputSHA256)"},"output":"\(fixtureInput.target.path)","backup":"/tmp/cemu/.user2.backup","manifest":"/tmp/cemu/.user2.manifest.json"}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
-private func repairWrittenResult(manifest: String) -> ConverterCommandResult {
+private func statusOnlyWrittenResult(operation: String) -> ConverterCommandResult {
+    let json = "{\"operation\":\"\(operation)\",\"status\":\"written\"}"
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairDryRunResult(
+    confidence: String,
+    candidates: [String],
+    modified: Bool = true
+) -> ConverterCommandResult {
+    let candidateJSON = candidates.map { "\"\($0)\"" }.joined(separator: ",")
+    let mergedSHA256 = modified ? validSHA("6") : validSHA("5")
     let json = """
-    {"operation":"repair-converted","status":"written","compatibility_manifest":"\(manifest)"}
+    {"operation":"repair-converted","status":"dry-run","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":\(modified),"detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}]}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairWrittenResult(
+    manifest: String,
+    mergedSHA256: String = validSHA("6")
+) -> ConverterCommandResult {
+    let json = """
+    {"operation":"repair-converted","status":"written","source":"\(fixtureInput.source.path)","current":"\(fixtureInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":true,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}],"manifests":["/tmp/.mh3g-user2-repair.json"],"compatibility_manifest":"\(manifest)"}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairNoChangesResult() -> ConverterCommandResult {
+    let json = """
+    {"operation":"repair-converted","status":"no-changes","source":"\(fixtureInput.source.path)","current":"\(fixtureInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":false,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(validSHA("5"))"}}],"manifests":[],"compatibility_manifest":null}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
 private func rolledBackResult(operation: String) -> ConverterCommandResult {
+    let manifest = operation == ConverterOperation.rollbackRepair.rawValue
+        ? "/tmp/.mh3g-compatibility-repair-test.json"
+        : "/tmp/rollback.json"
+    let json = "{\"operation\":\"\(operation)\",\"status\":\"rolled-back\",\"manifest\":\"\(manifest)\"}"
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func statusOnlyRolledBackResult(operation: String) -> ConverterCommandResult {
     let json = "{\"operation\":\"\(operation)\",\"status\":\"rolled-back\"}"
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
+private func rollbackResult(operation: ConverterOperation, manifest: URL) -> ConverterCommandResult {
+    let operationField = operation == .rollbackCEC ? "" : "\"operation\":\"\(operation.rawValue)\","
+    let json = "{\(operationField)\"status\":\"rolled-back\",\"manifest\":\"\(manifest.path)\"}"
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func extrasRollbackResult(manifest: URL) -> ConverterCommandResult {
+    let entries = ["card1", "card2", "card3", "cardbox"].map { component in
+        """
+        {"group":"guild-cards","component":"\(component)","target":"/tmp/cemu/\(component)","temporary":"/tmp/cemu/.\(component).tmp","before_sha256":"\(validSHA("8"))","after_sha256":"\(validSHA("9"))","backup":"/tmp/cemu/.\(component).backup","target_previously_existed":true}
+        """
+    }.joined(separator: ",")
+    let json = """
+    {"operation":"rollback-extras","status":"rolled-back","groups":["guild-cards"],"entries":[\(entries)],"manifest":"\(manifest.path)"}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
 private func cecDryRunResult() -> ConverterCommandResult {
-    let json = "{\"operation\":\"convert-cec\",\"status\":\"dry-run\",\"source_record_sha256\":[\"\("e".repeated(64))\"],\"source_record_set_sha256\":\"\(fixtureCECSourceRecordSetSHA256)\",\"target_sha256_before\":\"\(fixtureCECTargetSHA256)\"}"
+    let json = "{\"operation\":\"convert-cec\",\"status\":\"dry-run\",\"source_dir\":\"/tmp/CEC/00048100\",\"target\":\"/tmp/cemu/cec\",\"source_record_sha256\":[\"\(validSHA("a"))\"],\"source_record_set_sha256\":\"\(fixtureCECSourceRecordSetSHA256)\",\"target_sha256_before\":\"\(fixtureCECTargetSHA256)\",\"target_sha256_after\":\"\(validSHA("b"))\"}"
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func cecWrittenResult(targetAfterSHA256: String = validSHA("b")) -> ConverterCommandResult {
+    let json = """
+    {"status":"written","source_dir":"/tmp/CEC/00048100","target":"/tmp/cemu/cec","source_record_sha256":["\(validSHA("a"))"],"source_record_set_sha256":"\(fixtureCECSourceRecordSetSHA256)","target_sha256_before":"\(fixtureCECTargetSHA256)","target_sha256_after":"\(targetAfterSHA256)","manifest":"/tmp/cemu/.cec.manifest.json"}
+    """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
 private func extrasStageDryRunResult() -> ConverterCommandResult {
     let json = """
-    {"status":"dry-run","components":[{"component":"card1","source_sha256":"\("1".repeated(64))","output_sha256":"\("2".repeated(64))","output":"/tmp/mh3g-staging/card1","size":64}]}
+    {"status":"dry-run","source_dir":"/tmp/extdata/user","output_dir":"/tmp/mh3g-staging","components":[{"component":"card1","source_sha256":"\(validSHA("4"))","output_sha256":"\(validSHA("5"))","output":"/tmp/mh3g-staging/card1","size":64}]}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
-private func extrasInstallDryRunResult() -> ConverterCommandResult {
+private func extrasInstallDryRunResult(
+    targetDirectory: URL = URL(fileURLWithPath: "/tmp/cemu")
+) -> ConverterCommandResult {
+    let entries = ["card1", "card2", "card3", "cardbox"].map { component in
+        """
+        {"group":"guild-cards","component":"\(component)","target":"\(targetDirectory.path)/\(component)","temporary":"\(targetDirectory.path)/.dryrun-\(component).tmp","before_sha256":"\(validSHA("8"))","after_sha256":"\(validSHA("9"))","backup":"\(targetDirectory.path)/.dryrun-\(component).backup","target_previously_existed":true}
+        """
+    }.joined(separator: ",")
     let json = """
-    {"operation":"install-extras","status":"dry-run","groups":["guild-cards"],"staging_set_sha256":"\("3".repeated(64))","target_set_sha256_before":"\("4".repeated(64))"}
+    {"operation":"install-extras","status":"dry-run","groups":["guild-cards"],"entries":[\(entries)],"manifest":"\(targetDirectory.path)/.mh3g-extra-install.json","staging_dir":"/tmp/mh3g-staging","target_dir":"\(targetDirectory.path)","staging_set_sha256":"\(validSHA("6"))","target_set_sha256_before":"\(validSHA("7"))"}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func extrasInstallWrittenResult(
+    components: [String] = ["card1", "card2", "card3", "cardbox"]
+) -> ConverterCommandResult {
+    let entries = components.map { component in
+        """
+        {"group":"guild-cards","component":"\(component)","target":"/tmp/cemu/\(component)","temporary":"/tmp/cemu/.\(component).tmp","before_sha256":"\(validSHA("8"))","after_sha256":"\(validSHA("9"))","backup":"/tmp/cemu/.\(component).backup","target_previously_existed":true}
+        """
+    }.joined(separator: ",")
+    let backups = components
+        .map { "\"/tmp/cemu/.\($0).backup\"" }
+        .joined(separator: ",")
+    let json = """
+    {"operation":"install-extras","status":"written","groups":["guild-cards"],"entries":[\(entries)],"manifest":"/tmp/cemu/.mh3g-extra-install.json","staging_dir":"/tmp/mh3g-staging","target_dir":"/tmp/cemu","staging_set_sha256":"\(validSHA("6"))","target_set_sha256_before":"\(validSHA("7"))","backup_paths":[\(backups)]}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func validSHA(_ character: Character) -> String {
+    precondition("0123456789abcdef".contains(character))
+    return String(repeating: String(character), count: 64)
 }
 
 private actor FakeConverterCommandExecutor: ConverterCommandExecuting {

@@ -1225,8 +1225,11 @@ fn write_then_rollback_restores_previous_slot() {
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let source = slot_fixture(&temp, "user2");
+    let source_before = fs::read(&source).unwrap();
+    let source_sha256_before = sha2::Sha256::digest(&source_before);
     let target = target_slot(&temp, "user2");
     let previous = vec![0xA5; CEMU_SIZE];
+    let previous_sha256 = sha2::Sha256::digest(&previous);
     fs::write(&target, &previous).unwrap();
 
     let dry_run = run_json(&[
@@ -1254,6 +1257,11 @@ fn write_then_rollback_restores_previous_slot() {
     assert!(target.exists());
     assert!(manifest.exists());
     assert!(backup.exists());
+    assert_eq!(fs::read(&source).unwrap(), source_before);
+    assert_eq!(
+        sha2::Sha256::digest(fs::read(&source).unwrap()),
+        source_sha256_before
+    );
 
     let rollback = run_json_with_stopped_emulators(&[
         "rollback".into(),
@@ -1262,6 +1270,14 @@ fn write_then_rollback_restores_previous_slot() {
     ]);
     assert_eq!(rollback["status"], "rolled-back");
     assert_eq!(fs::read(&target).unwrap(), previous);
+    assert_eq!(
+        sha2::Sha256::digest(fs::read(&target).unwrap()),
+        previous_sha256
+    );
+    assert_eq!(
+        sha2::Sha256::digest(fs::read(&source).unwrap()),
+        source_sha256_before
+    );
     assert!(!manifest.exists());
     assert!(!backup.exists());
 }
