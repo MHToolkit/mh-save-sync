@@ -1367,7 +1367,14 @@ public final class ConversionWorkflow {
         else { return false }
         return entries.allSatisfy { entry in
             let target = URL(fileURLWithPath: entry.target).standardizedFileURL
-            let targetMatches = target.deletingLastPathComponent() == targetDirectory.standardizedFileURL
+            // URL equality includes a directory/file resource hint. For a
+            // target directory that does not exist yet, Foundation may omit
+            // the trailing directory marker while `deletingLastPathComponent`
+            // always includes it. Compare normalized filesystem paths so the
+            // fail-closed evidence check does not depend on host filesystem
+            // state.
+            let targetMatches = target.deletingLastPathComponent().path
+                == targetDirectory.standardizedFileURL.path
                 && target.lastPathComponent == entry.component
             return targetMatches
                 && ConverterEvidence.isValidSHA256(entry.afterSHA256)

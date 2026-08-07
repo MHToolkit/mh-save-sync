@@ -875,6 +875,29 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.extrasInstallCompleted)
     }
 
+    func testExtrasInstallDryRunDoesNotDependOnTargetDirectoryExisting() async throws {
+        let targetDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mh3g-nonexistent-\(UUID().uuidString)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetDirectory.path))
+
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(extrasInstallDryRunResult(targetDirectory: targetDirectory)),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setComponents(
+            ComponentSelection(
+                includeGuildCards: true,
+                extraSourceDirectory: URL(fileURLWithPath: "/tmp/extdata/user"),
+                extraStagingDirectory: URL(fileURLWithPath: "/tmp/mh3g-staging"),
+                extraTargetDirectory: targetDirectory
+            )
+        )
+
+        try await workflow.runExtrasInstallDryRun()
+
+        XCTAssertTrue(workflow.canInstallExtras)
+    }
+
     func testCECWrittenStatusWithoutManifestAndHashEvidenceFailsClosed() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(cecDryRunResult()),
@@ -1247,14 +1270,16 @@ private func extrasStageDryRunResult() -> ConverterCommandResult {
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
-private func extrasInstallDryRunResult() -> ConverterCommandResult {
+private func extrasInstallDryRunResult(
+    targetDirectory: URL = URL(fileURLWithPath: "/tmp/cemu")
+) -> ConverterCommandResult {
     let entries = ["card1", "card2", "card3", "cardbox"].map { component in
         """
-        {"group":"guild-cards","component":"\(component)","target":"/tmp/cemu/\(component)","temporary":"/tmp/cemu/.dryrun-\(component).tmp","before_sha256":"\(validSHA("8"))","after_sha256":"\(validSHA("9"))","backup":"/tmp/cemu/.dryrun-\(component).backup","target_previously_existed":true}
+        {"group":"guild-cards","component":"\(component)","target":"\(targetDirectory.path)/\(component)","temporary":"\(targetDirectory.path)/.dryrun-\(component).tmp","before_sha256":"\(validSHA("8"))","after_sha256":"\(validSHA("9"))","backup":"\(targetDirectory.path)/.dryrun-\(component).backup","target_previously_existed":true}
         """
     }.joined(separator: ",")
     let json = """
-    {"operation":"install-extras","status":"dry-run","groups":["guild-cards"],"entries":[\(entries)],"manifest":"/tmp/cemu/.mh3g-extra-install.json","staging_dir":"/tmp/mh3g-staging","target_dir":"/tmp/cemu","staging_set_sha256":"\(validSHA("6"))","target_set_sha256_before":"\(validSHA("7"))"}
+    {"operation":"install-extras","status":"dry-run","groups":["guild-cards"],"entries":[\(entries)],"manifest":"\(targetDirectory.path)/.mh3g-extra-install.json","staging_dir":"/tmp/mh3g-staging","target_dir":"\(targetDirectory.path)","staging_set_sha256":"\(validSHA("6"))","target_set_sha256_before":"\(validSHA("7"))"}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
