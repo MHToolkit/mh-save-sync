@@ -114,6 +114,9 @@ def verify_local_packaging_script() -> None:
         "[switch]$Bootstrap",
         "winget",
         "vswhere.exe",
+        "Get-VisualStudioCandidateInstallations",
+        "Test-VisualStudioCppInstallation",
+        "Wait-VisualStudioCppInstallation",
         "Get-AnyVisualStudioInstallation",
         "setup.exe",
         "--installPath",
@@ -258,6 +261,31 @@ def verify_local_packaging_script() -> None:
     require(
         'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)' in rust_bootstrap,
         "Rustup bootstrap must treat WinGet's installed/no-update result as non-fatal",
+    )
+    visual_studio_detection = script.split("function Get-VisualStudioCandidateInstallations", 1)[1].split(
+        "function Get-VisualStudioInstallerPath", 1
+    )[0]
+    for expected in (
+        '"Microsoft.VisualStudio.Component.VC.Tools.x86.x64"',
+        "-all -products * -property installationPath",
+        '"VC\\Tools\\MSVC"',
+        '"bin\\$hostArchitecture\\x64\\cl.exe"',
+        '"bin\\$hostArchitecture\\x64\\link.exe"',
+        "[int]$Attempts = 12",
+        "[int]$DelaySeconds = 5",
+        "Start-Sleep -Seconds $DelaySeconds",
+    ):
+        require(expected in visual_studio_detection, f"Windows MSVC detection is missing {expected}")
+    require(
+        "| Select-Object -First 1" not in visual_studio_detection,
+        "vswhere must be allowed to finish before LASTEXITCODE is inspected",
+    )
+    msvc_initialization = script.split("function Initialize-MsvcBuildEnvironment", 1)[1].split(
+        "function Assert-StageWithinArtifacts", 1
+    )[0]
+    require(
+        "$installation = Wait-VisualStudioCppInstallation" in msvc_initialization,
+        "MSVC initialization must tolerate bounded Visual Studio registration delay",
     )
     # WinGet can retain Rustlang.Rustup's installed registration after the
     # current user's rustup/cargo proxy payload has disappeared.  A normal

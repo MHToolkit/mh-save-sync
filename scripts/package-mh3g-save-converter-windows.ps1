@@ -111,40 +111,123 @@ function Get-VsWherePath {
     return $null
 }
 
-function Get-VisualStudioInstallation {
+function Get-VisualStudioCandidateInstallations {
     $vswhere = Get-VsWherePath
-    if ($null -eq $vswhere) {
-        return $null
+    $candidates = @()
+    if ($null -ne $vswhere) {
+        # Query the component-qualified instance first, but do not pipe the
+        # native process into Select-Object.  On a freshly provisioned hosted
+        # runner that pipeline can close stdout before vswhere finishes and
+        # leave a misleading non-zero LASTEXITCODE.
+        $qualified = @(& $vswhere -latest -products * -requires "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" -property installationPath 2>$null)
+        $qualifiedExitCode = $LASTEXITCODE
+        if ($qualifiedExitCode -eq 0) {
+            $candidates += $qualified
+        }
+
+        # Visual Studio Installer can finish copying cl.exe before its
+        # component registration becomes visible to vswhere -requires.  Keep
+        # every registered instance as a fallback and validate the actual
+        # compiler files below rather than trusting registration alone.
+        $registered = @(& $vswhere -all -products * -property installationPath 2>$null)
+        $registeredExitCode = $LASTEXITCODE
+        if ($registeredExitCode -eq 0) {
+            $candidates += $registered
+        }
     }
 
-    $installation = @(& $vswhere -latest -products * -requires "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" -property installationPath | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or $installation.Count -eq 0) {
-        return $null
+    # Also probe the canonical VS 2022 paths.  This covers the short window in
+    # which Chocolatey has completed successfully but vswhere's instance
+    # catalog has not yet refreshed in the next PowerShell process.
+    $programRoots = @(
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)", "Process"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles", "Process")
+    )
+    foreach ($programRoot in $programRoots) {
+        if ([string]::IsNullOrWhiteSpace($programRoot)) {
+            continue
+        }
+        foreach ($edition in @("BuildTools", "Enterprise", "Professional", "Community")) {
+            $candidates += Join-Path $programRoot "Microsoft Visual Studio\2022\$edition"
+        }
     }
 
-    $path = $installation[0].ToString().Trim()
-    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Container)) {
-        return $null
+    $unique = @()
+    foreach ($candidate in $candidates) {
+        if ($null -eq $candidate) {
+            continue
+        }
+        $path = $candidate.ToString().Trim()
+        if (-not [string]::IsNullOrWhiteSpace($path) -and -not ($unique -contains $path)) {
+            $unique += $path
+        }
     }
-    return $path
+    return $unique
+}
+
+function Test-VisualStudioCppInstallation {
+    param([Parameter(Mandatory = $true)][string]$InstallationPath)
+
+    if (-not (Test-Path -LiteralPath $InstallationPath -PathType Container)) {
+        return $false
+    }
+
+    $developerCommand = Join-Path $InstallationPath "Common7\Tools\VsDevCmd.bat"
+    $toolRoot = Join-Path $InstallationPath "VC\Tools\MSVC"
+    if (-not (Test-Path -LiteralPath $developerCommand -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $toolRoot -PathType Container)) {
+        return $false
+    }
+
+    $toolsets = @(Get-ChildItem -LiteralPath $toolRoot -Directory -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending)
+    foreach ($toolset in $toolsets) {
+        foreach ($hostArchitecture in @("Hostx64", "Hostx86")) {
+            $compiler = Join-Path $toolset.FullName "bin\$hostArchitecture\x64\cl.exe"
+            $linker = Join-Path $toolset.FullName "bin\$hostArchitecture\x64\link.exe"
+            if ((Test-Path -LiteralPath $compiler -PathType Leaf) -and
+                (Test-Path -LiteralPath $linker -PathType Leaf)) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Get-VisualStudioInstallation {
+    foreach ($candidate in @(Get-VisualStudioCandidateInstallations)) {
+        if (Test-VisualStudioCppInstallation -InstallationPath $candidate) {
+            return $candidate
+        }
+    }
+    return $null
 }
 
 function Get-AnyVisualStudioInstallation {
-    $vswhere = Get-VsWherePath
-    if ($null -eq $vswhere) {
-        return $null
+    foreach ($candidate in @(Get-VisualStudioCandidateInstallations)) {
+        if (Test-Path -LiteralPath $candidate -PathType Container) {
+            return $candidate
+        }
     }
+    return $null
+}
 
-    $installation = @(& $vswhere -latest -products * -property installationPath | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or $installation.Count -eq 0) {
-        return $null
-    }
+function Wait-VisualStudioCppInstallation {
+    param(
+        [ValidateRange(1, 30)][int]$Attempts = 12,
+        [ValidateRange(1, 30)][int]$DelaySeconds = 5
+    )
 
-    $path = $installation[0].ToString().Trim()
-    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Container)) {
-        return $null
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $installation = Get-VisualStudioInstallation
+        if ($null -ne $installation) {
+            return $installation
+        }
+        if ($attempt -lt $Attempts) {
+            Write-Host ("Waiting for the Visual Studio C++ toolset to settle ({0}/{1})..." -f $attempt, $Attempts)
+            Start-Sleep -Seconds $DelaySeconds
+        }
     }
-    return $path
+    return $null
 }
 
 function Get-VisualStudioInstallerPath {
@@ -674,7 +757,11 @@ function Install-MissingPrerequisites {
 }
 
 function Initialize-MsvcBuildEnvironment {
-    $installation = Get-VisualStudioInstallation
+    # A successful Visual Studio installer can return a few seconds before a
+    # new process sees a complete vswhere catalog.  Retry for at most 60
+    # seconds and accept a candidate only when cl.exe, link.exe and
+    # VsDevCmd.bat are all physically present.
+    $installation = Wait-VisualStudioCppInstallation
     if ($null -eq $installation) {
         throw "MSVC x64 Build Tools were not found. Install Microsoft.VisualStudio.Component.VC.Tools.x86.x64 and a Windows 10/11 SDK."
     }
