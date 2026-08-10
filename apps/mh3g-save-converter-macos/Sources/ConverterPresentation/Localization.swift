@@ -292,6 +292,20 @@ public enum ConverterCopy {
         "WorkflowState.Failure": "操作失败",
         "Settings.BundledSidecar": "打包时使用内置 sidecar",
         "Settings.Development": "开发版本",
+        "Update.About": "关于与更新",
+        "Update.CurrentVersion": "当前版本",
+        "Update.Check": "检查更新",
+        "Update.Checking": "正在连接 GitHub…",
+        "Update.UpToDate": "已经是最新版（GitHub：%@）",
+        "Update.Available": "发现新版本 %@，请在弹窗中查看更新说明。",
+        "Update.Failed": "无法检查更新",
+        "Update.NetworkNote": "每天首次启动会静默检查一次 GitHub Release；网络不可用时不会阻塞或影响任何本地存档操作。也可以随时手动重试。",
+        "Update.AvailableTitle": "发现新版本",
+        "Update.VersionSummary": "当前 %@ · 最新 %@",
+        "Update.ReleaseNotes": "更新说明",
+        "Update.NoReleaseNotes": "该版本未提供更新说明。",
+        "Update.Later": "稍后",
+        "Update.OpenRelease": "打开发布页面",
     ]
 
     private static let english: [String: String] = [
@@ -482,6 +496,20 @@ public enum ConverterCopy {
         "WorkflowState.Failure": "Operation failed",
         "Settings.BundledSidecar": "Bundled sidecar when packaged",
         "Settings.Development": "development",
+        "Update.About": "About & Updates",
+        "Update.CurrentVersion": "Current version",
+        "Update.Check": "Check for Updates",
+        "Update.Checking": "Contacting GitHub…",
+        "Update.UpToDate": "You are up to date (GitHub: %@)",
+        "Update.Available": "Version %@ is available. Review its release notes in the update window.",
+        "Update.Failed": "Unable to check for updates",
+        "Update.NetworkNote": "The first launch each day silently checks GitHub Releases once. An unavailable network never blocks or changes any local save operation, and you can retry manually at any time.",
+        "Update.AvailableTitle": "Update Available",
+        "Update.VersionSummary": "Current %@ · Latest %@",
+        "Update.ReleaseNotes": "Release notes",
+        "Update.NoReleaseNotes": "No release notes were provided for this version.",
+        "Update.Later": "Later",
+        "Update.OpenRelease": "Open Release Page",
     ]
 
     /// The complete set of copy IDs rendered by the SwiftUI workbench.  Tests

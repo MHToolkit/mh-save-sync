@@ -5,6 +5,7 @@ struct ConversionWorkbenchView: View {
     @Binding var localeOverride: String
     @State private var selectedNavigation: ConverterNavigation? = .input
     @State private var workflow = ConversionWorkflow(executable: ConverterExecutableLocator.locate())
+    @StateObject private var updateChecker = GitHubUpdateChecker()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var language: ConverterLanguage {
@@ -50,6 +51,16 @@ struct ConversionWorkbenchView: View {
             // Navigation is controlled by native split-view selection.  The
             // content changes are brief and do not disable any other control.
         }
+        .task {
+            await updateChecker.checkAutomaticallyIfNeeded()
+        }
+        .sheet(item: $updateChecker.availableRelease) { release in
+            UpdateReleaseView(
+                release: release,
+                currentVersion: updateChecker.currentVersion,
+                language: language
+            )
+        }
     }
 
     @ViewBuilder
@@ -68,7 +79,12 @@ struct ConversionWorkbenchView: View {
         case .experimentalCEC:
             ExperimentalCECView(workflow: workflow, language: language)
         case .settings:
-            SettingsView(localeOverride: $localeOverride, workflow: workflow, language: language)
+            SettingsView(
+                localeOverride: $localeOverride,
+                workflow: workflow,
+                updateChecker: updateChecker,
+                language: language
+            )
         }
     }
 }

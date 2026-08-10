@@ -882,7 +882,8 @@ function Publish-PortableExecutable {
         [Parameter(Mandatory = $true)][string]$ProjectPath,
         [Parameter(Mandatory = $true)][string]$NativeSidecar,
         [Parameter(Mandatory = $true)][string]$PortableStageDirectory,
-        [Parameter(Mandatory = $true)][string]$PortableOutput
+        [Parameter(Mandatory = $true)][string]$PortableOutput,
+        [Parameter(Mandatory = $true)][string]$Version
     )
 
     # The UI invokes the Rust converter from AppContext.BaseDirectory\tools.
@@ -908,7 +909,7 @@ function Publish-PortableExecutable {
         Invoke-External -FilePath $Dotnet -Arguments @(
             "publish", $ProjectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "true", "--no-restore",
             "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-p:PublishSingleFile=true",
-            "-p:IncludeAllContentForSelfExtract=true", "-p:PublishReadyToRun=false", "-o", $PortableStageDirectory
+            "-p:IncludeAllContentForSelfExtract=true", "-p:PublishReadyToRun=false", "-p:Version=$Version", "-o", $PortableStageDirectory
         ) -Description "WinUI portable single-file dotnet publish"
 
         $publishedPortable = Join-Path $PortableStageDirectory "MH3GSaveConverter.exe"
@@ -1173,6 +1174,7 @@ try {
         }
         Assert-NativeConverterSidecar -FilePath $sidecar
         Invoke-External -FilePath $sidecar -Arguments @("--help") -Description "release sidecar smoke"
+        $converterVersion = Get-ConverterVersion
 
         # Recheck directly before recursive deletion in case an existing stage
         # component was replaced by a junction/symlink after initial preflight.
@@ -1180,7 +1182,7 @@ try {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
         Invoke-External -FilePath $dotnet -Arguments @(
             "publish", $project, "-c", "Release", "-r", "win-x64", "--self-contained", "true", "--no-restore",
-            "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-o", $stage
+            "-p:Platform=x64", "-p:WindowsAppSDKSelfContained=true", "-p:Version=$converterVersion", "-o", $stage
         ) -Description "WinUI dotnet publish"
 
         $gui = Join-Path $stage "MH3GSaveConverter.exe"
@@ -1212,10 +1214,9 @@ try {
         # that sidecar as extracted app content; the installer wraps the folder
         # form so its tools\ path remains intact.
         Remove-Item -LiteralPath $portableExecutable, $portableChecksum, $installerExecutable, $installerChecksum -Force -ErrorAction SilentlyContinue
-        Publish-PortableExecutable -Dotnet $dotnet -ProjectPath $project -NativeSidecar $sidecar -PortableStageDirectory $portableStage -PortableOutput $portableExecutable
+        Publish-PortableExecutable -Dotnet $dotnet -ProjectPath $project -NativeSidecar $sidecar -PortableStageDirectory $portableStage -PortableOutput $portableExecutable -Version $converterVersion
         Write-Sha256File -FilePath $portableExecutable -OutputPath $portableChecksum -DisplayName "MH3GSaveConverter-Portable-x64.exe" | Out-Null
 
-        $converterVersion = Get-ConverterVersion
         Build-InstallerExecutable -InstallerCompiler $innoSetup -InstallerDefinition $installerScript -SourceDirectory $stage -Version $converterVersion -InstallerOutput $installerExecutable
         Write-Sha256File -FilePath $installerExecutable -OutputPath $installerChecksum -DisplayName "MH3GSaveConverter-Setup-x64.exe" | Out-Null
 

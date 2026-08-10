@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -5,15 +6,22 @@ using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
+using MHToolkit.MH3GSaveConverter.Windows.Models;
+using MHToolkit.MH3GSaveConverter.Windows.Services;
 using MHToolkit.MH3GSaveConverter.Windows.ViewModels;
 
 namespace MHToolkit.MH3GSaveConverter.Windows;
 
 public sealed partial class MainWindow : Window
 {
+    private readonly GitHubUpdateService _updateService = new();
+    private readonly UpdateCheckPreferenceStore _updateCheckStore = new();
+    private readonly SemaphoreSlim _dialogGate = new(1, 1);
+    private Task<UpdateCheckResult>? _activeUpdateCheck;
     private bool _synchronizingLanguage;
     private bool _synchronizingConversionMode;
     private bool _synchronizingRepairVersion;
+    private bool _loadedOnce;
 
     public MainWindow()
     {
@@ -27,6 +35,174 @@ public sealed partial class MainWindow : Window
     }
 
     public MainViewModel ViewModel { get; }
+
+    private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_loadedOnce)
+        {
+            return;
+        }
+        _loadedOnce = true;
+
+        if (!_updateCheckStore.ShouldCheckToday())
+        {
+            return;
+        }
+
+        // Record the attempt before networking so a blocked GitHub connection
+        // is not retried on every launch during the same local calendar day.
+        _updateCheckStore.MarkAttempt();
+        await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async void About_Click(object sender, RoutedEventArgs e)
+    {
+        var content = new StackPanel { Spacing = 10, Width = 520 };
+        content.Children.Add(new TextBlock
+        {
+            Text = ViewModel.Copy.AboutDescription,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = $"{ViewModel.Copy.CurrentVersion}: {_updateService.CurrentVersion}",
+            FontFamily = new FontFamily("Cascadia Mono"),
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = ViewModel.Copy.UpdateNetworkNote,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Application.Current.Resources["ConverterSlateBrush"],
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = ViewModel.Copy.AboutUpdates,
+            Content = content,
+            PrimaryButtonText = ViewModel.Copy.CheckForUpdates,
+            CloseButtonText = ViewModel.Copy.Close,
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
+        {
+            await CheckForUpdatesAsync(manual: true);
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        try
+        {
+            var activeCheck = _activeUpdateCheck;
+            if (activeCheck is null || activeCheck.IsCompleted)
+            {
+                activeCheck = _updateService.CheckAsync();
+                _activeUpdateCheck = activeCheck;
+            }
+            var result = await activeCheck;
+            if (result.IsUpdateAvailable)
+            {
+                await ShowUpdateAvailableAsync(result);
+            }
+            else if (manual)
+            {
+                await ShowMessageAsync(
+                    ViewModel.Copy.UpToDateTitle,
+                    string.Format(ViewModel.Copy.UpToDateMessage, result.Release.TagName));
+            }
+        }
+        catch (Exception exception)
+        {
+            // Automatic checks are advisory and silent. They never delay the
+            // local workflow beyond their own timeout or surface a startup
+            // blocker when GitHub is unavailable in the user's network.
+            if (manual)
+            {
+                await ShowMessageAsync(
+                    ViewModel.Copy.UpdateCheckFailed,
+                    $"{ViewModel.Copy.UpdateNetworkNote}\n\n{exception.Message}");
+            }
+        }
+    }
+
+    private async Task ShowUpdateAvailableAsync(UpdateCheckResult result)
+    {
+        var release = result.Release;
+        var content = new StackPanel { Spacing = 10, Width = 560 };
+        content.Children.Add(new TextBlock
+        {
+            Text = string.Format(
+                ViewModel.Copy.UpdateAvailableSummary,
+                result.CurrentVersion,
+                release.TagName),
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        if (release.PublishedAt is { } publishedAt)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = publishedAt.ToLocalTime().ToString("D"),
+                Foreground = (Brush)Application.Current.Resources["ConverterSlateBrush"],
+            });
+        }
+        content.Children.Add(new TextBlock
+        {
+            Text = ViewModel.Copy.ReleaseNotes,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        content.Children.Add(new ScrollViewer
+        {
+            MaxHeight = 320,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(release.Body) ? ViewModel.Copy.NoReleaseNotes : release.Body,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            },
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = string.IsNullOrWhiteSpace(release.Name)
+                ? ViewModel.Copy.UpdateAvailableTitle
+                : release.Name,
+            Content = content,
+            PrimaryButtonText = ViewModel.Copy.OpenReleasePage,
+            CloseButtonText = ViewModel.Copy.Close,
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
+        {
+            Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
+        }
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            CloseButtonText = ViewModel.Copy.Close,
+            DefaultButton = ContentDialogButton.Close,
+        };
+        await ShowDialogAsync(dialog);
+    }
+
+    private async Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
+    {
+        await _dialogGate.WaitAsync();
+        try
+        {
+            dialog.XamlRoot = RootGrid.XamlRoot;
+            return await dialog.ShowAsync();
+        }
+        finally
+        {
+            _dialogGate.Release();
+        }
+    }
 
     private void ConfigureWindowMaterial()
     {
@@ -468,14 +644,13 @@ public sealed partial class MainWindow : Window
     {
         var dialog = new ContentDialog
         {
-            XamlRoot = RootGrid.XamlRoot,
             Title = title,
             Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
             PrimaryButtonText = ViewModel.Copy.Continue,
             CloseButtonText = ViewModel.Copy.Cancel,
             DefaultButton = ContentDialogButton.Close,
         };
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        return await ShowDialogAsync(dialog) == ContentDialogResult.Primary;
     }
 
     private async Task RunSafelyAsync(Func<Task> operation)
