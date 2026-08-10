@@ -71,6 +71,13 @@ rollback themselves. The macOS window appears in the Dock and Cmd-Tab, follows
 the system language by default, and can switch between Simplified Chinese and
 English in Settings.
 
+Both native workbenches expose **About & Updates**. The first launch on each
+local calendar day makes at most one non-blocking request to the official
+`MHToolkit/mh-save-sync` latest-release endpoint; users may also check
+manually. An unavailable GitHub connection never blocks conversion. A newer
+release dialog shows its version, publication date, release notes, and official
+link. No save bytes or selected paths are sent with this request.
+
 The workbenches provide four **guided but non-blocking** stages: input and
 inspection, optional shared data, Dry Run, then write or rollback. Completing
 one stage reveals the recommended next action (for example, inspect then

@@ -147,6 +147,7 @@ def verify_local_packaging_script() -> None:
         "WindowsAppSDKSelfContained=true",
         "PublishSingleFile=true",
         "IncludeAllContentForSelfExtract=true",
+        "-p:Version=$converterVersion",
         "Publish-PortableExecutable",
         "Build-InstallerExecutable",
         "MH3GSaveConverter-Portable-x64.exe",
@@ -228,6 +229,7 @@ def verify_local_packaging_script() -> None:
     for expected in (
         "-p:PublishSingleFile=true",
         "-p:IncludeAllContentForSelfExtract=true",
+        "-p:Version=$Version",
         "mh3g-save-convert.exe",
         "finally",
         "Remove-Item -LiteralPath $embeddedSidecar",
@@ -414,6 +416,27 @@ def main() -> int:
     require("startInfo.Arguments" not in bridge, "CLI bridge must not build a command-string argument list")
     require("cmd.exe" not in bridge and "powershell" not in bridge.lower(), "CLI bridge must not invoke a shell")
 
+    update_service = read("Services/GitHubUpdateService.cs")
+    for expected in (
+        "https://api.github.com/repos/MHToolkit/mh-save-sync/releases/latest",
+        "application/vnd.github+json",
+        "X-GitHub-Api-Version",
+        "MH3GSaveConverter/",
+        "TimeSpan.FromSeconds(8)",
+        "MHToolkit/mh-save-sync/releases/",
+        "AssemblyInformationalVersionAttribute",
+    ):
+        require(expected in update_service, f"Windows update service is missing {expected}")
+    update_store = read("Services/UpdateCheckPreferenceStore.cs")
+    for expected in (
+        "update-check.json",
+        "ShouldCheckToday",
+        "MarkAttempt",
+        '"yyyy-MM-dd"',
+        "LocalApplicationData",
+    ):
+        require(expected in update_store, f"Windows daily update gate is missing {expected}")
+
     launcher = (ROOT / "scripts" / "mh3g-windows-launcher.ps1").read_text(encoding="utf-8")
     require(
         'Join-Path $PSScriptRoot "tools/mh3g-save-convert.exe"' in launcher,
@@ -578,6 +601,16 @@ def main() -> int:
     require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
     require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
     require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")
+    for expected in (
+        "RootGrid_Loaded",
+        "About_Click",
+        "CheckForUpdatesAsync(manual: false)",
+        "_updateCheckStore.MarkAttempt();",
+        "ShowUpdateAvailableAsync",
+        "ProcessStartInfo(release.HtmlUrl)",
+        "UseShellExecute = true",
+    ):
+        require(expected in code_behind, f"WinUI update-check flow is missing {expected}")
 
     cec_write = workflow.split("public async Task WriteCecAsync()", 1)[1].split(
         "public async Task RollbackCecAsync()", 1
@@ -792,6 +825,11 @@ def main() -> int:
         "Optional ExtData",
         "可选 ExtData",
         "ExtDataInstallUnavailable",
+        "About & Updates",
+        "关于与更新",
+        "Check for Updates",
+        "检查更新",
+        "UpdateNetworkNote",
     ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")

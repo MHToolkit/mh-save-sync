@@ -30,7 +30,10 @@ code.
   Dry Run's aggregate source_record_set_sha256 and target_sha256_before are
   bound to its write, so a changed mailbox or cache fails closed. It never turns
   on merely because a player selected the primary slot.
-- `system` and normal ExtData staging/install remain explicit transactions.
+- Shared `system` and normal ExtData staging/install remain explicit
+  transactions. Gallery/movie migration requires both the 3DS source `system`
+  and an existing initialized Cemu `system`; only the known flags are unioned,
+  while all other target bytes and other-slot shared data are retained.
   The Windows backend installs complete ExtData groups through `ReplaceFileW`,
   manifest-bound backups, and a durable recovery journal. The UI never guesses
   a Cemu MLC directory or silently installs a group. Compatibility repair
@@ -41,6 +44,19 @@ Quit Nemessix, Azahar, and Cemu before any write or rollback. See the root
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md) and
 [Chinese CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md) for
 the exact source files and transaction scope.
+
+## Updates
+
+The About & Updates dialog can query the latest stable release from the
+official `MHToolkit/mh-save-sync` GitHub Release API. The first launch on each
+local calendar day makes at most one silent attempt. A blocked or unavailable
+GitHub connection never blocks the window or changes a local save; manual
+checks display the failure and can be retried. A newer release dialog includes
+the release title, publication date, notes, and official link.
+
+The package script passes the Rust converter version into both WinUI publish
+forms, so the folder, portable EXE, and installer compare the same real version
+instead of the .NET default assembly version.
 
 ## Release formats
 

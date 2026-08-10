@@ -6,7 +6,7 @@
     xmlns:converter="using:MHToolkit.MH3GSaveConverter.Windows.Controls"
     xmlns:models="using:MHToolkit.MH3GSaveConverter.Windows.Models"
     Title="MH3G Save Converter">
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Loaded="RootGrid_Loaded">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -34,6 +34,12 @@
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="{Binding StatusText}" />
                     </Border>
+                    <Button Click="About_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.AboutUpdates}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <SymbolIcon Symbol="Help" />
+                            <TextBlock Text="{Binding Copy.AboutUpdates}" />
+                        </StackPanel>
+                    </Button>
                     <TextBlock Text="{Binding Copy.Language}" VerticalAlignment="Center" Foreground="{StaticResource ConverterSlateBrush}" />
                     <ComboBox x:Name="LanguagePicker" MinWidth="150" SelectionChanged="LanguagePicker_SelectionChanged">
                         <ComboBoxItem Tag="system" Content="{Binding Copy.LanguageSystem}" />

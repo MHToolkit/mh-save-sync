@@ -26,7 +26,9 @@
   回滚链路。写入会绑定紧接着的 Dry Run 返回的聚合
   source_record_set_sha256 与 target_sha256_before，邮箱或缓存变化时会
   失败关闭。选择核心槽位不会自动打开 CEC。
-- `system` 与普通 ExtData 暂存/安装仍是显式事务。Windows 后端使用
+- 共享 `system` 与普通 ExtData 暂存/安装仍是显式事务。画廊/动画迁移必须同时
+  提供 3DS 源 `system` 和已存在、已初始化的 Cemu `system`；只合并已知标记，
+  其余目标字节和其他角色槽位共享数据全部保留。Windows 后端使用
   `ReplaceFileW`、manifest 绑定备份和持久恢复日志安装完整 ExtData 组件组；
   界面不会猜测 Cemu MLC 目录或静默安装。兼容修复模式只字段级更新仍保持旧版
   转换结果的 `user#` 与公会名片字段，当前 `quest1` 至 `quest4` 保持原字节。
@@ -35,6 +37,16 @@
 及事务边界参见根目录的
 [中文 CLI 文件契约](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.zh-CN.md) 与
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md)。
+
+## 更新检查
+
+“关于与更新”可以查询 `MHToolkit/mh-save-sync` 官方 GitHub Release API 的最新
+正式版。每个本地自然日首次启动最多静默尝试一次；GitHub 无法访问时不会阻塞
+窗口或改动本地存档，手动检查会展示失败信息并允许重试。发现新版本时，弹窗会
+显示版本名、发布日期、更新说明与官方链接。
+
+打包脚本会把 Rust 转换器版本同时注入 WinUI 文件夹版和单文件便携版，因此 ZIP、
+便携 EXE 和安装器比较的是同一个真实版本，不会误用 .NET 默认程序集版本。
 
 ## 发布格式
 
