@@ -1027,30 +1027,25 @@ fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
 
-    for (command, source, target) in [(
-        "convert",
-        slot_fixture(&temp, "user2"),
-        target_slot(&temp, "user2"),
-    )] {
-        let output = run_output_with_stopped_emulators(&[
-            command.to_owned(),
-            source.to_string_lossy().into_owned(),
-            "--output".to_owned(),
-            target.to_string_lossy().into_owned(),
-            "--expected-target-sha256".to_owned(),
-            "0".repeat(64),
-            "--write".to_owned(),
-        ]);
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let output = run_output_with_stopped_emulators(&[
+        "convert".to_owned(),
+        source.to_string_lossy().into_owned(),
+        "--output".to_owned(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".to_owned(),
+        "0".repeat(64),
+        "--write".to_owned(),
+    ]);
 
-        assert_eq!(output.status.code(), Some(1), "command: {command}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("target is missing but an expected dry-run SHA-256 was supplied"),
-            "command: {command}"
-        );
-        assert!(!target.exists(), "command: {command}");
-        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
-    }
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target is missing but an expected dry-run SHA-256 was supplied")
+    );
+    assert!(!target.exists());
+    assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
 }
 
 #[test]
