@@ -160,7 +160,7 @@ child. CEC is a system NAND mailbox, not SD-card ExtData.
 | Data group | Give this exact input to the CLI | Do **not** give it | Required? | Purpose / affected files |
 | --- | --- | --- | --- | --- |
 | Core slot | One explicit `user1`, `user2`, or `user3` file under `title/00040000/00048100/data/00000001/` | The title directory, all slots, ExtData, a ZIP | Yes: choose one slot | Character, story/progress, farm, fleet, local offline-hunter data; writes only the named same-number Cemu `user#` target |
-| Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Housekeeper gallery/movie unlock history and other shared settings; writes only the named Cemu `system` target |
+| Shared system | One explicit 3DS `system` file in the same title savedata directory **and** one existing initialized Cemu `system` target | The whole title directory, a ZIP, or a missing/new Cemu target | Optional | Unions the housekeeper gallery/movie unlock flags into the existing Cemu `system`; all other Wii U shared bytes are preserved |
 | Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Converts all eight files into a new staging directory; a separate guarded `install-extras` transaction can install complete `guild-cards`, `quests`, or both into an initialized Cemu target |
 | StreetPass / Hunter Search CEC | The exact `CEC/00048100/` directory containing `InBox___` | SD-card ExtData, the `InBox___` child alone, a ZIP | Optional and experimental | Reads received raw StreetPass records and can write only Cemu `cec` |
 
@@ -193,9 +193,12 @@ extra wrapper directory, enter it first; the expected filenames must be
 immediate children of the CLI path or the narrow GUI selection described above.
 
 If the 3DS `system` file is omitted, a core `user#` conversion cannot migrate
-the housekeeper's gallery/movie unlock history. The converter deliberately
-leaves any existing Cemu `system` unchanged; use the separate guarded
-`convert-system` transaction when those shared records are part of the move.
+the housekeeper's gallery/movie unlock history. `system` is shared across all
+three character slots and also contains settings unrelated to the selected
+slot. Therefore `convert-system` requires both the 3DS source and an existing,
+initialized Cemu target. It bitwise-unions only the verified gallery/movie
+flag range (Cemu file offsets `0x68..0x77`) and preserves every other target
+byte. It refuses a new/missing target instead of replacing all shared data.
 
 ### Legacy Wii U save-editor caveat
 
@@ -250,10 +253,12 @@ an arbitrary renamed file. With no `--write`, conversion remains a dry-run;
 pass `--dry-run` explicitly in scripts to make that intention visible. `--write`
 and `--dry-run` conflict.
 
-For GUI and automation clients, `convert` and `convert-system` expose guarded
-write preconditions: `--expected-source-sha256` plus exactly one target
-condition, either `--expected-target-sha256` or `--expected-target-absent`.
-They are accepted only together with `--write`. Take hash values only from
+For GUI and automation clients, `convert` exposes guarded write preconditions:
+`--expected-source-sha256` plus exactly one target condition, either
+`--expected-target-sha256` or `--expected-target-absent`. `convert-system`
+always requires an existing Cemu baseline and therefore requires both
+`--expected-source-sha256` and `--expected-target-sha256` when writing. These
+arguments are accepted only together with `--write`. Take hash values only from
 `hashes.source` and `hashes.target_before` in the JSON emitted by the **same**
 immediately preceding Dry Run for the same source and output paths. This makes
 the write fail closed if an existing source or target changed; the target hash
@@ -449,22 +454,25 @@ guild-card subtransactions. Roll it back with:
 Omit `--source-extdata-dir` for a core-only repair. A `no-changes` report means
 the selected scope needed no write, so no empty coordinator manifest is made.
 
-#### `convert-system` — convert shared system data
+#### `convert-system` — safely merge shared gallery/movie flags
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write --expected-source-sha256 <SHA256> --expected-target-sha256 <SHA256>] --output <EXISTING_CEMU_SYSTEM> <3DS_SYSTEM>
 ```
 
-Use explicit `system` files only; it never reads a `user#` or ExtData:
+Use an explicit 3DS `system` source and an existing initialized Cemu `system`
+target; it never reads a `user#` or ExtData:
 
 ```bash
 "${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --dry-run
-"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --write
 ```
 
-The same transactional backup/manifest pattern applies, using `.system...`
-names. `--write` and `--dry-run` conflict. The same optional guarded-write
-flow applies; use values from that `convert-system` Dry Run, not from a slot
+The command does not replace the complete shared file. It preserves the Cemu
+header, settings, and unknown/shared-slot records, and unions only the verified
+gallery/movie bitset at Cemu offsets `0x68..0x77`. The same transactional
+backup/manifest pattern applies, using `.system...` names. `--write` and
+`--dry-run` conflict. A write always requires the two hashes emitted by that
+immediately preceding `convert-system` Dry Run, not hashes from a slot
 conversion:
 
 ```bash
@@ -479,10 +487,10 @@ SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
   --write
 ```
 
-For a new `system` export, use its immediate Dry Run's source hash with
-`--expected-target-absent` by the same rule as a new `user#` export. It is
-mutually exclusive with `--expected-target-sha256` and rejects a target that
-appears before the write acquires its lock.
+There is intentionally no new-`system` export mode. Start MH3G HD once so it
+creates a valid Wii U/Cemu `system`, stop the emulator, then select that file
+as the merge baseline. This protects settings and records shared by other
+character slots.
 
 #### `convert-extras` — stage shared ExtData
 

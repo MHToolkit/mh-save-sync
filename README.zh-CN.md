@@ -110,7 +110,7 @@ Windows 前置条件、行为和可选参数见
 | 数据组 | 需要传给 CLI 的准确输入 | **不能**传入 | 是否必需 | 用途/影响的文件 |
 | --- | --- | --- | --- | --- |
 | 核心角色槽位 | `title/00040000/00048100/data/00000001/` 下一个明确的 `user1`、`user2` 或 `user3` 文件 | 整个 title 目录、全部槽位、ExtData、ZIP | 必需：三选一 | 角色、剧情/任务进度、农场、狩猎船、本地离线猎人数据；只写入同编号且同名的 Cemu `user#` 目标 |
-| 共享 system | 同一 title savedata 目录中的一个明确 `system` 文件 | 整个 title 目录、ZIP | 可选 | 管家画廊/动画解锁记录及其他共享设置；只写入明确指定的 Cemu `system` 目标 |
+| 共享 system | 同一 title savedata 目录中的一个明确 3DS `system` 文件，**同时**提供一个已初始化且已存在的 Cemu `system` 目标 | 整个 title 目录、ZIP、新建或不存在的 Cemu 目标 | 可选 | 将管家画廊/动画解锁标记与现有 Cemu `system` 取并集；保留其他全部 Wii U 共享字节 |
 | 共享 ExtData | 完整的 `extdata/00000000/00000481/user/` 目录，其直接子文件必须包括 `card1`、`card2`、`card3`、`cardbox`、`quest1`、`quest2`、`quest3`、`quest4` | `00000481` 父目录、`boss/`、不完整文件集合、ZIP | 可选 | 将全部八个文件转换到新的暂存目录；再由独立、受保护的 `install-extras` 事务把完整的 `guild-cards`、`quests` 或两者安装到已初始化的 Cemu 目标 |
 | 擦身通信/猎人搜索 CEC | 包含 `InBox___` 的准确 `CEC/00048100/` 目录 | SD 卡 ExtData、单独的 `InBox___` 子目录、ZIP | 可选且为实验性功能 | 读取收到的原始擦身消息，只可能写入 Cemu `cec` |
 
@@ -133,7 +133,7 @@ Windows 前置条件、行为和可选参数见
     OutBox__/...                           <- 本机猎人的发出广播
 ```
 
-如果没有提供 3DS `system` 文件，单独转换核心 `user#` 无法迁移管家处可查看的画廊/动画解锁记录。转换器会有意保持已有 Cemu `system` 不变；需要迁移这些共享记录时，请额外执行受保护的 `convert-system` 事务。
+如果没有提供 3DS `system` 文件，单独转换核心 `user#` 无法迁移管家处可查看的画廊/动画解锁记录。`system` 由三个角色槽位共同使用，还包含与当前角色无关的设置。因此 `convert-system` 必须同时提供 3DS 源文件和已初始化、已存在的 Cemu 目标文件。它只会对已确认的画廊/动画标记范围（Cemu 文件偏移 `0x68..0x77`）逐位取并集，其他目标字节全部保留；若目标不存在则拒绝执行，不会整文件覆盖共享数据。
 
 ### 旧版 Wii U 存档修改器注意事项
 
@@ -171,7 +171,7 @@ CEMU_CEC="$CEMU_DIR/cec"
 
 `convert` 接收一个源 `user#` 文件和 `--output <同名-user#>`。`user2` 只能写入名为 `user2` 的目标，不能覆盖 `user1` 或任意改名文件。不传 `--write` 时转换保持 dry-run；在脚本中建议显式传入 `--dry-run`，以便清楚表达只读意图。`--write` 与 `--dry-run` 互斥。
 
-对于 GUI 和自动化调用，`convert` 与 `convert-system` 提供受保护的写入前置条件：`--expected-source-sha256`，再加上二选一的目标条件 `--expected-target-sha256` 或 `--expected-target-absent`。它们都只能与 `--write` 一起使用。哈希值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样已有的源或目标在 dry-run 后发生变化时，写入会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
+对于 GUI 和自动化调用，`convert` 提供受保护的写入前置条件：`--expected-source-sha256`，再加上二选一的目标条件 `--expected-target-sha256` 或 `--expected-target-absent`。`convert-system` 必须使用已存在的 Cemu 基线，因此写入时同时强制要求 `--expected-source-sha256` 和 `--expected-target-sha256`。这些参数都只能与 `--write` 一起使用。哈希值只能取自**同一次**、针对相同源文件和输出路径的紧邻 dry-run JSON 中的 `hashes.source` 与 `hashes.target_before`。这样已有的源或目标在 dry-run 后发生变化时，写入会失败关闭；目标哈希会在取得单槽位安装锁后再次检查。不要复用旧报告，也不要单独计算替代值。
 
 仅当目标文件已存在时，JSON 才会提供 `hashes.target_before`。如果它不存在，不要伪造哨兵哈希或传入 `--expected-target-sha256`。对于受保护的新导出，请传入本次 Dry Run 的源哈希和 `--expected-target-absent`。事务在取得锁后会再次检查；若新目标在此期间出现，则拒绝写入。两种目标条件互斥。
 
@@ -313,20 +313,19 @@ PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
 只修核心 `user#` 时省略 `--source-extdata-dir`。若报告状态为 `no-changes`，说明所选范围无需修改，不会生成无意义的总 manifest。
 
-#### `convert-system`：转换共享 system 数据
+#### `convert-system`：安全合并共享画廊/动画标记
 
 ```text
-mh3g-save-convert convert-system [--dry-run | --write [--expected-source-sha256 <SHA256>] [--expected-target-sha256 <SHA256> | --expected-target-absent]] --output <OUTPUT> <SOURCE>
+mh3g-save-convert convert-system [--dry-run | --write --expected-source-sha256 <SHA256> --expected-target-sha256 <SHA256>] --output <已有_CEMU_SYSTEM> <3DS_SYSTEM>
 ```
 
-只能使用明确的 `system` 文件；它不会读取 `user#` 或 ExtData：
+必须使用明确的 3DS `system` 源文件和已存在、已初始化的 Cemu `system` 目标；它不会读取 `user#` 或 ExtData：
 
 ```bash
 "${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --dry-run
-"${CLI[@]}" convert-system "$SYSTEM_SOURCE" --output "$CEMU_DIR/system" --write
 ```
 
-它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥。相同的受保护写入流程也适用，但必须使用该次 `convert-system` dry-run 的哈希，不能复用角色槽位转换的结果：
+它不会替换整个共享文件，而是保留 Cemu 头、设置和未知/跨槽位记录，只对 Cemu 偏移 `0x68..0x77` 的已确认画廊/动画位集合取并集。它使用相同的事务备份/manifest 机制，文件名改为 `.system...`。`--write` 与 `--dry-run` 互斥；写入必须使用紧邻的这一次 `convert-system` Dry Run 输出的两个哈希，不能复用角色槽位转换结果：
 
 ```bash
 SYSTEM_TARGET="$CEMU_DIR/system"
@@ -340,9 +339,7 @@ SYSTEM_TARGET_SHA256=$(jq -er '.hashes.target_before' <<<"$SYSTEM_DRY_RUN_JSON")
   --write
 ```
 
-新的 `system` 导出也按相同规则：使用该次紧邻 Dry Run 的源哈希与
-`--expected-target-absent`。它和 `--expected-target-sha256` 互斥；如果目标在写入
-取得锁前出现，写入会被拒绝。
+转换器有意不提供“新建 `system`”模式。请先启动一次 MH3G HD，让游戏创建合法的 Wii U/Cemu `system`，关闭模拟器后再把该文件作为合并基线。这样才能保护其他角色槽位共享的设置和记录。
 
 #### `convert-extras`：生成共享 ExtData 暂存文件
 

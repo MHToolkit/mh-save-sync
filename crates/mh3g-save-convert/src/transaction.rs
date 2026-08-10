@@ -188,15 +188,16 @@ pub fn install_with_expectations(
     )
 }
 
-/// Install a field-aware compatibility merge through the same guarded slot
-/// transaction as a fresh conversion.
+/// Install a field-aware merge through the same guarded component transaction
+/// as a fresh conversion.
 ///
-/// The caller must have produced `installed` through the compatibility merge
+/// The caller must have produced `installed` through a separately tested merge
 /// core. This entry point intentionally skips only the fresh-conversion
 /// equality check; profile validation, process refusal, target hash pinning,
 /// backup, atomic replacement, manifest publication, and rollback remain
-/// unchanged.
-pub fn install_compatibility_merge_with_expectations(
+/// unchanged. It is used by both compatibility slot repair and conservative
+/// shared-system gallery merging.
+pub fn install_merged_component_with_expectations(
     source: &[u8],
     installed: &[u8],
     target: impl AsRef<Path>,
@@ -215,6 +216,22 @@ pub fn install_compatibility_merge_with_expectations(
             publisher: &JsonManifestPublisher,
             verify_fresh_conversion: false,
         },
+    )
+}
+
+pub fn install_compatibility_merge_with_expectations(
+    source: &[u8],
+    installed: &[u8],
+    target: impl AsRef<Path>,
+    manifest_path: impl AsRef<Path>,
+    expectations: InstallExpectations<'_>,
+) -> Result<InstallManifest, ConversionError> {
+    install_merged_component_with_expectations(
+        source,
+        installed,
+        target,
+        manifest_path,
+        expectations,
     )
 }
 

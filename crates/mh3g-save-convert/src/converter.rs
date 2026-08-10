@@ -24,6 +24,15 @@ pub const EXTERNAL_COMPONENT_NAMES: [&str; 8] = [
 const CARD_PAYLOAD_SIZE: usize = 0x57_FFC;
 const CARDBOX_PAYLOAD_SIZE: usize = 0x2F_FFC;
 const QUEST_PAYLOAD_SIZE: usize = 0x28_FFC;
+/// Shared gallery/movie unlock bitset inside the logical `system` payload.
+///
+/// In a Cemu file this is file range `0x68..0x78` because the Wii U
+/// container header is 40 bytes.  The corresponding 3DS range is
+/// `0x44..0x54`.  Four little-endian 3DS words map to four big-endian Wii U
+/// words.  The flags are shared by all character slots, so migration must
+/// union them with an initialized Wii U `system` instead of replacing the
+/// complete shared file.
+pub const SYSTEM_GALLERY_PAYLOAD_RANGE: std::ops::Range<usize> = 0x40..0x50;
 
 fn external_component_payload_size(filename: &str) -> Option<usize> {
     match filename {
@@ -224,6 +233,58 @@ pub fn convert_3ds_system_to_cemu_named(
     Ok(output)
 }
 
+/// Merge 3DS gallery/movie unlock flags into an initialized Cemu `system`.
+///
+/// `system` is shared by every character slot.  Only the independently
+/// verified gallery/movie bitset is portable here; settings and any other
+/// slot-shared records retain their current Wii U bytes.  Bitwise union keeps
+/// unlocks already earned by any Wii U slot while adding unlocks present on
+/// the 3DS side.
+pub fn merge_3ds_system_gallery_into_cemu_named(
+    source: &[u8],
+    current: &[u8],
+    filename: &str,
+) -> Result<Vec<u8>, ConversionError> {
+    if filename != "system" {
+        return Err(ConversionError::InvalidSave(format!(
+            "shared system target basename must be system: {filename}"
+        )));
+    }
+    if inspect_bytes(source)?.profile != SaveProfile::JpThreeDsSystem {
+        return Err(ConversionError::InvalidSave(
+            "expected a Japanese MH3G 3DS system source".to_owned(),
+        ));
+    }
+    if inspect_bytes(current)?.profile != SaveProfile::JpCemuSystem {
+        return Err(ConversionError::InvalidSave(
+            "expected an initialized Japanese MH3G Wii U/Cemu system target".to_owned(),
+        ));
+    }
+
+    let source_payload = &source[JP_3DS_HEADER.len()..];
+    let current_payload_offset = current.len() - SYSTEM_PAYLOAD_SIZE;
+    let mut output = current.to_vec();
+
+    for relative in SYSTEM_GALLERY_PAYLOAD_RANGE.step_by(4) {
+        let source_flags = u32::from_le_bytes(
+            source_payload[relative..relative + 4]
+                .try_into()
+                .expect("gallery word is four bytes"),
+        );
+        let target_offset = current_payload_offset + relative;
+        let current_flags = u32::from_be_bytes(
+            current[target_offset..target_offset + 4]
+                .try_into()
+                .expect("gallery word is four bytes"),
+        );
+        output[target_offset..target_offset + 4]
+            .copy_from_slice(&(source_flags | current_flags).to_be_bytes());
+    }
+
+    debug_assert_eq!(inspect_bytes(&output)?.profile, SaveProfile::JpCemuSystem);
+    Ok(output)
+}
+
 pub fn convert_source_to_cemu(source: &[u8], filename: &str) -> Result<Vec<u8>, ConversionError> {
     match inspect_bytes(source)?.profile {
         SaveProfile::JpThreeDs => convert_3ds_to_cemu_named(source, filename),
@@ -240,7 +301,8 @@ mod tests {
     use crate::{
         converter::{
             convert_3ds_system_to_cemu, convert_3ds_to_cemu, convert_3ds_to_cemu_named,
-            convert_external_component_to_cemu_named, validate_cemu_external_component_named,
+            convert_external_component_to_cemu_named, merge_3ds_system_gallery_into_cemu_named,
+            validate_cemu_external_component_named,
         },
         profile::{
             CEMU_SIZE, JP_3DS_HEADER, JP_CEMU_HEADER, PAYLOAD_SIZE, SaveProfile, THREE_DS_SIZE,
@@ -285,6 +347,71 @@ mod tests {
             inspect_bytes(&output).unwrap().profile,
             SaveProfile::JpCemuSystem
         );
+    }
+
+    #[test]
+    fn merges_only_shared_gallery_flags_into_an_initialized_cemu_system() {
+        use crate::profile::{
+            CEMU_SYSTEM_SIZE, JP_CEMU_SYSTEM_HEADER, SYSTEM_PAYLOAD_SIZE, THREE_DS_SYSTEM_SIZE,
+        };
+
+        let mut source = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let source_payload = JP_3DS_HEADER.len();
+        source[source_payload + 0x40..source_payload + 0x44]
+            .copy_from_slice(&0x0000_0005_u32.to_le_bytes());
+        source[source_payload + 0x44..source_payload + 0x48]
+            .copy_from_slice(&0x8000_0000_u32.to_le_bytes());
+        source[source_payload + 0x54] = 0xA5;
+
+        let mut current = build_jp_cemu_header("system", SYSTEM_PAYLOAD_SIZE)
+            .unwrap()
+            .to_vec();
+        current.resize(CEMU_SYSTEM_SIZE, 0);
+        let target_payload = JP_CEMU_SYSTEM_HEADER.len();
+        current[target_payload + 0x40..target_payload + 0x44]
+            .copy_from_slice(&0x0000_0002_u32.to_be_bytes());
+        current[target_payload + 0x48..target_payload + 0x4C]
+            .copy_from_slice(&0x0000_0010_u32.to_be_bytes());
+        current[target_payload + 0x54] = 0x5A;
+        let before = current.clone();
+
+        let output = merge_3ds_system_gallery_into_cemu_named(&source, &current, "system").unwrap();
+
+        assert_eq!(
+            &output[target_payload + 0x40..target_payload + 0x44],
+            &0x0000_0007_u32.to_be_bytes()
+        );
+        assert_eq!(
+            &output[target_payload + 0x44..target_payload + 0x48],
+            &0x8000_0000_u32.to_be_bytes()
+        );
+        assert_eq!(
+            &output[target_payload + 0x48..target_payload + 0x4C],
+            &0x0000_0010_u32.to_be_bytes()
+        );
+        assert_eq!(output[target_payload + 0x54], 0x5A);
+        assert_eq!(
+            &output[..target_payload + 0x40],
+            &before[..target_payload + 0x40]
+        );
+        assert_eq!(
+            &output[target_payload + 0x50..],
+            &before[target_payload + 0x50..]
+        );
+    }
+
+    #[test]
+    fn system_gallery_merge_rejects_a_3ds_file_as_the_wii_u_baseline() {
+        use crate::profile::THREE_DS_SYSTEM_SIZE;
+
+        let mut source = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+
+        let error = merge_3ds_system_gallery_into_cemu_named(&source, &source, "system")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Wii U/Cemu system target"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ CLI 会检查文件名、字节大小和存档头。它不会根据父目录推�
 | 期望结果 | 需要的 3DS 输入 | 当前 CLI 命令 | 可能发生变化的 Cemu 目标 |
 | --- | --- | --- | --- |
 | 角色、村/任务/事件状态、农场、狩猎船、玩家数据以及槽位内离线猎人缓存 | 一个明确的散装 `user1`、`user2` 或 `user3` 文件 | `convert <user#> --output <same user#>` | 只会改变同一个 Cemu `user#` 文件 |
-| 共享系统数据 | 散装 `system` 文件 | `convert-system system --output system` | 只会改变 Cemu `system` |
+| 共享画廊/动画标记 | 散装 3DS `system`，同时提供已存在且已初始化的 Cemu `system` 基线 | `convert-system system --output <已有 Cemu system>` | 只改变 Cemu `system` 中已确认的标记范围；其余目标字节全部保留 |
 | 已收到/本地公会名片数据以及离线集会所伙伴对应的名片部分 | 包含下列全部八个文件的完整 3DS ExtData `user` 目录 | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>`，随后执行 `install-extras --staging-dir <staging> --target-dir <Cemu save dir> --groups guild-cards` | 先只生成暂存文件；明确执行完整组件组事务后才安装 `card1`、`card2`、`card3`、`cardbox`，并保留 manifest 与原目标字节 |
 | 下载或创建的任务 | 同一完整 3DS ExtData `user` 目录 | `convert-extras`，随后执行 `install-extras ... --groups quests` | 先只在暂存目录中生成 `quest1` 到 `quest4`；明确执行完整组件组事务后才安装 |
 | 擦身通信/猎人搜索缓存 | 可选的 3DS CEC 邮箱根目录，其中包含 `InBox___/BoxInfo_____` 和收到的消息文件 | 先执行 `convert-cec --dry-run`，随后执行 `convert-cec --write --experimental --expected-source-record-set-sha256 ... --expected-target-sha256 ...` | 只改变 Cemu `cec` 及其事务文件 |
@@ -40,7 +40,7 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 
 核心槽位命令要求源文件和目标文件的 basename 完全相同。例如，名为 `user2` 的源文件只能写入名为 `user2` 的目标，不能用于覆盖 `user1` 或任意改名文件。
 
-对于受保护的 `convert` 或 `convert-system` 写入，应绑定本次 Dry Run 的源 SHA-256，再加上一种目标条件。已有目标使用 `--expected-target-sha256`；新输出使用 `--expected-target-absent`。两种目标条件互斥。事务会取得锁后再次检查条件，因此新输出 Dry Run 后出现的目标会被拒绝，不会被覆盖。
+对于受保护的 `convert` 写入，应绑定本次 Dry Run 的源 SHA-256，再加上一种目标条件。已有目标使用 `--expected-target-sha256`；新输出使用 `--expected-target-absent`，两种条件互斥。`convert-system` 不允许新目标：写入必须同时提交紧邻 Dry Run 的源 SHA-256 和已有目标 SHA-256。事务会取得锁后再次检查条件。
 
 ## 准确组件组
 
@@ -81,7 +81,7 @@ Dry Run 会把全部选中组件汇总成一个顶层版本判断，可能报告
 | --- | ---: | --- | ---: | --- |
 | `system` | `0x3000` | `system` | `0x3024` | `convert-system` |
 
-只有迁移明确包含共享系统数据时才提供它。该命令只读取和写入明确指定的 `system` 路径，不会改变任何 `user#` 槽位。该组件承载管家画廊/动画解锁记录及其他共享设置；不提供它时会保持当前 Cemu `system` 不变，因此只转换核心槽位不能补齐缺失的画廊记录。
+只有迁移明确包含管家画廊/动画记录时才提供它。`system` 由三个角色槽位共享，还包含不属于当前角色的设置，因此命令必须同时接收 3DS 源文件和已存在、已初始化的 Cemu 目标。它会识别 `0x3000` 的 3DS profile 与 `0x3024` 的 Cemu profile，只对已确认的画廊/动画标记范围（Cemu 文件偏移 `0x68..0x77`）逐位取并集，并保留 Cemu 头和其他全部目标字节。目标不存在或格式错误时会拒绝执行。不运行该事务会保持 Cemu `system` 不变，因此只转换核心槽位不能补齐缺失的画廊记录。
 
 ### 可选的共享 ExtData
 
@@ -153,7 +153,7 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 | `inspect-events <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `convert <user#> --output <same user#>` | 源槽位；只有安装时才读取已有目标和旧事务记录 | 无 | 指定目标槽位及下述核心事务文件 |
 | `repair-converted <3DS-user#> --current <Cemu-user#>` | 原始 3DS 槽位、当前 Cemu 槽位；可选完整 3DS/Cemu ExtData 集合 | 无 | 只改变报告中确认需要修复的同名 `user#` 和完整公会名片组，并创建协调 manifest；任务文件保持不变 |
-| `convert-system system --output system` | 源 `system`；只有安装时才读取已有目标和旧事务记录 | 无 | 指定 `system` 及相同模式的事务文件 |
+| `convert-system system --output <已有 Cemu system>` | Dry Run 和写入都会读取 3DS 源 `system` 与已初始化的 Cemu 目标 | 无 | 只把已确认的画廊/动画标记并集合并到指定目标，并创建相同模式的事务文件 |
 | `convert-extras --source-dir ... --output-dir ...` | 全部八个 ExtData 文件 | 无，也不会创建输出目录 | 只写入 `output-dir` 下生成的八个文件 |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | 完整暂存 ExtData 集合及被选中、已初始化的目标组件组 | 无 | 只改变被选中的完整 Cemu 组件组，以及下文一个绑定 manifest 的 ExtData 恢复事务 |
 | `inspect-cec --source-dir ... [--target cec] [--source-slot user#]` | CEC `InBox___` 和 `OutBox__`；可选 `cec` 和可选用户槽位 | 无 | 不适用 |
