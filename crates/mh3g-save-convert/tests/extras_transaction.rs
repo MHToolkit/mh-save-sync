@@ -582,7 +582,7 @@ impl ExtraFileOperations for BackupCollision {
         #[cfg(windows)]
         {
             let _ = (&self.collided, path, bytes);
-            return StdExtraFileOperations.write_new_file(path, bytes);
+            StdExtraFileOperations.write_new_file(path, bytes)
         }
 
         #[cfg(not(windows))]
@@ -650,7 +650,7 @@ impl ExtraFileOperations for PanicAfterFirstBackup {
         #[cfg(windows)]
         {
             let _ = (&self.backups, path, bytes);
-            return StdExtraFileOperations.write_new_file(path, bytes);
+            StdExtraFileOperations.write_new_file(path, bytes)
         }
 
         #[cfg(not(windows))]
