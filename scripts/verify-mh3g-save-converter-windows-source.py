@@ -114,6 +114,9 @@ def verify_local_packaging_script() -> None:
         "[switch]$Bootstrap",
         "winget",
         "vswhere.exe",
+        "Get-VisualStudioCandidateInstallations",
+        "Test-VisualStudioCppInstallation",
+        "Wait-VisualStudioCppInstallation",
         "Get-AnyVisualStudioInstallation",
         "setup.exe",
         "--installPath",
@@ -144,6 +147,7 @@ def verify_local_packaging_script() -> None:
         "WindowsAppSDKSelfContained=true",
         "PublishSingleFile=true",
         "IncludeAllContentForSelfExtract=true",
+        "-p:Version=$converterVersion",
         "Publish-PortableExecutable",
         "Build-InstallerExecutable",
         "MH3GSaveConverter-Portable-x64.exe",
@@ -225,6 +229,7 @@ def verify_local_packaging_script() -> None:
     for expected in (
         "-p:PublishSingleFile=true",
         "-p:IncludeAllContentForSelfExtract=true",
+        "-p:Version=$Version",
         "mh3g-save-convert.exe",
         "finally",
         "Remove-Item -LiteralPath $embeddedSidecar",
@@ -258,6 +263,31 @@ def verify_local_packaging_script() -> None:
     require(
         'Install-WithWinget -Id "Rustlang.Rustup" -AcceptedExitCodes @(0, -1978335189)' in rust_bootstrap,
         "Rustup bootstrap must treat WinGet's installed/no-update result as non-fatal",
+    )
+    visual_studio_detection = script.split("function Get-VisualStudioCandidateInstallations", 1)[1].split(
+        "function Get-VisualStudioInstallerPath", 1
+    )[0]
+    for expected in (
+        '"Microsoft.VisualStudio.Component.VC.Tools.x86.x64"',
+        "-all -products * -property installationPath",
+        '"VC\\Tools\\MSVC"',
+        '"bin\\$hostArchitecture\\x64\\cl.exe"',
+        '"bin\\$hostArchitecture\\x64\\link.exe"',
+        "[int]$Attempts = 12",
+        "[int]$DelaySeconds = 5",
+        "Start-Sleep -Seconds $DelaySeconds",
+    ):
+        require(expected in visual_studio_detection, f"Windows MSVC detection is missing {expected}")
+    require(
+        "| Select-Object -First 1" not in visual_studio_detection,
+        "vswhere must be allowed to finish before LASTEXITCODE is inspected",
+    )
+    msvc_initialization = script.split("function Initialize-MsvcBuildEnvironment", 1)[1].split(
+        "function Assert-StageWithinArtifacts", 1
+    )[0]
+    require(
+        "$installation = Wait-VisualStudioCppInstallation" in msvc_initialization,
+        "MSVC initialization must tolerate bounded Visual Studio registration delay",
     )
     # WinGet can retain Rustlang.Rustup's installed registration after the
     # current user's rustup/cargo proxy payload has disappeared.  A normal
@@ -385,6 +415,41 @@ def main() -> int:
         require(expected in bridge, f"argv/JSON bridge is missing {expected}")
     require("startInfo.Arguments" not in bridge, "CLI bridge must not build a command-string argument list")
     require("cmd.exe" not in bridge and "powershell" not in bridge.lower(), "CLI bridge must not invoke a shell")
+
+    update_service = read("Services/GitHubUpdateService.cs")
+    for expected in (
+        "https://api.github.com/repos/MHToolkit/mh-save-sync/releases/latest",
+        "https://github.com/MHToolkit/mh-save-sync/releases/latest",
+        "https://github.com/MHToolkit/mh-save-sync/releases.atom",
+        "application/vnd.github+json",
+        "application/atom+xml",
+        "X-GitHub-Api-Version",
+        "MH3GSaveConverter/",
+        "TimeSpan.FromSeconds(8)",
+        "MHToolkit/mh-save-sync/releases/",
+        "AssemblyInformationalVersionAttribute",
+        "FetchFromWebFeedAsync",
+        "FetchFromApiAsync",
+        "RangeHeaderValue(0, 0)",
+        "HttpCompletionOption.ResponseHeadersRead",
+        "XDocument.Load",
+        "DtdProcessing.Prohibit",
+    ):
+        require(expected in update_service, f"Windows update service is missing {expected}")
+    require(
+        update_service.index("FetchFromWebFeedAsync(cancellationToken)")
+        < update_service.index("FetchFromApiAsync(cancellationToken)"),
+        "Windows update checks must avoid anonymous API quotas by preferring the official release page/feed",
+    )
+    update_store = read("Services/UpdateCheckPreferenceStore.cs")
+    for expected in (
+        "update-check.json",
+        "ShouldCheckToday",
+        "MarkAttempt",
+        '"yyyy-MM-dd"',
+        "LocalApplicationData",
+    ):
+        require(expected in update_store, f"Windows daily update gate is missing {expected}")
 
     launcher = (ROOT / "scripts" / "mh3g-windows-launcher.ps1").read_text(encoding="utf-8")
     require(
@@ -550,6 +615,16 @@ def main() -> int:
     require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
     require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
     require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")
+    for expected in (
+        "RootGrid_Loaded",
+        "About_Click",
+        "CheckForUpdatesAsync(manual: false)",
+        "_updateCheckStore.MarkAttempt();",
+        "ShowUpdateAvailableAsync",
+        "ProcessStartInfo(release.HtmlUrl)",
+        "UseShellExecute = true",
+    ):
+        require(expected in code_behind, f"WinUI update-check flow is missing {expected}")
 
     cec_write = workflow.split("public async Task WriteCecAsync()", 1)[1].split(
         "public async Task RollbackCecAsync()", 1
@@ -764,6 +839,11 @@ def main() -> int:
         "Optional ExtData",
         "可选 ExtData",
         "ExtDataInstallUnavailable",
+        "About & Updates",
+        "关于与更新",
+        "Check for Updates",
+        "检查更新",
+        "UpdateNetworkNote",
     ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")

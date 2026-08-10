@@ -32,6 +32,12 @@ struct ComponentSelectionView: View {
                         ) {
                             chooseSystemTarget()
                         }
+                        Label(
+                            ConverterCopy.text("Components.SystemWarning", language: language),
+                            systemImage: "exclamationmark.shield"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                     }
                     } footer: {
                         Text(ConverterCopy.text("Components.SystemFooter", language: language))

@@ -13,7 +13,7 @@ use mh3g_save_convert::{
     cec::{CEMU_HEADER_SIZE, CEMU_RECORD_AREA_OFFSET, empty_cemu_cec},
     converter::{
         convert_3ds_system_to_cemu_named, convert_3ds_to_cemu_named,
-        convert_external_component_to_cemu_named,
+        convert_external_component_to_cemu_named, merge_3ds_system_gallery_into_cemu_named,
     },
     profile::{JP_3DS_HEADER, JP_CEMU_HEADER, build_jp_cemu_header},
 };
@@ -95,6 +95,16 @@ fn system_fixture(temp: &TempDir) -> PathBuf {
     let path = directory.join("system");
     let mut bytes = vec![0_u8; THREE_DS_SYSTEM_SIZE];
     bytes[..4].copy_from_slice(&[0x2B, 0, 0, 0]);
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+fn cemu_system_fixture(temp: &TempDir) -> PathBuf {
+    let path = target_slot(temp, "system");
+    let mut bytes = build_jp_cemu_header("system", THREE_DS_SYSTEM_SIZE - JP_3DS_HEADER.len())
+        .unwrap()
+        .to_vec();
+    bytes.resize(CEMU_SYSTEM_SIZE, 0);
     fs::write(&path, bytes).unwrap();
     path
 }
@@ -1017,37 +1027,50 @@ fn convert_write_rejects_an_expected_target_hash_when_the_target_is_missing() {
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
 
-    for (command, source, target) in [
-        (
-            "convert",
-            slot_fixture(&temp, "user2"),
-            target_slot(&temp, "user2"),
-        ),
-        (
-            "convert-system",
-            system_fixture(&temp),
-            target_slot(&temp, "system"),
-        ),
-    ] {
-        let output = run_output_with_stopped_emulators(&[
-            command.to_owned(),
-            source.to_string_lossy().into_owned(),
-            "--output".to_owned(),
-            target.to_string_lossy().into_owned(),
-            "--expected-target-sha256".to_owned(),
-            "0".repeat(64),
-            "--write".to_owned(),
-        ]);
+    let source = slot_fixture(&temp, "user2");
+    let target = target_slot(&temp, "user2");
+    let output = run_output_with_stopped_emulators(&[
+        "convert".to_owned(),
+        source.to_string_lossy().into_owned(),
+        "--output".to_owned(),
+        target.to_string_lossy().into_owned(),
+        "--expected-target-sha256".to_owned(),
+        "0".repeat(64),
+        "--write".to_owned(),
+    ]);
 
-        assert_eq!(output.status.code(), Some(1), "command: {command}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("target is missing but an expected dry-run SHA-256 was supplied"),
-            "command: {command}"
-        );
-        assert!(!target.exists(), "command: {command}");
-        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
-    }
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("target is missing but an expected dry-run SHA-256 was supplied")
+    );
+    assert!(!target.exists());
+    assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
+}
+
+#[test]
+fn convert_system_requires_an_existing_initialized_cemu_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = target_slot(&temp, "system");
+
+    let output = binary()
+        .args([
+            "convert-system",
+            &source.to_string_lossy(),
+            "--output",
+            &target.to_string_lossy(),
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("requires an existing initialized Wii U/Cemu system target")
+    );
+    assert!(!target.exists());
 }
 
 #[test]
@@ -1185,20 +1208,125 @@ fn convert_dry_run_reports_the_existing_target_hash() {
 }
 
 #[test]
+fn inspect_recognizes_both_3ds_and_cemu_system_profiles() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = cemu_system_fixture(&temp);
+
+    let source_report = run_json(&["inspect".into(), source.to_string_lossy().into_owned()]);
+    let target_report = run_json(&["inspect".into(), target.to_string_lossy().into_owned()]);
+
+    assert_eq!(source_report["profile"], "JpThreeDsSystem");
+    assert_eq!(source_report["size"], THREE_DS_SYSTEM_SIZE);
+    assert_eq!(target_report["profile"], "JpCemuSystem");
+    assert_eq!(target_report["size"], CEMU_SYSTEM_SIZE);
+}
+
+#[test]
+fn convert_system_unions_gallery_flags_and_preserves_every_other_cemu_byte() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = cemu_system_fixture(&temp);
+
+    let mut source_bytes = fs::read(&source).unwrap();
+    source_bytes[4 + 0x40..4 + 0x44].copy_from_slice(&0x0000_0005_u32.to_le_bytes());
+    source_bytes[4 + 0x44..4 + 0x48].copy_from_slice(&0x8000_0000_u32.to_le_bytes());
+    source_bytes[4 + 0x54] = 0xA5;
+    fs::write(&source, &source_bytes).unwrap();
+
+    let mut target_before = fs::read(&target).unwrap();
+    target_before[40 + 0x40..40 + 0x44].copy_from_slice(&0x0000_0002_u32.to_be_bytes());
+    target_before[40 + 0x48..40 + 0x4C].copy_from_slice(&0x0000_0010_u32.to_be_bytes());
+    target_before[40 + 0x54] = 0x5A;
+    fs::write(&target, &target_before).unwrap();
+    let expected =
+        merge_3ds_system_gallery_into_cemu_named(&source_bytes, &target_before, "system").unwrap();
+
+    let dry_run = run_json(&[
+        "convert-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+
+    assert_eq!(dry_run["profile"], "JpCemuSystem");
+    assert_eq!(dry_run["status"], "dry-run");
+    assert_eq!(fs::read(&target).unwrap(), target_before);
+    assert_eq!(
+        dry_run["hashes"]["output"],
+        hex::encode(sha2::Sha256::digest(&expected))
+    );
+    for key in ["source_gallery", "target_gallery_before", "output_gallery"] {
+        assert_eq!(dry_run["hashes"][key].as_str().unwrap().len(), 64);
+    }
+
+    let written = run_json_with_stopped_emulators(&[
+        "convert-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--output".into(),
+        target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        dry_run["hashes"]["source"].as_str().unwrap().into(),
+        "--expected-target-sha256".into(),
+        dry_run["hashes"]["target_before"].as_str().unwrap().into(),
+        "--write".into(),
+    ]);
+
+    assert_eq!(written["status"], "written");
+    assert_eq!(fs::read(&target).unwrap(), expected);
+    assert_eq!(&expected[..40 + 0x40], &target_before[..40 + 0x40]);
+    assert_eq!(&expected[40 + 0x50..], &target_before[40 + 0x50..]);
+}
+
+#[test]
+fn convert_system_write_requires_both_dry_run_hashes() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source = system_fixture(&temp);
+    let target = cemu_system_fixture(&temp);
+
+    for supplied in [None, Some("--expected-source-sha256")] {
+        let mut arguments = vec![
+            "convert-system".to_owned(),
+            source.to_string_lossy().into_owned(),
+            "--output".to_owned(),
+            target.to_string_lossy().into_owned(),
+        ];
+        if let Some(flag) = supplied {
+            arguments.extend([flag.to_owned(), "0".repeat(64)]);
+        }
+        arguments.push("--write".to_owned());
+        let output = run_output_with_stopped_emulators(&arguments);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("requires --expected-source-sha256 and --expected-target-sha256")
+        );
+    }
+}
+
+#[test]
 fn convert_system_write_rejects_a_stale_expected_target_hash_without_replacing_target() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let source = system_fixture(&temp);
-    let target = target_slot(&temp, "system");
-    let previous = vec![0xA5; CEMU_SYSTEM_SIZE];
-    fs::write(&target, &previous).unwrap();
+    let target = cemu_system_fixture(&temp);
+    let previous = fs::read(&target).unwrap();
+    let source_sha256 = hex::encode(sha2::Sha256::digest(fs::read(&source).unwrap()));
 
     let output = run_output_with_stopped_emulators(&[
         "convert-system".into(),
         source.to_string_lossy().into_owned(),
         "--output".into(),
         target.to_string_lossy().into_owned(),
+        "--expected-source-sha256".into(),
+        source_sha256,
         "--expected-target-sha256".into(),
         "0".repeat(64),
         "--write".into(),

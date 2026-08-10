@@ -25,6 +25,20 @@ const CURRENT_EQUIPMENT_START: usize = 31280;
 const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
+// Five independently paired 3DS -> Wii U official-transfer saves agree that
+// this is a contiguous table of 48 endian-sensitive monster-guide records.
+// Leaving the little-endian words untouched makes unlocked guide details look
+// incomplete on Wii U even though the source slot contains them.
+const MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
+const MONSTER_GUIDE_RECORD_COUNT: usize = 48;
+const MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+// These appearance scalars and the adjacent RGBA value are serialized as
+// little-endian four-byte values on 3DS and big-endian values on Wii U. The
+// older static table covered only the scalar at 0x73C4 and the later RGBA
+// values, leaving this subset in mixed byte order.
+const PLAYER_APPEARANCE_SCALAR_OFFSETS: [usize; 3] = [0x73B8, 0x73BC, 0x73C8];
+const PLAYER_APPEARANCE_PACKED_STYLE_OFFSET: usize = 0x73D0;
+const PLAYER_APPEARANCE_RGBA_OFFSET: usize = 0x73D8;
 const FULL_WIDTH_COUNTER_OFFSETS: [usize; 3] = [0x5BA4, 0x5CC8, 0x5CD4];
 const MONSTER_IDS: [usize; 50] = [
     0x0C, 0x0E, 0x2D, 0x03, 0x33, 0x2A, 0x2B, 0x2C, 0x08, 0x36, 0x09, 0x37, 0x2E, 0x49, 0x07, 0x10,
@@ -587,7 +601,7 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
     apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
         source,
         target,
-        ConverterRevision::LATEST,
+        ConverterRevision::LAST_HISTORICAL,
     )
 }
 
@@ -681,7 +695,7 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
         kind,
         source,
         target,
-        ConverterRevision::LATEST,
+        ConverterRevision::LAST_HISTORICAL,
     )
 }
 
@@ -883,12 +897,54 @@ fn apply_shakalaka_companion_corrections(
     Ok(())
 }
 
+/// Apply corrections proven by official-transfer pairs after the last
+/// historically reproducible 0.0.6 conversion semantics.
+///
+/// Keep this separate from `apply_japanese_wiiu_corrections_for_revision`:
+/// compatibility repair must still be able to recreate the exact 0.0.3-
+/// 0.0.6 output before comparing it with the current Wii U save.
+fn apply_current_official_transfer_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for record in 0..MONSTER_GUIDE_RECORD_COUNT {
+        copy_reversed(
+            source,
+            target,
+            MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE,
+            MONSTER_GUIDE_RECORD_STRIDE,
+        )?;
+    }
+
+    for offset in PLAYER_APPEARANCE_SCALAR_OFFSETS {
+        copy_reversed(source, target, offset, 4)?;
+    }
+
+    // 0x73D0 is not one u32: the leading style ID is a u16 while the final
+    // two bytes are packed selectors. Reassert that field boundary after the
+    // historical blanket four-byte transform.
+    copy_reversed(source, target, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET, 2)?;
+    target[PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 2..PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 4]
+        .copy_from_slice(
+            &source[PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 2
+                ..PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 4],
+        );
+    copy_reversed(source, target, PLAYER_APPEARANCE_RGBA_OFFSET, 4)?;
+
+    Ok(())
+}
+
 /// Complete the statically recovered Wii U record corrections.
 pub fn apply_japanese_wiiu_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
-    apply_japanese_wiiu_corrections_for_revision(source, target, ConverterRevision::LATEST)
+    apply_japanese_wiiu_corrections_for_revision(
+        source,
+        target,
+        ConverterRevision::LAST_HISTORICAL,
+    )?;
+    apply_current_official_transfer_corrections(source, target)
 }
 
 pub(crate) fn apply_japanese_wiiu_corrections_for_revision(
@@ -1002,11 +1058,15 @@ mod tests {
     };
 
     use super::{
-        EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE, MONSTER_IDS,
-        QUEST_COMPLETION_START, SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
-        apply_japanese_wiiu_corrections, apply_japanese_wiiu_guild_card_slot_corrections,
-        apply_monster_discovery,
+        EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE, MONSTER_GUIDE_RECORD_COUNT,
+        MONSTER_GUIDE_RECORD_START, MONSTER_GUIDE_RECORD_STRIDE, MONSTER_IDS,
+        PLAYER_APPEARANCE_PACKED_STYLE_OFFSET, PLAYER_APPEARANCE_RGBA_OFFSET,
+        PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START, SECOND_RGBA_OFFSET,
+        apply_arena_records, apply_endian_swaps, apply_japanese_wiiu_corrections,
+        apply_japanese_wiiu_corrections_for_revision,
+        apply_japanese_wiiu_guild_card_slot_corrections, apply_monster_discovery,
     };
+    use crate::revision::ConverterRevision;
 
     #[test]
     fn transforms_endian_swaps_reverse_declared_spans_only() {
@@ -1140,6 +1200,114 @@ mod tests {
                 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x05, 0x0c, 0x00, 0x00, 0x00, 0x64, 0x00, 0x01,
                 0x34, 0x12,
             ]
+        );
+    }
+
+    #[test]
+    fn japanese_wiiu_corrections_preserve_signed_charm_points_as_raw_i8_bytes() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[EQUIPMENT_BOX_START..EQUIPMENT_BOX_START + 16].copy_from_slice(&[
+            0x06, 0x03, 0x34, 0x12, 0x13, 0xF6, 0x20, 0x05, 0x34, 0x12, 0x78, 0x56, 0xBC, 0x9A,
+            0xAA, 0x55,
+        ]);
+        let mut target = source.clone();
+
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(
+            &target[EQUIPMENT_BOX_START..EQUIPMENT_BOX_START + 16],
+            &[
+                0x06, 0x03, 0x12, 0x34, 0x13, 0xF6, 0x20, 0x05, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC,
+                0xAA, 0x55,
+            ]
+        );
+        assert_eq!(target[EQUIPMENT_BOX_START + 5] as i8, -10);
+        assert_eq!(target[EQUIPMENT_BOX_START + 7] as i8, 5);
+    }
+
+    #[test]
+    fn current_corrections_swap_every_official_monster_guide_record() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
+            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
+            let value = 0x1020_3000_u32 + record as u32;
+            source[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        source[MONSTER_GUIDE_RECORD_START - 1] = 0x5A;
+        source[MONSTER_GUIDE_RECORD_START
+            + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE] = 0xA5;
+
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
+            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
+            assert_eq!(
+                &current[offset..offset + 4],
+                &source[offset..offset + 4]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                "monster-guide record {record}"
+            );
+            assert_eq!(
+                &historical[offset..offset + 4],
+                &source[offset..offset + 4],
+                "0.0.6 replay must remain byte-identical"
+            );
+        }
+        assert_eq!(
+            current[MONSTER_GUIDE_RECORD_START - 1],
+            historical[MONSTER_GUIDE_RECORD_START - 1]
+        );
+        assert_eq!(
+            current[MONSTER_GUIDE_RECORD_START
+                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE],
+            historical[MONSTER_GUIDE_RECORD_START
+                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE]
+        );
+    }
+
+    #[test]
+    fn current_corrections_match_official_appearance_field_boundaries() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        for (index, offset) in PLAYER_APPEARANCE_SCALAR_OFFSETS.into_iter().enumerate() {
+            source[offset..offset + 4].copy_from_slice(&(0.15_f32 + index as f32).to_le_bytes());
+        }
+        source[PLAYER_APPEARANCE_PACKED_STYLE_OFFSET..PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 4]
+            .copy_from_slice(&[0x08, 0x00, 0x08, 0x01]);
+        source[PLAYER_APPEARANCE_RGBA_OFFSET..PLAYER_APPEARANCE_RGBA_OFFSET + 4]
+            .copy_from_slice(&[0xFF, 0xE6, 0xEF, 0xFA]);
+
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        for offset in PLAYER_APPEARANCE_SCALAR_OFFSETS {
+            assert_eq!(
+                &current[offset..offset + 4],
+                &source[offset..offset + 4]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            &current
+                [PLAYER_APPEARANCE_PACKED_STYLE_OFFSET..PLAYER_APPEARANCE_PACKED_STYLE_OFFSET + 4],
+            &[0x00, 0x08, 0x08, 0x01]
+        );
+        assert_eq!(
+            &current[PLAYER_APPEARANCE_RGBA_OFFSET..PLAYER_APPEARANCE_RGBA_OFFSET + 4],
+            &[0xFA, 0xEF, 0xE6, 0xFF]
         );
     }
 

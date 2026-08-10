@@ -19,8 +19,9 @@ use mh3g_save_convert::{
         detect_component_revision, merge_component,
     },
     converter::{
-        EXTERNAL_COMPONENT_NAMES, convert_external_component_to_cemu_named, convert_source_to_cemu,
-        reset_guild_card_component_to_cemu_named,
+        EXTERNAL_COMPONENT_NAMES, SYSTEM_GALLERY_PAYLOAD_RANGE,
+        convert_external_component_to_cemu_named, convert_source_to_cemu,
+        merge_3ds_system_gallery_into_cemu_named, reset_guild_card_component_to_cemu_named,
     },
     events::event_snapshot,
     extras_transaction::{
@@ -33,7 +34,8 @@ use mh3g_save_convert::{
     revision::ConverterRevision,
     transaction::{
         InstallExpectations, existing_target_sha256, install_compatibility_merge_with_expectations,
-        install_with_expectations, manifest_path_for_target, rollback, sha256_hex,
+        install_merged_component_with_expectations, install_with_expectations,
+        manifest_path_for_target, rollback, sha256_hex,
     },
 };
 use serde::Serialize;
@@ -168,7 +170,7 @@ enum Command {
         #[arg(long)]
         manifest: PathBuf,
     },
-    /// Convert the Japanese MH3G 3DS shared system data, dry-running unless --write is given.
+    /// Merge 3DS gallery/movie flags into an existing Wii U/Cemu system file.
     ConvertSystem {
         source: PathBuf,
         #[arg(long)]
@@ -176,13 +178,9 @@ enum Command {
         /// Require the source SHA-256 observed during the preceding Dry Run.
         #[arg(long, requires = "write")]
         expected_source_sha256: Option<String>,
-        /// Require the target SHA-256 observed during the preceding Dry Run.
+        /// Require the existing Wii U/Cemu target SHA-256 from the preceding Dry Run.
         #[arg(long, requires = "write")]
         expected_target_sha256: Option<String>,
-        /// Require the target to remain absent from the preceding Dry Run until
-        /// the transactional write acquires its per-slot lock.
-        #[arg(long, requires = "write", conflicts_with = "expected_target_sha256")]
-        expected_target_absent: bool,
         #[arg(long, conflicts_with = "write")]
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
@@ -626,7 +624,6 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
-                    expected_target_absent,
                     dry_run,
                     write,
                 } => convert_system(
@@ -634,7 +631,6 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                     output,
                     expected_source_sha256,
                     expected_target_sha256,
-                    expected_target_absent,
                     dry_run,
                     write,
                 )?,
@@ -928,26 +924,104 @@ fn convert_system(
     output: PathBuf,
     expected_source_sha256: Option<String>,
     expected_target_sha256: Option<String>,
-    expected_target_absent: bool,
     dry_run: bool,
     write: bool,
 ) -> Result<Report, ConversionError> {
-    convert_component(
-        source,
-        output,
-        HashPreconditions {
-            source_sha256: expected_source_sha256,
-            target_sha256: expected_target_sha256,
-            target_must_be_absent: expected_target_absent,
-        },
-        dry_run,
-        write,
-        ComponentConversionProfile {
-            validate_path: validate_system_path,
-            source: SaveProfile::JpThreeDsSystem,
-            output: SaveProfile::JpCemuSystem,
-        },
-    )
+    debug_assert!(!(dry_run && write));
+    validate_system_path(&source)?;
+    validate_system_path(&output)?;
+    if source.file_name() != output.file_name() {
+        return Err(ConversionError::InvalidSave(
+            "source and output shared-system names must both be system".to_owned(),
+        ));
+    }
+    if !output.exists() {
+        return Err(ConversionError::InvalidSave(format!(
+            "convert-system requires an existing initialized Wii U/Cemu system target so shared data from other slots can be preserved: {}",
+            output.display()
+        )));
+    }
+    if write && (expected_source_sha256.is_none() || expected_target_sha256.is_none()) {
+        return Err(ConversionError::UnsafeInstall(
+            "convert-system --write requires --expected-source-sha256 and --expected-target-sha256 from the immediately preceding Dry Run"
+                .to_owned(),
+        ));
+    }
+
+    let source_bytes = read_file(&source, "reading 3DS system source")?;
+    let source_inspection = inspect_bytes(&source_bytes)?;
+    if source_inspection.profile != SaveProfile::JpThreeDsSystem {
+        return Err(ConversionError::InvalidSave(format!(
+            "unexpected system source profile: {:?}; expected JpThreeDsSystem",
+            source_inspection.profile
+        )));
+    }
+    let target_bytes = read_file(&output, "reading Wii U/Cemu system target")?;
+    let target_inspection = inspect_bytes(&target_bytes)?;
+    if target_inspection.profile != SaveProfile::JpCemuSystem {
+        return Err(ConversionError::InvalidSave(format!(
+            "unexpected system target profile: {:?}; expected JpCemuSystem",
+            target_inspection.profile
+        )));
+    }
+
+    let filename = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| ConversionError::InvalidSave("target filename is invalid".to_owned()))?;
+    let merged = merge_3ds_system_gallery_into_cemu_named(&source_bytes, &target_bytes, filename)?;
+    let merged_inspection = inspect_bytes(&merged)?;
+    let source_gallery_start = 4 + SYSTEM_GALLERY_PAYLOAD_RANGE.start;
+    let source_gallery_end = 4 + SYSTEM_GALLERY_PAYLOAD_RANGE.end;
+    let target_payload_start = target_bytes.len() - mh3g_save_convert::profile::SYSTEM_PAYLOAD_SIZE;
+    let target_gallery_start = target_payload_start + SYSTEM_GALLERY_PAYLOAD_RANGE.start;
+    let target_gallery_end = target_payload_start + SYSTEM_GALLERY_PAYLOAD_RANGE.end;
+
+    let mut report = Report {
+        profile: Some(merged_inspection.profile),
+        size: Some(merged_inspection.size),
+        hashes: BTreeMap::from([
+            ("source".to_owned(), source_inspection.sha256),
+            ("target_before".to_owned(), target_inspection.sha256),
+            ("output".to_owned(), merged_inspection.sha256),
+            (
+                "source_gallery".to_owned(),
+                sha256_hex(&source_bytes[source_gallery_start..source_gallery_end]),
+            ),
+            (
+                "target_gallery_before".to_owned(),
+                sha256_hex(&target_bytes[target_gallery_start..target_gallery_end]),
+            ),
+            (
+                "output_gallery".to_owned(),
+                sha256_hex(&merged[target_gallery_start..target_gallery_end]),
+            ),
+        ]),
+        output: Some(output.clone()),
+        backup: None,
+        manifest: None,
+        status: "dry-run",
+    };
+
+    if write {
+        let manifest_path = manifest_path_for_target(&output)?;
+        let manifest = install_merged_component_with_expectations(
+            &source_bytes,
+            &merged,
+            &output,
+            &manifest_path,
+            InstallExpectations {
+                source_sha256: expected_source_sha256.as_deref(),
+                target_sha256: expected_target_sha256.as_deref(),
+                target_must_be_absent: false,
+            },
+        )?;
+        report.backup = manifest.backup;
+        report.manifest = Some(manifest_path);
+        report.status = "written";
+    }
+
+    Ok(report)
 }
 
 fn convert_component(
@@ -1785,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_system_dry_run_never_creates_the_target_file() {
+    fn convert_system_dry_run_preserves_the_existing_target_file() {
         let temp = tempfile::tempdir().unwrap();
         let source_dir = temp.path().join("source");
         let output_dir = temp.path().join("output");
@@ -1796,14 +1870,21 @@ mod tests {
         let mut bytes = vec![0_u8; THREE_DS_SYSTEM_SIZE];
         bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         fs::write(&source, bytes).unwrap();
+        let mut current = mh3g_save_convert::profile::build_jp_cemu_header(
+            "system",
+            mh3g_save_convert::profile::SYSTEM_PAYLOAD_SIZE,
+        )
+        .unwrap()
+        .to_vec();
+        current.resize(mh3g_save_convert::profile::CEMU_SYSTEM_SIZE, 0);
+        fs::write(&output, &current).unwrap();
 
-        let report =
-            convert_system(source, output.clone(), None, None, false, false, false).unwrap();
+        let report = convert_system(source, output.clone(), None, None, false, false).unwrap();
 
         assert_eq!(report.profile, Some(SaveProfile::JpCemuSystem));
         assert_eq!(report.status, "dry-run");
         assert_eq!(report.output, Some(output.clone()));
-        assert!(!output.exists());
+        assert_eq!(fs::read(output).unwrap(), current);
     }
 
     #[test]

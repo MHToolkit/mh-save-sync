@@ -31,6 +31,23 @@ Normal conversion uses a single-file manifest; compatibility repair uses
 `.mh3g-compatibility-repair-<UUID>.json` and `rollback-repair`. Quit Nemessix,
 Azahar, and Cemu before any write or rollback.
 
+The optional housekeeper gallery/movie migration never creates or replaces a
+shared `system` from the 3DS file alone. Select both the 3DS source `system` and
+an existing initialized Cemu `system`; the converter unions only the known
+gallery/movie flags and preserves every other Cemu byte, including data shared
+by the other character slots.
+
+## Updates
+
+The About & Updates section resolves the latest stable tag through the official
+`MHToolkit/mh-save-sync` GitHub release page and reads its official Atom release
+feed. This path does not consume the shared anonymous GitHub API quota; the
+Release API remains a fallback. The first launch on each local calendar day
+makes at most one silent attempt. A blocked or unavailable GitHub connection
+never blocks the window or any local conversion; manual checks show the error
+and may be retried. When a newer release exists, the app shows its title,
+publication date, release notes, and official release link.
+
 ## Local verification
 
 ```bash

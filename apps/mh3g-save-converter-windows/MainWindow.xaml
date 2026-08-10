@@ -6,7 +6,7 @@
     xmlns:converter="using:MHToolkit.MH3GSaveConverter.Windows.Controls"
     xmlns:models="using:MHToolkit.MH3GSaveConverter.Windows.Models"
     Title="MH3G Save Converter">
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Loaded="RootGrid_Loaded">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -34,6 +34,12 @@
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="{Binding StatusText}" />
                     </Border>
+                    <Button Click="About_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.AboutUpdates}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <SymbolIcon Symbol="Help" />
+                            <TextBlock Text="{Binding Copy.AboutUpdates}" />
+                        </StackPanel>
+                    </Button>
                     <TextBlock Text="{Binding Copy.Language}" VerticalAlignment="Center" Foreground="{StaticResource ConverterSlateBrush}" />
                     <ComboBox x:Name="LanguagePicker" MinWidth="150" SelectionChanged="LanguagePicker_SelectionChanged">
                         <ComboBoxItem Tag="system" Content="{Binding Copy.LanguageSystem}" />
@@ -311,9 +317,11 @@
                 <Border x:Name="OptionalConfigurationAnchor" Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
                     <StackPanel Spacing="16">
                         <ToggleSwitch x:Name="SystemToggle" Header="{Binding Copy.SharedSystem}" IsOn="{Binding IsSystemEnabled, Mode=TwoWay}" Toggled="SystemToggle_Toggled" />
-                        <Grid x:Name="SystemControls" Visibility="Collapsed" ColumnSpacing="20">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="9">
+                        <StackPanel x:Name="SystemControls" Visibility="Collapsed" Spacing="12">
+                            <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.SystemMergeWarning}" />
+                            <Grid ColumnSpacing="20">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="9">
                                 <TextBlock Text="{Binding Copy.SystemSource}" FontWeight="SemiBold" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -326,8 +334,8 @@
                                     <TextBox x:Name="SystemTargetBox" Text="{Binding SystemTargetPath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
                                     <Button Grid.Column="1" Click="ChooseSystemTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
                                 </Grid>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="10">
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="10">
                                 <Button Click="SystemDryRun_Click" IsEnabled="{Binding CanRunSystemDryRun}" HorizontalAlignment="Left" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RunSystemDryRun}" /></Button>
                                 <Button Click="WriteSystem_Click" IsEnabled="{Binding CanWriteSystem}" HorizontalAlignment="Left"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.WriteSystem}" /></StackPanel></Button>
                                 <TextBlock Text="{Binding Copy.SystemManifest}" FontWeight="SemiBold" />
@@ -337,8 +345,9 @@
                                     <Button Grid.Column="1" Click="ChooseSystemRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
                                 </Grid>
                                 <Button Click="RollbackSystem_Click" IsEnabled="{Binding CanRollbackSystem}" HorizontalAlignment="Left" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
-                            </StackPanel>
-                        </Grid>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
 
                         <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
                         <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />

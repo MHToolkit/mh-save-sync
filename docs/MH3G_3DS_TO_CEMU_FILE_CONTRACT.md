@@ -18,7 +18,7 @@ not mix files copied at different times.
 | Requested result | Required 3DS input | Current CLI command | Cemu destination that may change |
 | --- | --- | --- | --- |
 | Character, village/quest/event state, farm, hunting fleet, player data, and the slot-local offline-hunter cache | Exactly one loose `user1`, `user2`, or `user3` file | `convert <user#> --output <same user#>` | That same Cemu `user#` file only |
-| Shared system data | Loose `system` file | `convert-system system --output system` | Cemu `system` only |
+| Shared gallery/movie flags | Loose 3DS `system` plus an existing initialized Cemu `system` baseline | `convert-system system --output <existing Cemu system>` | Only the verified flag range inside Cemu `system`; all other target bytes are preserved |
 | Received/local guild-card data and the card side of offline-hall partners | The complete 3DS extdata `user` directory containing all eight files listed below | `convert-extras --source-dir <extdata user> --output-dir <new empty staging dir>`, then `install-extras --staging-dir <staging> --target-dir <Cemu save dir> --groups guild-cards` | Converted files in staging only until an explicit complete-group transaction installs `card1`, `card2`, `card3`, and `cardbox`, with a manifest and retained prior bytes |
 | Downloaded or created quests | The same complete 3DS extdata `user` directory | `convert-extras`, then `install-extras ... --groups quests` | Converted `quest1` through `quest4` in staging only until an explicit complete-group transaction installs them |
 | StreetPass/Hunter Search cache | Optional 3DS CEC mailbox root with `InBox___/BoxInfo_____` and received message files | `convert-cec --dry-run`, then `convert-cec --write --experimental --expected-source-record-set-sha256 ... --expected-target-sha256 ...` | Cemu `cec` only, plus its transaction artifacts |
@@ -57,12 +57,12 @@ The core slot command requires source and destination basenames to match.  For
 example, a source called `user2` can write only a destination called `user2`;
 it cannot be used to overwrite `user1` or an arbitrarily renamed file.
 
-For a guarded `convert` or `convert-system` write, bind the Dry Run's source
-SHA-256 plus one target condition. An existing target uses
-`--expected-target-sha256`; a new output uses `--expected-target-absent`.
-Those target conditions are mutually exclusive. The transaction obtains its
-lock and checks the condition again, so a target that appears after a new-output
-Dry Run is refused rather than overwritten.
+For a guarded `convert` write, bind the Dry Run's source SHA-256 plus one target
+condition. An existing target uses `--expected-target-sha256`; a new output
+uses `--expected-target-absent`. Those target conditions are mutually
+exclusive. `convert-system` does not permit a new target: its write requires
+both the source and existing-target SHA-256 from the immediately preceding Dry
+Run. The transaction obtains its lock and checks the condition again.
 
 ## Exact Component Groups
 
@@ -97,11 +97,11 @@ mh3g-save-convert repair-converted <3DS-user#> --current <Cemu-user#> \
 
 Current Cemu data is authoritative for continued gameplay. The operation
 three-way compares complete semantic fields known to differ across 0.0.3
-through 0.0.6. A field is replaced with the 0.0.7 result only when its current
-value still equals the historical output. A value different from both the
-historical and 0.0.7 outputs is preserved as later Wii U progress and reported
-as a conflict. The operation does not blindly merge bytes or rebuild the whole
-Cemu slot.
+through 0.0.6. A field is replaced with the current converter result only when
+its current value still equals the historical output. A value different from
+both the historical and current-converter outputs is preserved as later Wii U
+progress and reported as a conflict. The operation does not blindly merge bytes
+or rebuild the whole Cemu slot.
 
 Omit `--source-extdata-dir` for a core-only repair. Guild-card repair requires
 all eight 3DS ExtData files in that directory and all eight current Cemu files
@@ -129,9 +129,15 @@ second.
 | --- | ---: | --- | ---: | --- |
 | `system` | `0x3000` | `system` | `0x3024` | `convert-system` |
 
-Provide it only when the migration explicitly includes shared system data.
-The command reads and writes only the explicitly named `system` paths; it does
-not alter any `user#` slot.
+Provide it only when the migration explicitly includes the housekeeper
+gallery/movie history. `system` is shared across all three character slots and
+also holds settings that are not owned by the selected slot. The command must
+therefore receive both a 3DS source and an existing initialized Cemu target. It
+recognizes the `0x3000` 3DS and `0x3024` Cemu profiles, bitwise-unions only the
+verified gallery/movie flag range (Cemu file offsets `0x68..0x77`), and
+preserves the Cemu header and every other target byte. A missing or malformed
+Cemu baseline is rejected. Omitting this transaction leaves Cemu `system`
+untouched, so a core-slot conversion alone cannot fill missing gallery entries.
 
 ### Optional Shared Extdata
 
@@ -245,7 +251,7 @@ record import remains explicitly experimental.
 | `inspect-events <user#> [--target <user#>]` | Source and optional target slots | Nothing | N/A |
 | `convert <user#> --output <same user#>` | Source slot; existing target and prior transaction records only when installing | Nothing | Named target slot plus core transaction artifacts below |
 | `repair-converted <3DS-user#> --current <Cemu-user#>` | Original 3DS slot, current Cemu slot, and optional complete 3DS/Cemu ExtData sets | Nothing | Only the same-named `user#` and complete guild-card group fields proven to need repair, plus a coordinator manifest; quest files remain unchanged |
-| `convert-system system --output system` | Source `system`; existing target and prior transaction records only when installing | Nothing | Named `system` plus the same transaction artifact pattern |
+| `convert-system system --output <existing Cemu system>` | 3DS source `system` and existing initialized Cemu target on Dry Run and write | Nothing | Only the verified gallery/movie flag union in the named target, plus the same transaction artifact pattern |
 | `convert-extras --source-dir ... --output-dir ...` | All eight extdata files | Nothing, and no output directory is created | Only the eight generated files under `output-dir` |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | Complete staged ExtData set and selected initialized target group(s) | Nothing | Only the selected complete Cemu group(s), plus one manifest-bound ExtData recovery transaction below |
 | `inspect-cec --source-dir ... [--target cec] [--source-slot user#]` | CEC `InBox___` and `OutBox__`; optional `cec` and optional user slot | Nothing | N/A |

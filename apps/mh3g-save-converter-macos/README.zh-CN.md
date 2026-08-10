@@ -23,6 +23,19 @@ sidecar 并展示 JSON 报告，不在 Swift 中重复实现存档转换。
 使用 `.mh3g-compatibility-repair-<UUID>.json` 并通过 `rollback-repair` 总体回滚。
 执行写入或回滚前必须退出 Nemessix、Azahar 和 Cemu。
 
+可选的管家画廊/动画迁移不会只凭 3DS `system` 新建或整文件覆盖共享
+`system`。必须同时选择 3DS 源 `system` 和已存在、已初始化的 Cemu `system`；
+转换器只合并已知画廊/动画标记，其他 Cemu 字节（包括其他角色槽位共享数据）
+全部保留。
+
+## 更新检查
+
+“关于与更新”会通过 `MHToolkit/mh-save-sync` 官方 GitHub Release 页面确认最新
+正式版 tag，并读取官方 Atom Release feed。该主路径不消耗共享的 GitHub 匿名
+API 配额，Release API 仅作为备用。每个本地自然日首次启动最多静默尝试一次；
+GitHub 无法访问时不会阻塞窗口，也不会影响任何本地转换。手动检查会展示错误并
+允许重试；发现新版本时会显示版本名、发布日期、Release 说明和官方发布链接。
+
 ## 本地验证
 
 ```bash
