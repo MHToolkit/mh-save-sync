@@ -419,14 +419,28 @@ def main() -> int:
     update_service = read("Services/GitHubUpdateService.cs")
     for expected in (
         "https://api.github.com/repos/MHToolkit/mh-save-sync/releases/latest",
+        "https://github.com/MHToolkit/mh-save-sync/releases/latest",
+        "https://github.com/MHToolkit/mh-save-sync/releases.atom",
         "application/vnd.github+json",
+        "application/atom+xml",
         "X-GitHub-Api-Version",
         "MH3GSaveConverter/",
         "TimeSpan.FromSeconds(8)",
         "MHToolkit/mh-save-sync/releases/",
         "AssemblyInformationalVersionAttribute",
+        "FetchFromWebFeedAsync",
+        "FetchFromApiAsync",
+        "RangeHeaderValue(0, 0)",
+        "HttpCompletionOption.ResponseHeadersRead",
+        "XDocument.Load",
+        "DtdProcessing.Prohibit",
     ):
         require(expected in update_service, f"Windows update service is missing {expected}")
+    require(
+        update_service.index("FetchFromWebFeedAsync(cancellationToken)")
+        < update_service.index("FetchFromApiAsync(cancellationToken)"),
+        "Windows update checks must avoid anonymous API quotas by preferring the official release page/feed",
+    )
     update_store = read("Services/UpdateCheckPreferenceStore.cs")
     for expected in (
         "update-check.json",

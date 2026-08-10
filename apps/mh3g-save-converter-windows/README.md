@@ -47,12 +47,14 @@ the exact source files and transaction scope.
 
 ## Updates
 
-The About & Updates dialog can query the latest stable release from the
-official `MHToolkit/mh-save-sync` GitHub Release API. The first launch on each
-local calendar day makes at most one silent attempt. A blocked or unavailable
-GitHub connection never blocks the window or changes a local save; manual
-checks display the failure and can be retried. A newer release dialog includes
-the release title, publication date, notes, and official link.
+The About & Updates dialog resolves the latest stable tag through the official
+`MHToolkit/mh-save-sync` GitHub release page and reads its official Atom release
+feed. This path does not consume the shared anonymous GitHub API quota; the
+Release API remains a fallback. The first launch on each local calendar day
+makes at most one silent attempt. A blocked or unavailable GitHub connection
+never blocks the window or changes a local save; manual checks display the
+failure and can be retried. A newer release dialog includes the release title,
+publication date, notes, and official link.
 
 The package script passes the Rust converter version into both WinUI publish
 forms, so the folder, portable EXE, and installer compare the same real version

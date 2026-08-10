@@ -12,6 +12,8 @@ enum UpdateCheckStatus: Equatable {
 @MainActor
 final class GitHubUpdateChecker: ObservableObject {
     static let releaseEndpoint = URL(string: "https://api.github.com/repos/MHToolkit/mh-save-sync/releases/latest")!
+    static let releaseWebEndpoint = URL(string: "https://github.com/MHToolkit/mh-save-sync/releases/latest")!
+    static let releaseAtomEndpoint = URL(string: "https://github.com/MHToolkit/mh-save-sync/releases.atom")!
     static let lastAttemptDefaultsKey = "MH3GSaveConverter.LastUpdateCheckAttempt"
 
     @Published private(set) var status: UpdateCheckStatus = .idle
@@ -68,21 +70,7 @@ final class GitHubUpdateChecker: ObservableObject {
     private func performCheck(manual: Bool) async {
         status = .checking
         do {
-            var request = URLRequest(url: Self.releaseEndpoint)
-            request.timeoutInterval = 8
-            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-            request.setValue("MH3GSaveConverter/\(safeUserAgentVersion)", forHTTPHeaderField: "User-Agent")
-
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw UpdateCheckError.invalidResponse
-            }
-            guard data.count <= 2 * 1_024 * 1_024 else {
-                throw UpdateCheckError.responseTooLarge
-            }
-
-            let release = try JSONDecoder().decode(GitHubConverterRelease.self, from: data)
+            let release = try await fetchLatestRelease()
             try validate(release: release)
             switch ConverterUpdateDecision.decide(current: currentVersion, latest: release.tagName) {
             case .updateAvailable:
@@ -102,6 +90,78 @@ final class GitHubUpdateChecker: ObservableObject {
         }
     }
 
+    private func fetchLatestRelease() async throws -> GitHubConverterRelease {
+        do {
+            return try await fetchLatestReleaseFromWebFeed()
+        } catch {
+            let webFailure = error.localizedDescription
+            do {
+                return try await fetchLatestReleaseFromAPI()
+            } catch {
+                throw UpdateCheckError.allSourcesUnavailable(
+                    web: webFailure,
+                    api: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func fetchLatestReleaseFromWebFeed() async throws -> GitHubConverterRelease {
+        var latestRequest = configuredRequest(url: Self.releaseWebEndpoint, accept: "text/html")
+        // One byte is enough: URLSession follows GitHub's /releases/latest
+        // redirect, and the final response URL carries the stable tag. This
+        // avoids downloading the full release page.
+        latestRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        let (redirectProbe, latestResponse) = try await session.data(for: latestRequest)
+        guard let latestHTTP = latestResponse as? HTTPURLResponse,
+              latestHTTP.statusCode == 200 || latestHTTP.statusCode == 206,
+              redirectProbe.count <= 2 * 1_024 * 1_024,
+              let stableReleaseURL = latestHTTP.url,
+              GitHubReleaseAtomFeed.isOfficialTagURL(stableReleaseURL)
+        else {
+            throw UpdateCheckError.invalidResponse(source: "GitHub release page")
+        }
+
+        let atomRequest = configuredRequest(url: Self.releaseAtomEndpoint, accept: "application/atom+xml")
+        let (atomData, atomResponse) = try await session.data(for: atomRequest)
+        guard let atomHTTP = atomResponse as? HTTPURLResponse, atomHTTP.statusCode == 200 else {
+            throw UpdateCheckError.invalidResponse(source: "GitHub release feed")
+        }
+        guard atomData.count <= 2 * 1_024 * 1_024 else {
+            throw UpdateCheckError.responseTooLarge(source: "GitHub release feed")
+        }
+        return try GitHubReleaseAtomFeed.stableRelease(
+            from: atomData,
+            expectedReleaseURL: stableReleaseURL
+        )
+    }
+
+    private func fetchLatestReleaseFromAPI() async throws -> GitHubConverterRelease {
+        var request = configuredRequest(url: Self.releaseEndpoint, accept: "application/vnd.github+json")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let status = (response as? HTTPURLResponse)?.statusCode
+            throw UpdateCheckError.invalidResponse(
+                source: status.map { "GitHub Release API (HTTP \($0))" } ?? "GitHub Release API"
+            )
+        }
+        guard data.count <= 2 * 1_024 * 1_024 else {
+            throw UpdateCheckError.responseTooLarge(source: "GitHub Release API")
+        }
+        let release = try JSONDecoder().decode(GitHubConverterRelease.self, from: data)
+        try validate(release: release)
+        return release
+    }
+
+    private func configuredRequest(url: URL, accept: String) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        request.setValue("MH3GSaveConverter/\(safeUserAgentVersion)", forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
     private func validate(release: GitHubConverterRelease) throws {
         guard release.isOfficialStableRelease else {
             throw UpdateCheckError.invalidRelease
@@ -118,21 +178,24 @@ final class GitHubUpdateChecker: ObservableObject {
 }
 
 private enum UpdateCheckError: LocalizedError {
-    case invalidResponse
-    case responseTooLarge
+    case invalidResponse(source: String)
+    case responseTooLarge(source: String)
     case invalidRelease
     case invalidVersion
+    case allSourcesUnavailable(web: String, api: String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidResponse:
-            "GitHub Release API returned an unexpected response."
-        case .responseTooLarge:
-            "GitHub Release API response exceeded the accepted size."
+        case let .invalidResponse(source):
+            "\(source) returned an unexpected response."
+        case let .responseTooLarge(source):
+            "\(source) response exceeded the accepted size."
         case .invalidRelease:
             "GitHub Release metadata did not match the official MHToolkit repository."
         case .invalidVersion:
             "The current or latest release version could not be compared safely."
+        case let .allSourcesUnavailable(web, api):
+            "GitHub release page/feed and API were unavailable. Web: \(web) API: \(api)"
         }
     }
 }

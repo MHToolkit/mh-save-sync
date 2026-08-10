@@ -48,6 +48,58 @@ final class UpdateCheckingTests: XCTestCase {
         XCTAssertFalse(spoofed.isOfficialStableRelease)
     }
 
+    func testAtomFeedConvertsTheExpectedStableReleaseAndPlainTextNotes() throws {
+        let feed = #"""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <updated>2026-08-10T00:00:00Z</updated>
+            <link rel="alternate" type="text/html" href="https://github.com/MHToolkit/mh-save-sync/releases/tag/v0.0.17"/>
+            <title>MH3G 0.0.17</title>
+            <content type="html">&lt;h2&gt;Fixes&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Rate-limit fallback&lt;/li&gt;&lt;/ul&gt;</content>
+          </entry>
+        </feed>
+        """#.data(using: .utf8)!
+        let expectedURL = try XCTUnwrap(
+            URL(string: "https://github.com/MHToolkit/mh-save-sync/releases/tag/v0.0.17")
+        )
+
+        let release = try GitHubReleaseAtomFeed.stableRelease(
+            from: feed,
+            expectedReleaseURL: expectedURL
+        )
+
+        XCTAssertEqual(release.tagName, "v0.0.17")
+        XCTAssertEqual(release.name, "MH3G 0.0.17")
+        XCTAssertEqual(release.body, "Fixes\n• Rate-limit fallback")
+        XCTAssertEqual(release.publishedAt, "2026-08-10T00:00:00Z")
+        XCTAssertTrue(release.isOfficialStableRelease)
+    }
+
+    func testAtomFeedRequiresTheExactOfficialTagURLAndMatchingEntry() throws {
+        let feed = #"""
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <link rel="alternate" href="https://github.com/MHToolkit/mh-save-sync/releases/tag/v0.0.17"/>
+            <title>v0.0.17</title>
+          </entry>
+        </feed>
+        """#.data(using: .utf8)!
+        let spoofed = try XCTUnwrap(
+            URL(string: "https://github.com.evil.example/MHToolkit/mh-save-sync/releases/tag/v0.0.17")
+        )
+        let missing = try XCTUnwrap(
+            URL(string: "https://github.com/MHToolkit/mh-save-sync/releases/tag/v0.0.18")
+        )
+
+        XCTAssertThrowsError(
+            try GitHubReleaseAtomFeed.stableRelease(from: feed, expectedReleaseURL: spoofed)
+        )
+        XCTAssertThrowsError(
+            try GitHubReleaseAtomFeed.stableRelease(from: feed, expectedReleaseURL: missing)
+        )
+    }
+
     func testDailyGateRunsOnlyOncePerLocalCalendarDay() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))

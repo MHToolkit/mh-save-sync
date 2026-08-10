@@ -103,6 +103,148 @@ public enum ConverterUpdateDecision: Equatable, Sendable {
     }
 }
 
+public enum GitHubReleaseAtomFeed {
+    public static func stableRelease(from data: Data, expectedReleaseURL: URL) throws -> GitHubConverterRelease {
+        guard isOfficialTagURL(expectedReleaseURL),
+              let tagName = expectedReleaseURL.lastPathComponent.removingPercentEncoding,
+              ConverterSemanticVersion(tagName) != nil
+        else {
+            throw GitHubReleaseAtomFeedError.invalidReleaseURL
+        }
+
+        let delegate = GitHubReleaseAtomParser()
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        guard parser.parse(), parser.parserError == nil else {
+            throw GitHubReleaseAtomFeedError.invalidXML
+        }
+        guard let entry = delegate.entries.first(where: {
+            $0.link?.absoluteString == expectedReleaseURL.absoluteString
+        }) else {
+            throw GitHubReleaseAtomFeedError.releaseNotFound
+        }
+
+        let release = GitHubConverterRelease(
+            tagName: tagName,
+            name: entry.title.nilIfBlank,
+            body: plainText(fromHTML: entry.content).nilIfBlank,
+            htmlURL: expectedReleaseURL,
+            publishedAt: entry.updated.nilIfBlank,
+            draft: false,
+            prerelease: false
+        )
+        guard release.isOfficialStableRelease else {
+            throw GitHubReleaseAtomFeedError.invalidReleaseURL
+        }
+        return release
+    }
+
+    public static func isOfficialTagURL(_ url: URL) -> Bool {
+        url.scheme == "https"
+            && url.host?.lowercased() == "github.com"
+            && url.query == nil
+            && url.fragment == nil
+            && url.path.hasPrefix("/MHToolkit/mh-save-sync/releases/tag/")
+            && url.pathComponents.count == 6
+    }
+
+    private static func plainText(fromHTML html: String) -> String {
+        var text = html.replacingOccurrences(
+            of: #"(?i)<li(?:\s[^>]*)?>"#,
+            with: "• ",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?i)<br\s*/?>|</li\s*>|</p\s*>|</h[1-6]\s*>|</blockquote\s*>|</pre\s*>"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+        return text
+            .split(whereSeparator: \Character.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            .prefix(32_000)
+            .description
+    }
+}
+
+private enum GitHubReleaseAtomFeedError: Error {
+    case invalidReleaseURL
+    case invalidXML
+    case releaseNotFound
+}
+
+private final class GitHubReleaseAtomParser: NSObject, XMLParserDelegate {
+    struct Entry {
+        var title = ""
+        var updated = ""
+        var content = ""
+        var link: URL?
+    }
+
+    private(set) var entries: [Entry] = []
+    private var currentEntry: Entry?
+    private var capturedElement: String?
+    private var characters = ""
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        if elementName == "entry" {
+            currentEntry = Entry()
+            return
+        }
+        guard currentEntry != nil else { return }
+        if elementName == "link",
+           attributeDict["rel"] == "alternate",
+           let href = attributeDict["href"],
+           let url = URL(string: href)
+        {
+            currentEntry?.link = url
+        } else if elementName == "title" || elementName == "updated" || elementName == "content" {
+            capturedElement = elementName
+            characters = ""
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard capturedElement != nil else { return }
+        characters += string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        if elementName == capturedElement {
+            switch elementName {
+            case "title":
+                currentEntry?.title = characters.trimmingCharacters(in: .whitespacesAndNewlines)
+            case "updated":
+                currentEntry?.updated = characters.trimmingCharacters(in: .whitespacesAndNewlines)
+            case "content":
+                currentEntry?.content = characters
+            default:
+                break
+            }
+            capturedElement = nil
+            characters = ""
+        }
+        if elementName == "entry", let currentEntry {
+            entries.append(currentEntry)
+            self.currentEntry = nil
+        }
+    }
+}
+
 public enum DailyUpdateCheckGate {
     public static func shouldCheck(
         lastAttempt: Date?,
@@ -115,6 +257,11 @@ public enum DailyUpdateCheckGate {
 }
 
 private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func trimmingPrefix(_ prefix: Character) -> String {
         first == prefix ? String(dropFirst()) : self
     }

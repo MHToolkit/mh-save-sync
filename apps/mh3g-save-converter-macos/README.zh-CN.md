@@ -30,10 +30,11 @@ sidecar 并展示 JSON 报告，不在 Swift 中重复实现存档转换。
 
 ## 更新检查
 
-“关于与更新”可以查询 `MHToolkit/mh-save-sync` 官方 GitHub Release API 的最新
-正式版。每个本地自然日首次启动最多静默尝试一次；GitHub 无法访问时不会阻塞
-窗口，也不会影响任何本地转换。手动检查会展示错误并允许重试；发现新版本时会
-显示版本名、发布日期、Release 说明和官方发布链接。
+“关于与更新”会通过 `MHToolkit/mh-save-sync` 官方 GitHub Release 页面确认最新
+正式版 tag，并读取官方 Atom Release feed。该主路径不消耗共享的 GitHub 匿名
+API 配额，Release API 仅作为备用。每个本地自然日首次启动最多静默尝试一次；
+GitHub 无法访问时不会阻塞窗口，也不会影响任何本地转换。手动检查会展示错误并
+允许重试；发现新版本时会显示版本名、发布日期、Release 说明和官方发布链接。
 
 ## 本地验证
 
