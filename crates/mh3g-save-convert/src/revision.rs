@@ -24,7 +24,11 @@ pub enum ConverterRevision {
 
 impl ConverterRevision {
     pub const ALL: [Self; 4] = [Self::V0_0_3, Self::V0_0_4, Self::V0_0_5, Self::V0_0_6];
-    pub const LATEST: Self = Self::V0_0_6;
+    /// Last released historical algorithm that compatibility repair can replay.
+    ///
+    /// This is intentionally not named `LATEST`: current conversion may layer
+    /// newer corrections on top while keeping 0.0.3-0.0.6 byte-reproducible.
+    pub const LAST_HISTORICAL: Self = Self::V0_0_6;
 
     pub const fn label(self) -> &'static str {
         match self {

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ConversionError,
     converter::{
-        convert_3ds_to_cemu_named_for_revision,
+        convert_3ds_to_cemu_named, convert_3ds_to_cemu_named_for_revision,
+        convert_external_component_to_cemu_named,
         convert_external_component_to_cemu_named_for_revision,
         validate_cemu_external_component_named,
     },
@@ -31,6 +32,12 @@ const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
+const USER_MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
+const USER_MONSTER_GUIDE_RECORD_COUNT: usize = 48;
+const USER_MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+const USER_APPEARANCE_SCALAR_OFFSETS: [usize; 3] = [0x73B8, 0x73BC, 0x73C8];
+const USER_APPEARANCE_PACKED_STYLE_OFFSET: usize = 0x73D0;
+const USER_APPEARANCE_RGBA_OFFSET: usize = 0x73D8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -101,9 +108,7 @@ pub fn detect_component_revision(
     filename: &str,
 ) -> Result<RevisionDetection, ConversionError> {
     let expected = historical_outputs(source, current, filename)?;
-    let latest = expected
-        .last()
-        .expect("historical revision list is non-empty");
+    let latest = convert_component_current(source, filename)?;
     let fields = repair_fields(filename)?;
     if fields.is_empty() {
         return Ok(RevisionDetection {
@@ -136,7 +141,7 @@ pub fn detect_component_revision(
             for field in &fields {
                 let current_field = field_bytes(current, field);
                 let candidate_field = field_bytes(candidate, field);
-                let latest_field = field_bytes(latest, field);
+                let latest_field = field_bytes(&latest, field);
                 if current_field == candidate_field {
                     score.matching_fields += 1;
                     if candidate_field != latest_field {
@@ -175,8 +180,8 @@ pub fn detect_component_revision(
         let tied_merges_identical = best.windows(2).all(|pair| {
             let left = &expected[revision_index(pair[0])];
             let right = &expected[revision_index(pair[1])];
-            merged_candidate_bytes(current, left, latest, &fields)
-                == merged_candidate_bytes(current, right, latest, &fields)
+            merged_candidate_bytes(current, left, &latest, &fields)
+                == merged_candidate_bytes(current, right, &latest, &fields)
         });
         if tied_merges_identical {
             DetectionConfidence::CompatibleRange
@@ -288,7 +293,7 @@ pub fn merge_component(
 ) -> Result<CompatibilityMerge, ConversionError> {
     validate_component_pair(source, current, filename)?;
     let historical = convert_component_for_revision(source, filename, assumed_revision)?;
-    let latest = convert_component_for_revision(source, filename, ConverterRevision::LATEST)?;
+    let latest = convert_component_current(source, filename)?;
     let fields = repair_fields(filename)?;
     let mut bytes = current.to_vec();
     let mut changes = Vec::new();
@@ -370,6 +375,18 @@ fn convert_component_for_revision(
     }
 }
 
+fn convert_component_current(source: &[u8], filename: &str) -> Result<Vec<u8>, ConversionError> {
+    match filename {
+        "user1" | "user2" | "user3" => convert_3ds_to_cemu_named(source, filename),
+        "card1" | "card2" | "card3" | "cardbox" | "quest1" | "quest2" | "quest3" | "quest4" => {
+            convert_external_component_to_cemu_named(source, filename)
+        }
+        _ => Err(ConversionError::InvalidSave(format!(
+            "unsupported compatibility component: {filename}"
+        ))),
+    }
+}
+
 fn validate_component_pair(
     source: &[u8],
     current: &[u8],
@@ -388,7 +405,7 @@ fn validate_component_pair(
         }
         "card1" | "card2" | "card3" | "cardbox" | "quest1" | "quest2" | "quest3" | "quest4" => {
             // Conversion validates the 3DS side, including its component size.
-            convert_component_for_revision(source, filename, ConverterRevision::LATEST)?;
+            convert_component_current(source, filename)?;
             validate_cemu_external_component_named(current, filename)?;
         }
         _ => {
@@ -419,6 +436,32 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
     let mut fields = Vec::new();
     match filename {
         "user1" | "user2" | "user3" => {
+            for record in 0..USER_MONSTER_GUIDE_RECORD_COUNT {
+                fields.push(FieldSpec {
+                    name: format!("monster-guide-record-{record}"),
+                    offset: header
+                        + USER_MONSTER_GUIDE_RECORD_START
+                        + record * USER_MONSTER_GUIDE_RECORD_STRIDE,
+                    width: USER_MONSTER_GUIDE_RECORD_STRIDE,
+                });
+            }
+            for (index, offset) in USER_APPEARANCE_SCALAR_OFFSETS.into_iter().enumerate() {
+                fields.push(FieldSpec {
+                    name: format!("player-appearance-scalar-{index}"),
+                    offset: header + offset,
+                    width: 4,
+                });
+            }
+            fields.push(FieldSpec {
+                name: "player-appearance-packed-style".to_owned(),
+                offset: header + USER_APPEARANCE_PACKED_STYLE_OFFSET,
+                width: 4,
+            });
+            fields.push(FieldSpec {
+                name: "player-appearance-rgba".to_owned(),
+                offset: header + USER_APPEARANCE_RGBA_OFFSET,
+                width: 4,
+            });
             for record in 0..USER_ARENA_RECORD_COUNT {
                 fields.push(FieldSpec {
                     name: format!("personal-arena-{record}"),
@@ -636,6 +679,41 @@ mod tests {
     }
 
     #[test]
+    fn repairs_new_official_parity_fields_without_reverting_wiiu_progress() {
+        let mut source = source();
+        let source_guide = JP_3DS_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
+        source[source_guide..source_guide + 4].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+        let source_appearance = JP_3DS_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
+        source[source_appearance..source_appearance + 4].copy_from_slice(&[0xFF, 0xE6, 0xEF, 0xFA]);
+        let mut current =
+            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_6)
+                .unwrap();
+        let unrelated = JP_CEMU_HEADER.len() + 0x240;
+        current[unrelated] ^= 0x5A;
+
+        let merged =
+            merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
+        let guide = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
+        let appearance = JP_CEMU_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
+
+        assert_eq!(
+            &merged.bytes[guide..guide + 4],
+            &0x1234_5678_u32.to_be_bytes()
+        );
+        assert_eq!(
+            &merged.bytes[appearance..appearance + 4],
+            &[0xFA, 0xEF, 0xE6, 0xFF]
+        );
+        assert_eq!(merged.bytes[unrelated], current[unrelated]);
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-guide-record-0" && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "player-appearance-rgba" && field.status == MergeFieldStatus::Repaired
+        }));
+    }
+
+    #[test]
     fn detects_each_unmodified_historical_core_output() {
         let source = source();
         for revision in ConverterRevision::ALL {
@@ -669,15 +747,10 @@ mod tests {
     #[test]
     fn reports_unknown_when_every_revision_field_contradicts_all_outputs() {
         let source = source();
-        let outputs = historical_outputs(
-            &source,
-            &convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::LATEST)
-                .unwrap(),
-            "user2",
-        )
-        .unwrap();
+        let latest = convert_component_current(&source, "user2").unwrap();
+        let outputs = historical_outputs(&source, &latest, "user2").unwrap();
         let fields = repair_fields("user2").unwrap();
-        let mut current = outputs.last().unwrap().clone();
+        let mut current = latest.clone();
         for field in &fields {
             let replacement = (0u8..=u8::MAX)
                 .map(|byte| vec![byte; field.width])
@@ -685,8 +758,9 @@ mod tests {
                     outputs
                         .iter()
                         .all(|output| field_bytes(output, field) != candidate)
+                        && field_bytes(&latest, field) != candidate
                 })
-                .expect("four historical values cannot exhaust all byte patterns");
+                .expect("historical and current values cannot exhaust all byte patterns");
             current[field.offset..field.offset + field.width].copy_from_slice(&replacement);
         }
 
@@ -699,9 +773,7 @@ mod tests {
     #[test]
     fn reports_ambiguous_when_current_fields_support_conflicting_revisions() {
         let source = source();
-        let latest =
-            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::LATEST)
-                .unwrap();
+        let latest = convert_component_current(&source, "user2").unwrap();
         let outputs = historical_outputs(&source, &latest, "user2").unwrap();
         let fields = repair_fields("user2").unwrap();
         let mut observed = None;

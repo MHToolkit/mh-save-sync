@@ -160,7 +160,7 @@ child. CEC is a system NAND mailbox, not SD-card ExtData.
 | Data group | Give this exact input to the CLI | Do **not** give it | Required? | Purpose / affected files |
 | --- | --- | --- | --- | --- |
 | Core slot | One explicit `user1`, `user2`, or `user3` file under `title/00040000/00048100/data/00000001/` | The title directory, all slots, ExtData, a ZIP | Yes: choose one slot | Character, story/progress, farm, fleet, local offline-hunter data; writes only the named same-number Cemu `user#` target |
-| Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Shared system data; writes only the named Cemu `system` target |
+| Shared system | One explicit `system` file in the same title savedata directory | The whole title directory, a ZIP | Optional | Housekeeper gallery/movie unlock history and other shared settings; writes only the named Cemu `system` target |
 | Shared ExtData | The complete `extdata/00000000/00000481/user/` directory containing `card1`, `card2`, `card3`, `cardbox`, `quest1`, `quest2`, `quest3`, `quest4` directly inside | The `00000481` parent, `boss/`, a partial set, a ZIP | Optional | Converts all eight files into a new staging directory; a separate guarded `install-extras` transaction can install complete `guild-cards`, `quests`, or both into an initialized Cemu target |
 | StreetPass / Hunter Search CEC | The exact `CEC/00048100/` directory containing `InBox___` | SD-card ExtData, the `InBox___` child alone, a ZIP | Optional and experimental | Reads received raw StreetPass records and can write only Cemu `cec` |
 
@@ -191,6 +191,22 @@ core slot conversion. In a native workbench, selecting that folder with
 through `quest4`, pass that folder only to `convert-extras`. If it contains an
 extra wrapper directory, enter it first; the expected filenames must be
 immediate children of the CLI path or the narrow GUI selection described above.
+
+If the 3DS `system` file is omitted, a core `user#` conversion cannot migrate
+the housekeeper's gallery/movie unlock history. The converter deliberately
+leaves any existing Cemu `system` unchanged; use the separate guarded
+`convert-system` transaction when those shared records are part of the move.
+
+### Legacy Wii U save-editor caveat
+
+Talisman skill points are signed one-byte values in the equipment record. Some
+older Wii U editors read them as unsigned bytes, so a legitimate `-5` appears
+as `251`. The converter preserves the raw signed byte and converts only the
+record fields whose byte order actually differs. Some legacy armor writers
+also rebuild an armor header without preserving its RGB bytes; editing armor
+with such a tool can turn its pigment black even when the converted talisman is
+valid. These editor behaviors must not be "fixed" by clamping or rewriting
+otherwise valid converted equipment records.
 
 ### Before you write: paths, inspection, and dry-run
 
@@ -375,7 +391,7 @@ mh3g-save-convert repair-converted <original-3DS-user#> --current <current-Cemu-
 Use this command when a save was converted with 0.0.3 through 0.0.6 and then
 played further on Wii U/Cemu. It does not replace the current save with the old
 3DS state. For each known historical conversion field it compares the older
-expected value, the current value, and the 0.0.7 expected value. Only fields
+expected value, the current value, and the current converter's expected value. Only fields
 still equal to the old result are repaired; complete fields changed on Wii U
 are preserved and reported as conflicts. Current HR, equipment, materials,
 storage, quest progress, farm, fleet, and other later gameplay therefore remain
@@ -386,8 +402,8 @@ The native macOS and Windows workbenches may accept a file or its direct parent
 directory, but they still resolve and pass one exact file to the CLI. To repair
 guild cards, `--source-extdata-dir` must be the complete 3DS
 `.../00000481/user` directory with all eight source files, and the current
-`user#` parent must contain all eight same-named Cemu files. Version 0.0.7
-field-repairs `user#`, `card1`, `card2`, `card3`, and `cardbox`;
+`user#` parent must contain all eight same-named Cemu files. The current
+converter field-repairs `user#`, `card1`, `card2`, `card3`, and `cardbox`;
 `quest1` through `quest4` participate in set validation but remain
 byte-identical. `system`, `cec`, `phrase1` through `phrase3`, and unknown files
 are not read or written by this command.

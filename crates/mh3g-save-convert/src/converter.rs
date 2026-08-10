@@ -6,7 +6,8 @@ use crate::{
     },
     revision::ConverterRevision,
     transforms::{
-        GuildCardBodyKind, apply_japanese_wiiu_corrections_for_revision,
+        GuildCardBodyKind, apply_japanese_wiiu_corrections,
+        apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_corrections_for_revision,
     },
 };
@@ -68,7 +69,7 @@ pub fn convert_external_component_to_cemu_named(
     convert_external_component_to_cemu_named_for_revision(
         source,
         filename,
-        ConverterRevision::LATEST,
+        ConverterRevision::LAST_HISTORICAL,
     )
 }
 
@@ -152,13 +153,23 @@ pub fn convert_3ds_to_cemu_named(
     source: &[u8],
     filename: &str,
 ) -> Result<Vec<u8>, ConversionError> {
-    convert_3ds_to_cemu_named_for_revision(source, filename, ConverterRevision::LATEST)
+    convert_3ds_to_cemu_named_with(source, filename, apply_japanese_wiiu_corrections)
 }
 
 pub(crate) fn convert_3ds_to_cemu_named_for_revision(
     source: &[u8],
     filename: &str,
     revision: ConverterRevision,
+) -> Result<Vec<u8>, ConversionError> {
+    convert_3ds_to_cemu_named_with(source, filename, |source_payload, payload| {
+        apply_japanese_wiiu_corrections_for_revision(source_payload, payload, revision)
+    })
+}
+
+fn convert_3ds_to_cemu_named_with(
+    source: &[u8],
+    filename: &str,
+    corrections: impl FnOnce(&[u8], &mut [u8]) -> Result<(), ConversionError>,
 ) -> Result<Vec<u8>, ConversionError> {
     let inspection = inspect_bytes(source)?;
     if inspection.profile != SaveProfile::JpThreeDs {
@@ -170,7 +181,7 @@ pub(crate) fn convert_3ds_to_cemu_named_for_revision(
 
     let source_payload = &source[JP_3DS_HEADER.len()..];
     let mut payload = source_payload.to_vec();
-    apply_japanese_wiiu_corrections_for_revision(source_payload, &mut payload, revision)?;
+    corrections(source_payload, &mut payload)?;
 
     let mut output = Vec::with_capacity(CEMU_SIZE);
     output.extend_from_slice(&build_jp_cemu_header(filename, PAYLOAD_SIZE)?);
@@ -182,9 +193,9 @@ pub(crate) fn convert_3ds_to_cemu_named_for_revision(
 
 /// Convert the Japanese MH3G 3DS shared system data into the Cemu container.
 ///
-/// The `system` payload is already serialized in the same byte order in both
-/// versions. Unlike character slots, this conversion only replaces the outer
-/// save container header.
+/// The first 48 payload bytes are packed metadata shared by both versions.
+/// Remaining four-byte system records are little-endian on 3DS and big-endian
+/// on Wii U, so the conversion swaps them before replacing the outer container.
 pub fn convert_3ds_system_to_cemu(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
     convert_3ds_system_to_cemu_named(source, "system")
 }
@@ -247,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_a_japanese_3ds_system_by_replacing_only_the_container_header() {
+    fn converts_a_japanese_3ds_system_header_and_record_endianness() {
         use crate::profile::{
             CEMU_SYSTEM_SIZE, JP_CEMU_SYSTEM_HEADER, SYSTEM_PAYLOAD_SIZE, THREE_DS_SYSTEM_SIZE,
         };

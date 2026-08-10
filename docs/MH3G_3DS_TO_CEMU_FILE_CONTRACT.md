@@ -97,11 +97,11 @@ mh3g-save-convert repair-converted <3DS-user#> --current <Cemu-user#> \
 
 Current Cemu data is authoritative for continued gameplay. The operation
 three-way compares complete semantic fields known to differ across 0.0.3
-through 0.0.6. A field is replaced with the 0.0.7 result only when its current
-value still equals the historical output. A value different from both the
-historical and 0.0.7 outputs is preserved as later Wii U progress and reported
-as a conflict. The operation does not blindly merge bytes or rebuild the whole
-Cemu slot.
+through 0.0.6. A field is replaced with the current converter result only when
+its current value still equals the historical output. A value different from
+both the historical and current-converter outputs is preserved as later Wii U
+progress and reported as a conflict. The operation does not blindly merge bytes
+or rebuild the whole Cemu slot.
 
 Omit `--source-extdata-dir` for a core-only repair. Guild-card repair requires
 all eight 3DS ExtData files in that directory and all eight current Cemu files
@@ -131,7 +131,10 @@ second.
 
 Provide it only when the migration explicitly includes shared system data.
 The command reads and writes only the explicitly named `system` paths; it does
-not alter any `user#` slot.
+not alter any `user#` slot. This component carries the housekeeper
+gallery/movie unlock history and other shared settings. Omitting it leaves the
+current Cemu `system` untouched, so a core-slot conversion alone cannot fill
+missing gallery entries.
 
 ### Optional Shared Extdata
 
