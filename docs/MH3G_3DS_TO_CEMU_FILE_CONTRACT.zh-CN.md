@@ -61,17 +61,24 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 `repair-converted` 与全新 `convert` 是两个独立契约。它需要一个原始 3DS `user#` 和一个已经由 0.0.3 至 0.0.6 转换、之后可能继续游玩的同名 Cemu `user#`：
 
 ```text
-mh3g-save-convert repair-converted <3DS-user#> --current <Cemu-user#> \
+mh3g-save-convert repair-converted <3DS-user#> --current <当前-Cemu-user#> \
+  [--output <修复后-Cemu-user#>] \
   [--source-extdata-dir <3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
-    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+    --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
+    --expected-preview-sha256 <SHA256>]
 ```
+
+这是三个独立的路径职责：原始 3DS 槽位与 `--current` 当前 Wii U/Cemu
+槽位都是只读合并输入，`--output` 才是写入目标；三者必须指向同名的
+`user1`、`user2` 或 `user3`。省略 `--output` 只用于兼容 CLI 旧脚本，此时
+仍采用原地写回 `--current`；原生 UI 始终独立显示并显式传入输出路径。
 
 该操作以当前 Cemu 数据为继续游玩的权威数据，只对 0.0.3 至 0.0.6 之间已知变化的完整语义字段执行三方比较。当前字段仍等于历史版本输出时才替换为当前转换器输出；若当前字段不同于历史值和当前转换器值，则按 Wii U 后续进度保留并报告冲突。它不会按字节盲合并，也不会重建整个 Cemu 槽位。
 
-仅修核心槽位时不传 `--source-extdata-dir`。修复公会名片时，该目录必须含全部八个 3DS ExtData 文件，当前 `user#` 的父目录也必须含全部八个 Cemu 文件。`user#` 和四个 `card*` 是可修复组件；`quest1` 至 `quest4` 会被验证并纳入集合 SHA-256，但逐字节保持当前 Cemu 内容。该命令不处理 `system`、`cec` 或 `phrase*`。
+仅修核心槽位时不传 `--source-extdata-dir`。修复公会名片时，该目录必须含全部八个 3DS ExtData 文件，当前 `user#` 的父目录也必须含全部八个 Cemu 文件。若输出与当前引用不同，输出目录还必须已有初始化的 `card1`、`card2`、`card3`、`cardbox`。`user#` 和四个 `card*` 是可修复组件；`quest1` 至 `quest4` 会被验证并纳入集合 SHA-256，但逐字节保持当前 Cemu 内容。该命令不处理 `system`、`cec` 或 `phrase*`。
 
-Dry Run 会把全部选中组件汇总成一个顶层版本判断，可能报告 `exact`、`compatible-range`、`ambiguous` 或 `unknown`；所有组件共用同一个最终历史版本。`ambiguous` 写入必须显式指定一个未被证据否定的 `--from-version` 并重新 Dry Run；`unknown` 拒绝修复。写入必须提交紧邻 Dry Run 返回的 `source_set_sha256`、`current_set_sha256` 与 `preview_sha256`。成功时返回 `.mh3g-compatibility-repair-<UUID>.json`；`rollback-repair --manifest <path>` 会按“公会名片子事务，再核心子事务”的顺序恢复。
+Dry Run 会把全部选中组件汇总成一个顶层版本判断，可能报告 `exact`、`compatible-range`、`ambiguous` 或 `unknown`；所有组件共用同一个最终历史版本。`ambiguous` 写入必须显式指定一个未被证据否定的 `--from-version` 并重新 Dry Run；`unknown` 拒绝修复。显式输出写入必须提交紧邻 Dry Run 返回的 `source_set_sha256`、`current_set_sha256`、`output_set_sha256` 与 `preview_sha256`。成功时返回 `.mh3g-compatibility-repair-<UUID>.json`；`rollback-repair --manifest <path>` 会按“公会名片子事务，再核心子事务”的顺序恢复。
 
 ### 可选的共享 `system`
 
@@ -152,7 +159,7 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 | `inspect-progress <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `inspect-events <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `convert <user#> --output <same user#>` | 源槽位；只有安装时才读取已有目标和旧事务记录 | 无 | 指定目标槽位及下述核心事务文件 |
-| `repair-converted <3DS-user#> --current <Cemu-user#>` | 原始 3DS 槽位、当前 Cemu 槽位；可选完整 3DS/Cemu ExtData 集合 | 无 | 只改变报告中确认需要修复的同名 `user#` 和完整公会名片组，并创建协调 manifest；任务文件保持不变 |
+| `repair-converted <3DS-user#> --current <当前-Cemu-user#> --output <修复后-Cemu-user#>` | 原始 3DS 槽位、只读当前 Cemu 槽位、独立输出槽位；可选完整 3DS/当前 Cemu ExtData 集合 | 无 | 只改变输出侧报告中确认需要修复的同名 `user#` 和完整公会名片组，并创建协调 manifest；当前引用与任务文件保持不变 |
 | `convert-system system --output <已有 Cemu system>` | Dry Run 和写入都会读取 3DS 源 `system` 与已初始化的 Cemu 目标 | 无 | 只把已确认的画廊/动画标记并集合并到指定目标，并创建相同模式的事务文件 |
 | `convert-extras --source-dir ... --output-dir ...` | 全部八个 ExtData 文件 | 无，也不会创建输出目录 | 只写入 `output-dir` 下生成的八个文件 |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | 完整暂存 ExtData 集合及被选中、已初始化的目标组件组 | 无 | 只改变被选中的完整 Cemu 组件组，以及下文一个绑定 manifest 的 ExtData 恢复事务 |

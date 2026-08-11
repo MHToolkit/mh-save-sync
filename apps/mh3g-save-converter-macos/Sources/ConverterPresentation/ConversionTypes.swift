@@ -69,15 +69,17 @@ public struct InputInspection: Equatable, Sendable {
     }
 }
 
-/// The two mandatory slot files.  The UI does not discover an MLC root or
-/// expand a directory recursively: both URLs originate from explicit user
-/// selection.
+/// Explicit core paths. New conversion uses source + target. Compatibility
+/// repair additionally requires a read-only current Wii U/Cemu reference;
+/// target always remains the independent write destination.
 public struct ConversionInput: Equatable, Sendable {
     public let source: URL
+    public let current: URL?
     public let target: URL
 
-    public init(source: URL, target: URL) {
+    public init(source: URL, target: URL, current: URL? = nil) {
         self.source = source.standardizedFileURL
+        self.current = current?.standardizedFileURL
         self.target = target.standardizedFileURL
     }
 }
@@ -260,29 +262,35 @@ public struct DryRunFingerprint: Equatable, Sendable {
 public struct RepairDryRunFingerprint: Equatable, Sendable {
     public let source: URL
     public let current: URL
+    public let output: URL
     public let extDataSource: URL?
     public let fromVersion: HistoricalConverterRevision?
     public let sourceSetSHA256: String
     public let currentSetSHA256: String
+    public let outputSetSHA256: String
     public let previewSHA256: String
     public let components: [RepairComponentFingerprint]
 
     public init(
         source: URL,
         current: URL,
+        output: URL,
         extDataSource: URL?,
         fromVersion: HistoricalConverterRevision?,
         sourceSetSHA256: String,
         currentSetSHA256: String,
+        outputSetSHA256: String,
         previewSHA256: String,
         components: [RepairComponentFingerprint]
     ) {
         self.source = source.standardizedFileURL
         self.current = current.standardizedFileURL
+        self.output = output.standardizedFileURL
         self.extDataSource = extDataSource?.standardizedFileURL
         self.fromVersion = fromVersion
         self.sourceSetSHA256 = sourceSetSHA256
         self.currentSetSHA256 = currentSetSHA256
+        self.outputSetSHA256 = outputSetSHA256
         self.previewSHA256 = previewSHA256
         self.components = components
     }
@@ -506,6 +514,7 @@ public struct ConverterReport: Decodable, Sendable {
     public let targetSetSHA256Before: String?
     public let sourceSetSHA256: String?
     public let currentSetSHA256: String?
+    public let outputSetSHA256: String?
     public let previewSHA256: String?
     public let detection: ConverterRevisionDetection?
     public let manifests: [String]?
@@ -542,6 +551,7 @@ public struct ConverterReport: Decodable, Sendable {
         case targetSetSHA256Before = "target_set_sha256_before"
         case sourceSetSHA256 = "source_set_sha256"
         case currentSetSHA256 = "current_set_sha256"
+        case outputSetSHA256 = "output_set_sha256"
         case previewSHA256 = "preview_sha256"
     }
 

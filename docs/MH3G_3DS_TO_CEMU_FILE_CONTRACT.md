@@ -89,11 +89,19 @@ candidate/cache data.  `convert` never automatically opens `system`,
 0.0.6 and may have been played further:
 
 ```text
-mh3g-save-convert repair-converted <3DS-user#> --current <Cemu-user#> \
+mh3g-save-convert repair-converted <3DS-user#> --current <current-Cemu-user#> \
+  [--output <repaired-Cemu-user#>] \
   [--source-extdata-dir <3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
-    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+    --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
+    --expected-preview-sha256 <SHA256>]
 ```
+
+These are three distinct path roles. The original 3DS slot and `--current`
+Wii U/Cemu slot are read-only merge inputs; `--output` is the write
+destination. All must name the same `user1`, `user2`, or `user3` slot. Omitting
+`--output` preserves the legacy CLI in-place behavior (`output = current`), but
+the native UIs always expose and pass an explicit output selection.
 
 Current Cemu data is authoritative for continued gameplay. The operation
 three-way compares complete semantic fields known to differ across 0.0.3
@@ -105,7 +113,9 @@ or rebuild the whole Cemu slot.
 
 Omit `--source-extdata-dir` for a core-only repair. Guild-card repair requires
 all eight 3DS ExtData files in that directory and all eight current Cemu files
-beside the current `user#`. The `user#` and four `card*` components are
+beside the current `user#`. When output differs from current, its directory
+must already contain initialized `card1`, `card2`, `card3`, and `cardbox`
+targets. The `user#` and four `card*` components are
 repairable; `quest1` through `quest4` are validated and included in the set
 SHA-256 but retain the current Cemu bytes exactly. This command does not handle
 `system`, `cec`, or `phrase*`.
@@ -114,8 +124,9 @@ Dry Run aggregates every selected component into one top-level revision
 decision: `exact`, `compatible-range`, `ambiguous`, or `unknown`. Every
 component shares that final historical revision. An `ambiguous` write requires
 an explicit, non-contradicted `--from-version` followed by another Dry Run;
-`unknown` is refused. A write must submit the immediate Dry Run's `source_set_sha256`,
-`current_set_sha256`, and `preview_sha256`. Success returns
+`unknown` is refused. A write with explicit output must submit the immediate
+Dry Run's `source_set_sha256`, `current_set_sha256`, `output_set_sha256`, and
+`preview_sha256`. Success returns
 `.mh3g-compatibility-repair-<UUID>.json`; `rollback-repair --manifest <path>`
 restores the guild-card subtransaction first and the core subtransaction
 second.
@@ -250,7 +261,7 @@ record import remains explicitly experimental.
 | `inspect-progress <user#> [--target <user#>]` | Source and optional target slots | Nothing | N/A |
 | `inspect-events <user#> [--target <user#>]` | Source and optional target slots | Nothing | N/A |
 | `convert <user#> --output <same user#>` | Source slot; existing target and prior transaction records only when installing | Nothing | Named target slot plus core transaction artifacts below |
-| `repair-converted <3DS-user#> --current <Cemu-user#>` | Original 3DS slot, current Cemu slot, and optional complete 3DS/Cemu ExtData sets | Nothing | Only the same-named `user#` and complete guild-card group fields proven to need repair, plus a coordinator manifest; quest files remain unchanged |
+| `repair-converted <3DS-user#> --current <current-Cemu-user#> --output <repaired-Cemu-user#>` | Original 3DS slot, read-only current Cemu slot, independent output slot, and optional complete 3DS/current-Cemu ExtData sets | Nothing | Only the output-side same-named `user#` and complete guild-card group fields proven to need repair, plus a coordinator manifest; current reference and quest files remain unchanged |
 | `convert-system system --output <existing Cemu system>` | 3DS source `system` and existing initialized Cemu target on Dry Run and write | Nothing | Only the verified gallery/movie flag union in the named target, plus the same transaction artifact pattern |
 | `convert-extras --source-dir ... --output-dir ...` | All eight extdata files | Nothing, and no output directory is created | Only the eight generated files under `output-dir` |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | Complete staged ExtData set and selected initialized target group(s) | Nothing | Only the selected complete Cemu group(s), plus one manifest-bound ExtData recovery transaction below |

@@ -395,9 +395,11 @@ Cemu validation succeeds.
 
 ```text
 mh3g-save-convert repair-converted <original-3DS-user#> --current <current-Cemu-user#> \
+  [--output <repaired-Cemu-user#>] \
   [--source-extdata-dir <original-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
-    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+    --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
+    --expected-preview-sha256 <SHA256>]
 ```
 
 Use this command when a save was converted with 0.0.3 through 0.0.6 and then
@@ -409,12 +411,22 @@ are preserved and reported as conflicts. Current HR, equipment, materials,
 storage, quest progress, farm, fleet, and other later gameplay therefore remain
 owned by the current Cemu save.
 
-The CLI requires two exact, same-numbered `user1`, `user2`, or `user3` files.
+The three paths have deliberately separate roles: the original 3DS slot is a
+read-only conversion source, `--current` is the read-only Wii U/Cemu state that
+owns later gameplay progress, and `--output` is the only core slot that may be
+written. All three must be exact, same-numbered `user1`, `user2`, or `user3`
+paths. Omitting `--output` retains the CLI's legacy in-place behavior and uses
+`--current` as the destination; the native macOS and Windows workbenches never
+hide this coupling and always display/pass a separate output selection.
+
 The native macOS and Windows workbenches may accept a file or its direct parent
 directory, but they still resolve and pass one exact file to the CLI. To repair
 guild cards, `--source-extdata-dir` must be the complete 3DS
 `.../00000481/user` directory with all eight source files, and the current
-`user#` parent must contain all eight same-named Cemu files. The current
+`user#` parent must contain all eight same-named Cemu files. A separate output
+directory must already be an initialized Cemu save directory containing
+`card1`, `card2`, `card3`, and `cardbox`; this keeps the multi-file transaction
+fail-closed. The current
 converter field-repairs `user#`, `card1`, `card2`, `card3`, and `cardbox`;
 `quest1` through `quest4` participate in set validation but remain
 byte-identical. `system`, `cec`, `phrase1` through `phrase3`, and unknown files
@@ -423,7 +435,8 @@ are not read or written by this command.
 Start with a read-only preview:
 
 ```bash
-REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+# SOURCE, CURRENT, and OUTPUT are three distinct same-slot user# paths.
+REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
   --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
 ```
 
@@ -432,24 +445,26 @@ the original version from its `candidates`, then repeat Dry Run with
 `--from-version`. Every selected component shares this one revision decision;
 the converter never repairs `user#` and `card*` as different historical
 releases. Detection cannot read an embedded converter version because older
-releases did not store a trustworthy marker. A write must reuse all three set
-hashes from that final Dry Run:
+releases did not store a trustworthy marker. A write must reuse all four
+authorization hashes from that final Dry Run:
 
 ```bash
 SOURCE_SET_SHA256=$(jq -er '.source_set_sha256' <<<"$REPAIR_JSON")
 CURRENT_SET_SHA256=$(jq -er '.current_set_sha256' <<<"$REPAIR_JSON")
+OUTPUT_SET_SHA256=$(jq -er '.output_set_sha256' <<<"$REPAIR_JSON")
 PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
-"${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+"${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
   --source-extdata-dir "$EXTRAS_SOURCE" \
   --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
   --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
+  --expected-output-set-sha256 "$OUTPUT_SET_SHA256" \
   --expected-preview-sha256 "$PREVIEW_SHA256" \
   --write
 ```
 
 If Dry Run used `--from-version`, pass the same value to the write. Any source,
-current target, or preview change between the two steps fails closed. A
+current reference, output state, or preview change between the two steps fails closed. A
 successful write returns a coordinator manifest named
 `.mh3g-compatibility-repair-<UUID>.json`, covering the core slot and optional
 guild-card subtransactions. Roll it back with:

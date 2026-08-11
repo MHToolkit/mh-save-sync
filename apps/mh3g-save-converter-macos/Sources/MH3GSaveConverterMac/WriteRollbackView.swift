@@ -68,9 +68,14 @@ struct WriteRollbackView: View {
         .sheet(isPresented: $showCoreConfirmation) {
             TransactionConfirmationSheet(
                 title: ConverterCopy.text("Write.SelectedSave", language: language),
-                targetLabel: ConverterCopy.text("Write.Target", language: language),
+                targetLabel: ConverterCopy.text(
+                    workflow.mode == .repairConverted ? "Input.RepairOutput" : "Write.Target",
+                    language: language
+                ),
                 target: workflow.input?.target,
-                files: ConverterCopy.text("Write.OneTarget", language: language),
+                files: workflow.mode == .repairConverted && workflow.components.includeGuildCards
+                    ? ConverterCopy.text("Write.RepairTargets", language: language)
+                    : ConverterCopy.text("Write.OneTarget", language: language),
                 language: language,
                 verificationDetails: coreConfirmationDetails,
                 onConfirm: writeCore,
@@ -243,6 +248,26 @@ struct WriteRollbackView: View {
     }
 
     private var coreConfirmationDetails: [TransactionConfirmationDetail] {
+        if let fingerprint = workflow.repairDryRunFingerprint {
+            return [
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.SourceSHA256", language: language),
+                    value: fingerprint.sourceSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.CurrentSetSHA256", language: language),
+                    value: fingerprint.currentSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.OutputSetSHA256", language: language),
+                    value: fingerprint.outputSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Repair.PreviewSHA256", language: language),
+                    value: fingerprint.previewSHA256
+                ),
+            ]
+        }
         guard let fingerprint = workflow.dryRunFingerprint else { return [] }
         return [
             TransactionConfirmationDetail(

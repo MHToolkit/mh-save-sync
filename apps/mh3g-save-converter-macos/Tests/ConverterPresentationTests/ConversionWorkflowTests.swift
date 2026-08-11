@@ -33,8 +33,12 @@ final class ConversionWorkflowTests: XCTestCase {
         ])
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.setMode(.repairConverted)
-        workflow.configure(input: fixtureInput)
-        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.configure(input: fixtureRepairInput)
+        workflow.applyInspections(
+            source: fixtureSourceInspection,
+            current: fixtureCurrentInspection,
+            target: fixtureRepairOutputInspection
+        )
 
         try await workflow.runCoreDryRun()
 
@@ -52,6 +56,8 @@ final class ConversionWorkflowTests: XCTestCase {
         let commands = await executor.recordedCommands()
         XCTAssertFalse(commands[0].arguments.contains("--from-version"))
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--from-version", "0.0.3"))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--current", fixtureRepairInput.current!.path))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--output", fixtureRepairInput.target.path))
     }
 
     func testRepairWriteReusesTheAuthorizedRevisionAndPublishesCoordinatorManifest() async throws {
@@ -63,8 +69,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.setMode(.repairConverted)
         workflow.setRepairFromVersion(.v0_0_5)
-        workflow.configure(input: fixtureInput)
-        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.configure(input: fixtureRepairInput)
+        workflow.applyInspections(
+            source: fixtureSourceInspection,
+            current: fixtureCurrentInspection,
+            target: fixtureRepairOutputInspection
+        )
 
         try await workflow.runCoreDryRun()
         try await workflow.writeCore()
@@ -76,6 +86,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--from-version", "0.0.5"))
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-source-set-sha256", fixtureRepairSourceSetSHA256))
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-current-set-sha256", fixtureRepairCurrentSetSHA256))
+        XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-output-set-sha256", fixtureRepairOutputSetSHA256))
         XCTAssertTrue(commands[1].arguments.containsAdjacent("--expected-preview-sha256", fixtureRepairPreviewSHA256))
     }
 
@@ -87,8 +98,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.setMode(.repairConverted)
         workflow.setRepairFromVersion(.v0_0_5)
-        workflow.configure(input: fixtureInput)
-        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.configure(input: fixtureRepairInput)
+        workflow.applyInspections(
+            source: fixtureSourceInspection,
+            current: fixtureCurrentInspection,
+            target: fixtureRepairOutputInspection
+        )
 
         try await workflow.runCoreDryRun()
         try await workflow.writeCore()
@@ -948,8 +963,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.setMode(.repairConverted)
         workflow.setRepairFromVersion(.v0_0_5)
-        workflow.configure(input: fixtureInput)
-        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.configure(input: fixtureRepairInput)
+        workflow.applyInspections(
+            source: fixtureSourceInspection,
+            current: fixtureCurrentInspection,
+            target: fixtureRepairOutputInspection
+        )
 
         try await workflow.runCoreDryRun()
         do {
@@ -977,8 +996,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.setMode(.repairConverted)
         workflow.setRepairFromVersion(.v0_0_5)
-        workflow.configure(input: fixtureInput)
-        workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
+        workflow.configure(input: fixtureRepairInput)
+        workflow.applyInspections(
+            source: fixtureSourceInspection,
+            current: fixtureCurrentInspection,
+            target: fixtureRepairOutputInspection
+        )
 
         try await workflow.runCoreDryRun()
         do {
@@ -1102,8 +1125,15 @@ private let fixtureInput = ConversionInput(
     source: URL(fileURLWithPath: "/tmp/3ds/user2"),
     target: URL(fileURLWithPath: "/tmp/cemu/user2")
 )
+private let fixtureRepairInput = ConversionInput(
+    source: URL(fileURLWithPath: "/tmp/3ds/user2"),
+    target: URL(fileURLWithPath: "/tmp/cemu-repaired/user2"),
+    current: URL(fileURLWithPath: "/tmp/cemu-current/user2")
+)
 private let fixtureSourceInspection = InputInspection(profile: "JpThreeDs", size: 35_328, sha256: "a".repeated(64))
 private let fixtureTargetInspection = InputInspection(profile: "JpCemu", size: 35_392, sha256: "b".repeated(64))
+private let fixtureCurrentInspection = InputInspection(profile: "JpCemu", size: 35_392, sha256: "b".repeated(64))
+private let fixtureRepairOutputInspection = InputInspection(profile: "JpCemu", size: 35_392, sha256: "c".repeated(64))
 private let fixtureSystemSource = URL(fileURLWithPath: "/tmp/3ds/system")
 private let fixtureSystemTarget = URL(fileURLWithPath: "/tmp/cemu/system")
 private let fixtureSystemSourceSHA256 = "c".repeated(64)
@@ -1112,6 +1142,7 @@ private let fixtureCECSourceRecordSetSHA256 = validSHA("e")
 private let fixtureCECTargetSHA256 = validSHA("f")
 private let fixtureRepairSourceSetSHA256 = validSHA("1")
 private let fixtureRepairCurrentSetSHA256 = validSHA("2")
+private let fixtureRepairOutputSetSHA256 = validSHA("9")
 private let fixtureRepairPreviewSHA256 = validSHA("3")
 private let fixtureExtrasSelection = ComponentSelection(
     includeGuildCards: true,
@@ -1198,7 +1229,7 @@ private func repairDryRunResult(
     let candidateJSON = candidates.map { "\"\($0)\"" }.joined(separator: ",")
     let mergedSHA256 = modified ? validSHA("6") : validSHA("5")
     let json = """
-    {"operation":"repair-converted","status":"dry-run","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":\(modified),"detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}]}
+    {"operation":"repair-converted","status":"dry-run","source":"\(fixtureRepairInput.source.path)","current":"\(fixtureRepairInput.current!.path)","output":"\(fixtureRepairInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","output_set_sha256":"\(fixtureRepairOutputSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"components":[{"component":"user2","target":"\(fixtureRepairInput.target.path)","modified":\(modified),"detection":{"confidence":"\(confidence)","candidates":[\(candidateJSON)]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}]}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
@@ -1208,14 +1239,14 @@ private func repairWrittenResult(
     mergedSHA256: String = validSHA("6")
 ) -> ConverterCommandResult {
     let json = """
-    {"operation":"repair-converted","status":"written","source":"\(fixtureInput.source.path)","current":"\(fixtureInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":true,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}],"manifests":["/tmp/.mh3g-user2-repair.json"],"compatibility_manifest":"\(manifest)"}
+    {"operation":"repair-converted","status":"written","source":"\(fixtureRepairInput.source.path)","current":"\(fixtureRepairInput.current!.path)","output":"\(fixtureRepairInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","output_set_sha256":"\(fixtureRepairOutputSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureRepairInput.target.path)","modified":true,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(mergedSHA256)"}}],"manifests":["/tmp/.mh3g-user2-repair.json"],"compatibility_manifest":"\(manifest)"}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }
 
 private func repairNoChangesResult() -> ConverterCommandResult {
     let json = """
-    {"operation":"repair-converted","status":"no-changes","source":"\(fixtureInput.source.path)","current":"\(fixtureInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureInput.target.path)","modified":false,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(validSHA("5"))"}}],"manifests":[],"compatibility_manifest":null}
+    {"operation":"repair-converted","status":"no-changes","source":"\(fixtureRepairInput.source.path)","current":"\(fixtureRepairInput.current!.path)","output":"\(fixtureRepairInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","output_set_sha256":"\(fixtureRepairOutputSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureRepairInput.target.path)","modified":false,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(validSHA("5"))"}}],"manifests":[],"compatibility_manifest":null}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }

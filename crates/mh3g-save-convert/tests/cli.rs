@@ -370,6 +370,271 @@ fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
 }
 
 #[test]
+fn repair_converted_can_read_current_and_write_a_separate_output() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let mut source = fs::read(&source_path).unwrap();
+    let source_lamp = JP_3DS_HEADER.len() + 0x6F44 + 0xE4;
+    source[source_lamp..source_lamp + 2].copy_from_slice(&[0x1E, 0x00]);
+    fs::write(&source_path, &source).unwrap();
+    let current_path = temp.path().join("played-cemu").join("user2");
+    let output_path = temp.path().join("repaired-export").join("user2");
+    fs::create_dir_all(current_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+
+    let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
+    let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
+    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    let unrelated = JP_CEMU_HEADER.len() + 0x240;
+    current[unrelated] ^= 0x5A;
+    let current_before = current.clone();
+    fs::write(&current_path, &current).unwrap();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+    assert_eq!(dry["output"], output_path.to_string_lossy().as_ref());
+    assert_eq!(dry["components"][0]["write_required"], true);
+    assert!(!output_path.exists());
+    assert_eq!(fs::read(&current_path).unwrap(), current_before);
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.5".into(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    assert_eq!(fs::read(&current_path).unwrap(), current_before);
+    let installed = fs::read(&output_path).unwrap();
+    assert_eq!(&installed[lamp..lamp + 2], &[0x00, 0x1E]);
+    assert_eq!(installed[unrelated], current_before[unrelated]);
+
+    let compatibility_manifest = written["compatibility_manifest"]
+        .as_str()
+        .expect("separate-output repair has a coordinator manifest");
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-repair".into(),
+        "--manifest".into(),
+        compatibility_manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert!(!output_path.exists());
+    assert_eq!(fs::read(&current_path).unwrap(), current_before);
+}
+
+#[test]
+fn repair_converted_rejects_a_separate_output_changed_after_dry_run() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let source = fs::read(&source_path).unwrap();
+    let current_path = target_slot(&temp, "user2");
+    let output_dir = temp.path().join("separate-output");
+    let output_path = output_dir.join("user2");
+    fs::create_dir_all(&output_dir).unwrap();
+    let current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
+    fs::write(&current_path, &current).unwrap();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.6".into(),
+        "--dry-run".into(),
+    ]);
+    fs::write(&output_path, &current).unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.6".into(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&current_path).unwrap(), current);
+    assert_eq!(fs::read(&output_path).unwrap(), current);
+}
+
+#[test]
+fn repair_converted_rejects_an_existing_non_cemu_output_slot() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let source = fs::read(&source_path).unwrap();
+    let current_path = target_slot(&temp, "user2");
+    let output_dir = temp.path().join("invalid-output");
+    let output_path = output_dir.join("user2");
+    fs::create_dir_all(&output_dir).unwrap();
+    fs::write(
+        &current_path,
+        convert_3ds_to_cemu_named(&source, "user2").unwrap(),
+    )
+    .unwrap();
+    fs::write(&output_path, b"not a Cemu slot").unwrap();
+
+    let output = run_output_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--from-version".into(),
+        "0.0.6".into(),
+        "--dry-run".into(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&output_path).unwrap(), b"not a Cemu slot");
+}
+
+#[test]
+fn repair_converted_writes_guild_cards_to_the_separate_output_only() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = slot_fixture(&temp, "user2");
+    let source_slot = fs::read(&source_path).unwrap();
+    let current_dir = temp.path().join("played-cemu");
+    let output_dir = temp.path().join("repair-output");
+    fs::create_dir_all(&current_dir).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    let current_path = current_dir.join("user2");
+    let output_path = output_dir.join("user2");
+    fs::write(
+        &current_path,
+        convert_3ds_to_cemu_named(&source_slot, "user2").unwrap(),
+    )
+    .unwrap();
+
+    let extdata = extras_fixture(&temp);
+    let card1_path = extdata.join("card1");
+    let mut card1_source = fs::read(&card1_path).unwrap();
+    let card_row = JP_3DS_HEADER.len() + 0x7C0;
+    card1_source[card_row..card_row + 2].copy_from_slice(&[0x01, 0x00]);
+    card1_source[card_row + 8] = 0;
+    fs::write(&card1_path, &card1_source).unwrap();
+
+    for component in [
+        "card1", "card2", "card3", "cardbox", "quest1", "quest2", "quest3", "quest4",
+    ] {
+        let source_bytes = fs::read(extdata.join(component)).unwrap();
+        let mut current_bytes =
+            convert_external_component_to_cemu_named(&source_bytes, component).unwrap();
+        if component == "card1" {
+            current_bytes[JP_CEMU_HEADER.len() + 0x7C0 + 8] = 0;
+        }
+        fs::write(current_dir.join(component), &current_bytes).unwrap();
+        if matches!(component, "card1" | "card2" | "card3" | "cardbox") {
+            fs::write(output_dir.join(component), &current_bytes).unwrap();
+        }
+    }
+    let current_card1_before = fs::read(current_dir.join("card1")).unwrap();
+    let output_card1_before = fs::read(output_dir.join("card1")).unwrap();
+
+    let dry = run_json(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--source-extdata-dir".into(),
+        extdata.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-converted".into(),
+        source_path.to_string_lossy().into_owned(),
+        "--current".into(),
+        current_path.to_string_lossy().into_owned(),
+        "--output".into(),
+        output_path.to_string_lossy().into_owned(),
+        "--source-extdata-dir".into(),
+        extdata.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    assert_eq!(
+        fs::read(current_dir.join("card1")).unwrap(),
+        current_card1_before
+    );
+    assert_eq!(
+        fs::read(output_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 8],
+        0x80
+    );
+
+    let compatibility_manifest = written["compatibility_manifest"].as_str().unwrap();
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-repair".into(),
+        "--manifest".into(),
+        compatibility_manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert!(!output_path.exists());
+    assert_eq!(
+        fs::read(output_dir.join("card1")).unwrap(),
+        output_card1_before
+    );
+    assert_eq!(
+        fs::read(current_dir.join("card1")).unwrap(),
+        current_card1_before
+    );
+}
+
+#[test]
 fn repair_converted_write_rejects_a_current_save_changed_after_dry_run() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();

@@ -57,13 +57,13 @@ public extension ConversionWorkflow {
         [
             railStep(
                 route: .input,
-                isCurrent: input == nil || sourceInspection == nil,
-                isComplete: sourceInspection != nil,
+                isCurrent: input == nil || !coreInspectionComplete,
+                isComplete: coreInspectionComplete,
                 isBlocked: input == nil
             ),
             railStep(
                 route: .dryRun,
-                isCurrent: sourceInspection != nil && !canWrite && state != .success,
+                isCurrent: coreInspectionComplete && !canWrite && state != .success,
                 isComplete: canWrite || state == .success,
                 isBlocked: statusPresentation.kind == .blocked
             ),

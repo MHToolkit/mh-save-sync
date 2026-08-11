@@ -10,16 +10,19 @@ no save conversion is reimplemented in Swift.
 
 - **New conversion**: convert an original 3DS `user#` into the same-named Cemu
   `user#`.
-- **Repair converted save**: merge the original 3DS `user#` with the current
-  Cemu `user#` after continued play, repairing only fields that still retain a
-  0.0.3 through 0.0.6 conversion result.
+- **Repair converted save**: use the original 3DS `user#` and the current,
+  continued-play Cemu `user#` as separate read inputs, then write the repaired
+  result to an independently selected same-slot output. Only fields that still
+  retain a 0.0.3 through 0.0.6 conversion result are repaired.
 
-Repair mode may also select the complete 3DS ExtData `user` directory for
-guild-card repair. Current Cemu `card1`, `card2`, `card3`, `cardbox`, and
+Repair mode therefore displays three independent selectors: original 3DS,
+read-only current Wii U/Cemu reference, and repaired output. It may also select
+the complete 3DS ExtData `user` directory for guild-card repair. Current Cemu `card1`, `card2`, `card3`, `cardbox`, and
 `quest1` through `quest4` are resolved beside the selected current `user#`;
 quest files are validated and preserved, not rewritten by compatibility
-repair. Ambiguous detection requires an explicit historical version followed
-by another Dry Run.
+repair. A different output directory must already contain initialized
+`card1`, `card2`, `card3`, and `cardbox` files. Ambiguous detection requires an
+explicit historical version followed by another Dry Run.
 
 The core picker accepts an exact `user1`, `user2`, or `user3` file or its
 direct parent. It does not recursively scan an SD card or MLC and does not open

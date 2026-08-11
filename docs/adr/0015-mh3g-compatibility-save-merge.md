@@ -158,14 +158,17 @@ the installed set hash and restores the complete pre-merge snapshot.
 The implemented CLI uses separate commands:
 
 ```text
-repair-converted <3DS-user#> --current <Cemu-user#> \
+repair-converted <3DS-user#> --current <current-Cemu-user#> \
+  --output <repaired-Cemu-user#> \
   [--source-extdata-dir <3DS-ExtData-user>] \
   [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] --dry-run
-repair-converted <3DS-user#> --current <Cemu-user#> \
+repair-converted <3DS-user#> --current <current-Cemu-user#> \
+  --output <repaired-Cemu-user#> \
   [--source-extdata-dir <3DS-ExtData-user>] \
   [--from-version <same-selection-as-dry-run>] --write \
   --expected-source-set-sha256 ... \
   --expected-current-set-sha256 ... \
+  --expected-output-set-sha256 ... \
   --expected-preview-sha256 ...
 rollback-repair --manifest ...
 ```
@@ -180,12 +183,17 @@ macOS SwiftUI and Windows WinUI expose a first-step mode selector:
 Repair mode guides the user in order:
 
 1. “选择当时使用的原始 3DS 存档”
-2. “已经转换并继续游玩？添加当前 Wii U/Cemu 存档目录或同槽位文件”
-3. “可选：添加原始 3DS ExtData 以修复已收到的公会名片”
-4. inspect and show detected release/confidence;
-5. show exact preserved/repaired/conflicting components;
-6. dry-run;
-7. guarded write and rollback location.
+2. “添加继续游玩后的当前 Wii U/Cemu 存档（只读引用）”
+3. “选择修复结果的输出文件或目录”
+4. “可选：添加原始 3DS ExtData 以修复已收到的公会名片”
+5. inspect and show detected release/confidence;
+6. show exact preserved/repaired/conflicting components;
+7. dry-run;
+8. guarded write and rollback location.
+
+The native interfaces always keep current/reference and output as two visible
+controls. The CLI alone retains omitted-`--output` in-place behavior for old
+scripts; it is not used as a UI shortcut.
 
 The interfaces default to system language, retain manual Chinese/English
 switching, and keep feature parity. The write button remains unavailable until
@@ -215,7 +223,7 @@ Core tests must include:
 - proof that unrelated Wii U bytes remain byte-identical;
 - field-atomic conflicts, including one changed byte inside a multi-byte field;
 - complete guild-card group behavior and incomplete-group rejection;
-- source/current/preview hash race rejection;
+- source/current/output/preview hash race rejection;
 - injected failure after each replacement and complete rollback;
 - idempotence: applying the same merge twice produces identical bytes;
 - all existing conversion, ExtData, CEC, CLI, macOS presentation, and Windows
@@ -227,10 +235,12 @@ separately; the implementation must not launch Cemu automatically.
 
 ## Migration and rollback
 
-The compatibility merge introduces a new manifest version and does not reuse
-the single-file conversion manifest. Existing 0.0.3-0.0.6 manifests remain
+The compatibility merge does not reuse the single-file conversion manifest.
+Coordinator manifest version 2 records the output-state hash introduced by the
+three-path flow; `rollback-repair` continues accepting version 1 manifests
+created by the original in-place flow. Existing 0.0.3-0.0.6 manifests remain
 valid for their original rollback commands.
 
-The feature is additive. Removing 0.0.7 leaves old conversion commands
-unchanged; compatibility-merged saves are restored through their retained
-merge manifest and snapshots.
+The feature is additive. Existing conversion commands remain unchanged;
+compatibility-merged saves are restored through their retained merge manifest
+and snapshots.

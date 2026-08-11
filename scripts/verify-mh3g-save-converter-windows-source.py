@@ -474,12 +474,16 @@ def main() -> int:
     for expected in (
         "ConversionMode.RepairConverted",
         "RepairDryRunAuthorization",
-        '"repair-converted", paths.Source, "--current", paths.Target',
+        '"repair-converted", paths.Source',
+        '"--current", paths.Current!',
+        '"--output", paths.Target',
         'arguments.Add("--source-extdata-dir");',
         'arguments.Add("--from-version");',
         '"--expected-source-set-sha256"',
         '"--expected-current-set-sha256"',
+        '"--expected-output-set-sha256"',
         '"--expected-preview-sha256"',
+        'result.TryGetString("output_set_sha256")',
         'TryGetProperty("detection", out var detection)',
         'TryGetString("compatibility_manifest")',
         '"rollback-repair"',
@@ -489,7 +493,12 @@ def main() -> int:
     resolver = read("Models/SavePathResolution.cs")
     for expected in (
         "TryResolveSource",
+        "TryResolveCurrent",
         "TryResolveTarget",
+        "TryResolveRepairCore",
+        "MissingCurrentSelection",
+        "CurrentSlotMissing",
+        "CurrentSlotNameMismatch",
         "TryResolveExtDataUserDirectory",
         "Path.Combine(fullPath, slot)",
         "Path.GetFileName(fullPath)",
@@ -520,17 +529,27 @@ def main() -> int:
     inspect_core = public_method_body(workflow, "InspectCoreAsync")
     for expected in (
         "var sourceAtInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);",
+        "var currentAtInspection = IsRepairMode",
+        "await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)",
         "var targetAtInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);",
-        "if (!sourceAtInspection.Matches(sourceAfterInspection) || !targetAtInspection.Matches(targetAfterInspection))",
+        "!sourceAtInspection.Matches(sourceAfterInspection)",
+        "!currentAtInspection.Matches(currentAfterInspection)",
+        "!targetAtInspection.Matches(targetAfterInspection)",
         "_inspectedSource = sourceAfterInspection;",
+        "_inspectedCurrent = currentAfterInspection;",
         "_inspectedTarget = targetAfterInspection;",
     ):
         require(expected in inspect_core, f"core Inspect is missing stable target intent validation {expected}")
     for expected in (
         "var inspectedSource = _inspectedSource",
+        "var inspectedCurrent = _inspectedCurrent",
         "var inspectedTarget = _inspectedTarget",
-        "if (!inspectedSource.Matches(sourceBefore) || !inspectedTarget.Matches(targetBefore))",
-        "!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter)",
+        "!inspectedSource.Matches(sourceBefore)",
+        "!inspectedCurrent!.Matches(currentBefore)",
+        "!inspectedTarget.Matches(targetBefore)",
+        "!sourceBefore.Matches(sourceAfter)",
+        "!currentBefore.Matches(currentAfter)",
+        "!targetBefore.Matches(targetAfter)",
     ):
         require(expected in core_dry_run, f"core Dry Run must preserve inspected target intent {expected}")
 
@@ -587,6 +606,16 @@ def main() -> int:
         "WinUI must avoid an App-resource converter that dotnet publish cannot resolve",
     )
     require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
+    for expected in (
+        'x:Name="CurrentPathBox"',
+        'Visibility="{Binding RepairCurrentVisibility}"',
+        'Text="{Binding CoreTargetTitle}"',
+        'Text="{Binding CoreTargetHint}"',
+        'PlaceholderText="{Binding CoreTargetPlaceholder}"',
+        'Click="ChooseCurrentFile_Click"',
+        'Click="ChooseCurrentFolder_Click"',
+    ):
+        require(expected in window, f"repair mode must expose independent current/output controls: {expected}")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
     require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
     require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
@@ -606,6 +635,13 @@ def main() -> int:
         and "ReferenceEquals(sender, SourcePathBox)" in code_behind,
         "WinUI TextChanged routing must use explicit reference equality",
     )
+    for expected in (
+        "private async void ChooseCurrentFile_Click",
+        "private async void ChooseCurrentFolder_Click",
+        "ReferenceEquals(sender, CurrentPathBox)",
+        "ViewModel.CurrentPath = CurrentPathBox.Text;",
+    ):
+        require(expected in code_behind, f"independent Wii U reference picker is missing {expected}")
     write_core = public_method_body(workflow, "WriteCoreAsync")
     require(
         "var repairArguments = new List<string>" in write_core

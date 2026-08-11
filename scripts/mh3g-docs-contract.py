@@ -23,6 +23,7 @@ COMMANDS = (
     "inspect-events",
     "inspect-cec",
     "convert",
+    "repair-converted",
     "convert-system",
     "convert-extras",
     "install-extras",
@@ -133,6 +134,12 @@ def main() -> int:
                 failures.append(
                     f"{relative_path}: stale ExtData installer claim: {claim}"
                 )
+        for token, purpose in (
+            ("--current", "read-only current Wii U compatibility input"),
+            ("--output", "independent compatibility repair output"),
+            ("expected-output-set-sha256", "output-state Dry Run binding"),
+        ):
+            require_contains(failures, relative_path, content, token, purpose)
 
     for relative_path, content in root_docs.items():
         if content is None:
@@ -146,6 +153,12 @@ def main() -> int:
         )
         require_contains(
             failures, relative_path, content, CEC_SUFFIX, "CEC input suffix")
+        for token, purpose in (
+            ("--current", "read-only current Wii U compatibility input"),
+            ("--output", "independent compatibility repair output"),
+            ("expected-output-set-sha256", "output-state Dry Run binding"),
+        ):
+            require_contains(failures, relative_path, content, token, purpose)
         for claim in DIRECT_ZIP_CLAIMS:
             if claim in content:
                 failures.append(f"{relative_path}: unsupported direct ZIP claim: {claim}")

@@ -308,6 +308,26 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ChooseCurrentFile_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            CurrentPathBox.Text = path;
+            ViewModel.CurrentPath = path;
+        }
+    }
+
+    private async void ChooseCurrentFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            CurrentPathBox.Text = path;
+            ViewModel.CurrentPath = path;
+        }
+    }
+
     private async void ChooseTargetFolder_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFolderAsync();
@@ -447,6 +467,10 @@ public sealed partial class MainWindow : Window
         else if (ReferenceEquals(sender, TargetPathBox))
         {
             ViewModel.TargetPath = TargetPathBox.Text;
+        }
+        else if (ReferenceEquals(sender, CurrentPathBox))
+        {
+            ViewModel.CurrentPath = CurrentPathBox.Text;
         }
     }
 
