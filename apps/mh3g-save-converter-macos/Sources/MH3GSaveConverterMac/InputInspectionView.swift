@@ -7,8 +7,10 @@ struct InputInspectionView: View {
     @Binding var navigation: ConverterNavigation?
     @State private var slot: SaveSlot = .user2
     @State private var sourceSelection: URL?
+    @State private var currentSelection: URL?
     @State private var targetSelection: URL?
     @State private var source: URL?
+    @State private var current: URL?
     @State private var target: URL?
     @State private var selectionError: String?
     @State private var isInspecting = false
@@ -23,7 +25,10 @@ struct InputInspectionView: View {
                 Section {
                     Picker(ConverterCopy.text("Input.Mode", language: language), selection: Binding(
                         get: { workflow.mode },
-                        set: { workflow.setMode($0) }
+                        set: {
+                            workflow.setMode($0)
+                            updateInput()
+                        }
                     )) {
                         Text(ConverterCopy.text("Input.Mode.New", language: language))
                             .tag(ConversionMode.newConversion)
@@ -55,8 +60,26 @@ struct InputInspectionView: View {
                     ) {
                         chooseSource()
                     }
+                    if workflow.mode == .repairConverted {
+                        SelectedPathRow(
+                            title: ConverterCopy.text("Input.Current", language: language),
+                            value: current ?? workflow.input?.current,
+                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                        ) {
+                            chooseCurrent()
+                        }
+                        Label(
+                            ConverterCopy.text("Input.CurrentReadOnly", language: language),
+                            systemImage: "lock.shield"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                     SelectedPathRow(
-                        title: ConverterCopy.text("Input.Target", language: language),
+                        title: ConverterCopy.text(
+                            workflow.mode == .repairConverted ? "Input.RepairOutput" : "Input.Target",
+                            language: language
+                        ),
                         value: target ?? workflow.input?.target,
                         chooseTitle: ConverterCopy.text("Input.Select", language: language)
                     ) {
@@ -96,7 +119,9 @@ struct InputInspectionView: View {
                     Section(ConverterCopy.text("Input.SHA256", language: language)) {
                         InspectionTable(
                             source: sourceInspection,
+                            current: workflow.currentInspection,
                             target: workflow.targetInspection,
+                            mode: workflow.mode,
                             language: language
                         )
                     }
@@ -115,7 +140,7 @@ struct InputInspectionView: View {
                     }
                 }
 
-                if workflow.sourceInspection != nil, workflow.state == .componentSelection {
+                if workflow.coreInspectionComplete, workflow.state == .componentSelection {
                     WorkflowGuidanceSection(
                         messageKey: "Guide.InputComplete",
                         actionKey: "Guide.ToComponents",
@@ -131,8 +156,10 @@ struct InputInspectionView: View {
         }
         .onAppear {
             source = workflow.input?.source
+            current = workflow.input?.current
             target = workflow.input?.target
             sourceSelection = source
+            currentSelection = current
             targetSelection = target
             if let source, let resolvedSlot = SavePathResolver.slot(for: source) {
                 slot = resolvedSlot
@@ -140,7 +167,11 @@ struct InputInspectionView: View {
         }
     }
 
-    private var hasInput: Bool { (source ?? workflow.input?.source) != nil && (target ?? workflow.input?.target) != nil }
+    private var hasInput: Bool {
+        (source ?? workflow.input?.source) != nil
+            && (target ?? workflow.input?.target) != nil
+            && (workflow.mode == .newConversion || (current ?? workflow.input?.current) != nil)
+    }
 
     private func chooseSource() {
         guard let url = OpenPanel.selectFileOrDirectory(
@@ -156,10 +187,25 @@ struct InputInspectionView: View {
 
     private func chooseTarget() {
         guard let url = OpenPanel.selectFileOrDirectory(
-            title: ConverterCopy.text("Input.Target", language: language),
-            message: ConverterCopy.text("Input.TargetMessage", language: language)
+            title: ConverterCopy.text(
+                workflow.mode == .repairConverted ? "Input.RepairOutput" : "Input.Target",
+                language: language
+            ),
+            message: ConverterCopy.text(
+                workflow.mode == .repairConverted ? "Input.RepairOutputMessage" : "Input.TargetMessage",
+                language: language
+            )
         ) else { return }
         targetSelection = url
+        resolveSelections()
+    }
+
+    private func chooseCurrent() {
+        guard let url = OpenPanel.selectFileOrDirectory(
+            title: ConverterCopy.text("Input.Current", language: language),
+            message: ConverterCopy.text("Input.CurrentMessage", language: language)
+        ) else { return }
+        currentSelection = url
         resolveSelections()
     }
 
@@ -167,6 +213,9 @@ struct InputInspectionView: View {
         do {
             if let sourceSelection {
                 source = try SavePathResolver.resolveSource(selection: sourceSelection, slot: slot)
+            }
+            if let currentSelection {
+                current = try SavePathResolver.resolveSource(selection: currentSelection, slot: slot)
             }
             if let targetSelection {
                 target = try SavePathResolver.resolveTarget(selection: targetSelection, slot: slot)
@@ -180,7 +229,12 @@ struct InputInspectionView: View {
 
     private func updateInput() {
         guard let source, let target else { return }
-        workflow.configure(input: ConversionInput(source: source, target: target))
+        if workflow.mode == .repairConverted {
+            guard let current else { return }
+            workflow.configure(input: ConversionInput(source: source, target: target, current: current))
+        } else {
+            workflow.configure(input: ConversionInput(source: source, target: target))
+        }
     }
 
     private func inspect() {
@@ -317,7 +371,9 @@ struct SelectedPathRow: View {
 
 struct InspectionTable: View {
     let source: InputInspection
+    let current: InputInspection?
     let target: InputInspection?
+    let mode: ConversionMode
     let language: ConverterLanguage
 
     var body: some View {
@@ -325,25 +381,57 @@ struct InspectionTable: View {
             GridRow {
                 Text("")
                 Text(ConverterCopy.text("Input.Source", language: language)).font(.caption).foregroundStyle(.secondary)
-                Text(ConverterCopy.text("Input.Target", language: language)).font(.caption).foregroundStyle(.secondary)
+                if mode == .repairConverted {
+                    Text(ConverterCopy.text("Input.Current", language: language)).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(
+                    ConverterCopy.text(
+                        mode == .repairConverted ? "Input.RepairOutput" : "Input.Target",
+                        language: language
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             GridRow {
                 Text(ConverterCopy.text("Input.Profile", language: language)).foregroundStyle(.secondary)
                 Text(source.profile)
+                if mode == .repairConverted {
+                    inspectionValue(current?.profile)
+                }
                 targetValue(target?.profile)
             }
             GridRow {
                 Text(ConverterCopy.text("Input.Bytes", language: language)).foregroundStyle(.secondary)
                 Text(source.size, format: .number)
+                if mode == .repairConverted {
+                    inspectionValue(current.map { String($0.size) })
+                }
                 targetValue(target.map { String($0.size) })
             }
             GridRow {
                 Text(ConverterCopy.text("Input.SHA256", language: language)).foregroundStyle(.secondary)
                 Text(source.sha256).font(.caption.monospaced()).textSelection(.enabled)
+                if mode == .repairConverted {
+                    inspectionValue(current?.sha256, monospaced: true)
+                }
                 targetValue(target?.sha256, monospaced: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func inspectionValue(_ value: String?, monospaced: Bool = false) -> some View {
+        if let value {
+            Text(value)
+                .font(monospaced ? .caption.monospaced() : .body)
+                .textSelection(.enabled)
+        } else {
+            Label(ConverterCopy.text("Input.Required", language: language), systemImage: "exclamationmark.circle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
     }
 
     @ViewBuilder

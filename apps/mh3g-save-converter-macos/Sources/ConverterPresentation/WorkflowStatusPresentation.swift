@@ -95,7 +95,7 @@ public extension ConversionWorkflow {
                 isBlocking: true
             )
         }
-        if sourceInspection == nil {
+        if !coreInspectionComplete {
             return .init(
                 kind: .needsInspection,
                 titleKey: "Status.NeedsInspection",

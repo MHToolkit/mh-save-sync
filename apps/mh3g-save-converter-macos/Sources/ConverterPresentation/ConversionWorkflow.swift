@@ -8,6 +8,7 @@ public final class ConversionWorkflow {
     public private(set) var state: WorkflowState = .input
     public private(set) var input: ConversionInput?
     public private(set) var sourceInspection: InputInspection?
+    public private(set) var currentInspection: InputInspection?
     public private(set) var targetInspection: InputInspection?
     public private(set) var components = ComponentSelection()
     public private(set) var dryRunFingerprint: DryRunFingerprint?
@@ -37,16 +38,23 @@ public final class ConversionWorkflow {
 
     public var canStartDryRun: Bool {
         input != nil
-            && sourceInspection != nil
-            && (mode == .newConversion || targetInspection != nil)
+            && coreInspectionComplete
             && selectedOptionalDataIsConfigured
             && activeOperation == nil
+    }
+
+    /// Repair mode has two independent read inputs.  The input stage is not
+    /// complete until both the original 3DS slot and the current Wii U/Cemu
+    /// reference have been inspected; the output may legitimately be absent.
+    public var coreInspectionComplete: Bool {
+        sourceInspection != nil
+            && (mode == .newConversion || currentInspection != nil)
     }
 
     /// A missing target inspection is expected for an export directory: the
     /// selected `user#` does not exist until the guarded transactional write.
     public var isNewTargetExport: Bool {
-        input != nil && sourceInspection != nil && targetInspection == nil
+        input != nil && coreInspectionComplete && targetInspection == nil
     }
 
     /// A selected optional domain cannot be treated as ready until every path
@@ -92,7 +100,8 @@ public final class ConversionWorkflow {
                   let input
             else { return false }
             return authorized.source == input.source.standardizedFileURL
-                && authorized.current == input.target.standardizedFileURL
+                && authorized.current == input.current?.standardizedFileURL
+                && authorized.output == input.target.standardizedFileURL
                 && authorized.extDataSource == components.extraSourceDirectory?.standardizedFileURL
                 && authorized.fromVersion == repairFromVersion
                 && !repairRevisionSelectionRequired
@@ -154,6 +163,7 @@ public final class ConversionWorkflow {
         guard self.input != input else { return }
         self.input = input
         sourceInspection = nil
+        currentInspection = nil
         targetInspection = nil
         coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .input, clearsPresentation: true)
@@ -167,6 +177,9 @@ public final class ConversionWorkflow {
         repairRevisionSelectionRequired = false
         components.includeSystem = false
         components.includeQuests = false
+        sourceInspection = nil
+        currentInspection = nil
+        targetInspection = nil
         coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .input, clearsPresentation: true)
     }
@@ -181,9 +194,14 @@ public final class ConversionWorkflow {
         }
     }
 
-    public func applyInspections(source: InputInspection, target: InputInspection?) {
+    public func applyInspections(
+        source: InputInspection,
+        current: InputInspection? = nil,
+        target: InputInspection?
+    ) {
         guard activeOperation == nil else { return }
         sourceInspection = source
+        currentInspection = current
         targetInspection = target
         coreWriteCompleted = false
         invalidateCoreAuthorization(nextState: .componentSelection, clearsPresentation: true)
@@ -239,6 +257,27 @@ public final class ConversionWorkflow {
                     stderr: ""
                 )
             }
+            let current: InputInspection?
+            if self.mode == .repairConverted {
+                guard let currentURL = input.current,
+                      FileManager.default.fileExists(atPath: currentURL.path)
+                else { throw ConversionWorkflowError.inputNotInspected }
+                let currentReport = try await self.execute(
+                    .inspect,
+                    arguments: [ConverterOperation.inspect.rawValue, currentURL.path],
+                    lease: lease
+                )
+                guard let inspectedCurrent = self.inspection(from: currentReport) else {
+                    throw self.failureAndRethrow(
+                        .inspect,
+                        ConversionWorkflowError.invalidReport("current Wii U inspect requires profile, size, and source SHA-256"),
+                        stderr: ""
+                    )
+                }
+                current = inspectedCurrent
+            } else {
+                current = nil
+            }
             let target: InputInspection?
             if FileManager.default.fileExists(atPath: input.target.path) {
                 let targetReport = try await self.execute(
@@ -258,6 +297,7 @@ public final class ConversionWorkflow {
                 target = nil
             }
             self.sourceInspection = source
+            self.currentInspection = current
             self.targetInspection = target
             self.invalidateCoreAuthorization(nextState: .componentSelection, clearsPresentation: false)
         }
@@ -277,10 +317,14 @@ public final class ConversionWorkflow {
             self.repairRevisionCandidates = []
             self.repairRevisionSelectionRequired = false
             if self.mode == .repairConverted {
+                guard let current = input.current,
+                      self.currentInspection != nil
+                else { throw ConversionWorkflowError.inputNotInspected }
                 var arguments = [
                     ConverterOperation.repairConverted.rawValue,
                     input.source.path,
-                    "--current", input.target.path,
+                    "--current", current.path,
+                    "--output", input.target.path,
                 ]
                 if self.components.includeGuildCards,
                    let extData = self.components.extraSourceDirectory {
@@ -300,6 +344,8 @@ public final class ConversionWorkflow {
                       ConverterEvidence.isValidSHA256(sourceSetSHA256),
                       let currentSetSHA256 = report.currentSetSHA256,
                       ConverterEvidence.isValidSHA256(currentSetSHA256),
+                      let outputSetSHA256 = report.outputSetSHA256,
+                      ConverterEvidence.isValidSHA256(outputSetSHA256),
                       let previewSHA256 = report.previewSHA256,
                       ConverterEvidence.isValidSHA256(previewSHA256),
                       let detection = report.detection,
@@ -309,7 +355,7 @@ public final class ConversionWorkflow {
                 else {
                     throw self.failureAndRethrow(
                         .repairConverted,
-                        ConversionWorkflowError.invalidReport("repair Dry Run requires source/current set and preview SHA-256"),
+                        ConversionWorkflowError.invalidReport("repair Dry Run requires source/current/output set and preview SHA-256"),
                         stderr: report.stderr ?? ""
                     )
                 }
@@ -324,11 +370,13 @@ public final class ConversionWorkflow {
                 }
                 self.repairDryRunFingerprint = RepairDryRunFingerprint(
                     source: input.source,
-                    current: input.target,
+                    current: current,
+                    output: input.target,
                     extDataSource: self.components.includeGuildCards ? self.components.extraSourceDirectory : nil,
                     fromVersion: self.repairFromVersion,
                     sourceSetSHA256: sourceSetSHA256,
                     currentSetSHA256: currentSetSHA256,
+                    outputSetSHA256: outputSetSHA256,
                     previewSHA256: previewSHA256,
                     components: repairComponents.compactMap { $0.repairFingerprint() }
                 )
@@ -414,8 +462,10 @@ public final class ConversionWorkflow {
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         if mode == .repairConverted {
             guard let fingerprint = repairDryRunFingerprint,
+                  let current = input.current,
                   fingerprint.source == input.source.standardizedFileURL,
-                  fingerprint.current == input.target.standardizedFileURL,
+                  fingerprint.current == current.standardizedFileURL,
+                  fingerprint.output == input.target.standardizedFileURL,
                   fingerprint.extDataSource == components.extraSourceDirectory?.standardizedFileURL,
                   fingerprint.fromVersion == repairFromVersion,
                   !repairRevisionSelectionRequired
@@ -424,7 +474,8 @@ public final class ConversionWorkflow {
                 var arguments = [
                     ConverterOperation.repairConverted.rawValue,
                     input.source.path,
-                    "--current", input.target.path,
+                    "--current", current.path,
+                    "--output", input.target.path,
                 ]
                 if self.components.includeGuildCards,
                    let extData = self.components.extraSourceDirectory {
@@ -437,6 +488,7 @@ public final class ConversionWorkflow {
                     "--write",
                     "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
                     "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                    "--expected-output-set-sha256", fingerprint.outputSetSHA256,
                     "--expected-preview-sha256", fingerprint.previewSHA256,
                 ]
                 let report = try await self.execute(
@@ -1160,21 +1212,25 @@ public final class ConversionWorkflow {
             )
         }
         do {
-            guard report.operation == ConverterOperation.repairConverted.rawValue,
+            guard let inputCurrent = input.current,
+                  report.operation == ConverterOperation.repairConverted.rawValue,
                   ConverterEvidence.path(report.source, equals: input.source),
-                  ConverterEvidence.path(report.current, equals: input.target),
+                  ConverterEvidence.path(report.current, equals: inputCurrent),
+                  ConverterEvidence.path(report.output, equals: input.target),
                   report.sourceSetSHA256 == fingerprint.sourceSetSHA256,
                   report.currentSetSHA256 == fingerprint.currentSetSHA256,
+                  report.outputSetSHA256 == fingerprint.outputSetSHA256,
                   report.previewSHA256 == fingerprint.previewSHA256,
                   ConverterEvidence.isValidSHA256(report.sourceSetSHA256),
                   ConverterEvidence.isValidSHA256(report.currentSetSHA256),
+                  ConverterEvidence.isValidSHA256(report.outputSetSHA256),
                   ConverterEvidence.isValidSHA256(report.previewSHA256),
                   let components = report.components,
                   !components.isEmpty,
                   components.compactMap({ $0.repairFingerprint() }) == fingerprint.components
             else {
                 throw ConversionWorkflowError.invalidReport(
-                    "repair completion requires exact source/current paths, set hashes, preview hash, and components"
+                    "repair completion requires exact source/current/output paths, set hashes, preview hash, and components"
                 )
             }
             if report.status == "written" {

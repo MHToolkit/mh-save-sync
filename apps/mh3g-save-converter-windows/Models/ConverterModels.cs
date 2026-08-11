@@ -47,10 +47,12 @@ public sealed record DryRunAuthorization(
 public sealed record RepairDryRunAuthorization(
     FileFingerprint Source,
     FileFingerprint Current,
+    FileFingerprint Output,
     string? ExtDataSource,
     string? FromVersion,
     string SourceSetSha256,
     string CurrentSetSha256,
+    string OutputSetSha256,
     string PreviewSha256,
     DateTimeOffset CompletedAt);
 

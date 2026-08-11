@@ -144,8 +144,13 @@ enum Command {
         /// Current same-numbered Wii U/Cemu slot after continued play.
         #[arg(long)]
         current: PathBuf,
-        /// Optional complete 3DS ExtData `user` directory. When present, the
-        /// current Cemu directory must contain all card*/quest* components.
+        /// Destination Wii U/Cemu slot for the repaired result. When omitted,
+        /// the legacy in-place behavior writes back to --current.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Optional complete 3DS ExtData `user` directory. The current Cemu
+        /// directory must contain all card*/quest* components; a separate
+        /// output directory must already contain card1/card2/card3/cardbox.
         #[arg(long)]
         source_extdata_dir: Option<PathBuf>,
         /// Override automatic historical-version classification.
@@ -157,6 +162,9 @@ enum Command {
         /// Require the complete current Cemu input-set SHA-256 from Dry Run.
         #[arg(long, requires = "write")]
         expected_current_set_sha256: Option<String>,
+        /// Require the selected output-state SHA-256 from Dry Run.
+        #[arg(long, requires = "write")]
+        expected_output_set_sha256: Option<String>,
         /// Require the exact merge-preview SHA-256 from Dry Run.
         #[arg(long, requires = "write")]
         expected_preview_sha256: Option<String>,
@@ -267,6 +275,7 @@ struct CecConversionOptions {
 struct RepairWriteOptions {
     expected_source_set_sha256: Option<String>,
     expected_current_set_sha256: Option<String>,
+    expected_output_set_sha256: Option<String>,
     expected_preview_sha256: Option<String>,
     dry_run: bool,
     write: bool,
@@ -414,7 +423,9 @@ struct RepairComponentReport {
     detection: RevisionDetection,
     merge: CompatibilityMerge,
     target: PathBuf,
+    target_sha256_before: Option<String>,
     modified: bool,
+    write_required: bool,
 }
 
 struct RepairComponentInput {
@@ -422,6 +433,7 @@ struct RepairComponentInput {
     source: Vec<u8>,
     current: Vec<u8>,
     target: PathBuf,
+    target_before: Option<Vec<u8>>,
     detection: RevisionDetection,
 }
 
@@ -431,9 +443,11 @@ struct RepairConvertedReport {
     status: &'static str,
     source: PathBuf,
     current: PathBuf,
+    output: PathBuf,
     source_extdata_dir: Option<PathBuf>,
     source_set_sha256: String,
     current_set_sha256: String,
+    output_set_sha256: String,
     preview_sha256: String,
     detection: RevisionDetection,
     components: Vec<RepairComponentReport>,
@@ -442,16 +456,19 @@ struct RepairConvertedReport {
     compatibility_manifest: Option<PathBuf>,
 }
 
-const COMPATIBILITY_REPAIR_MANIFEST_VERSION: u32 = 1;
+const COMPATIBILITY_REPAIR_MANIFEST_VERSION: u32 = 2;
 const COMPATIBILITY_REPAIR_MANIFEST_PREFIX: &str = ".mh3g-compatibility-repair-";
 
 #[derive(Debug, Serialize, serde::Deserialize)]
 struct CompatibilityRepairManifest {
     version: u32,
     transaction_id: String,
-    current_dir: PathBuf,
+    #[serde(alias = "current_dir")]
+    output_dir: PathBuf,
     source_set_sha256: String,
     current_set_sha256: String,
+    #[serde(default)]
+    output_set_sha256: Option<String>,
     preview_sha256: String,
     core_manifest: Option<PathBuf>,
     extras_manifest: Option<PathBuf>,
@@ -573,10 +590,12 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
         Command::RepairConverted {
             source,
             current,
+            output,
             source_extdata_dir,
             from_version,
             expected_source_set_sha256,
             expected_current_set_sha256,
+            expected_output_set_sha256,
             expected_preview_sha256,
             dry_run,
             write,
@@ -585,11 +604,13 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
             serde_json::to_string(&repair_converted(
                 source,
                 current,
+                output,
                 source_extdata_dir,
                 from_version,
                 RepairWriteOptions {
                     expected_source_set_sha256,
                     expected_current_set_sha256,
+                    expected_output_set_sha256,
                     expected_preview_sha256,
                     dry_run,
                     write,
@@ -1122,9 +1143,21 @@ fn read_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, Conversion
     io_at_path(fs::read(path), operation, path)
 }
 
+fn read_optional_file(
+    path: &Path,
+    operation: &'static str,
+) -> Result<Option<Vec<u8>>, ConversionError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => io_at_path(Err(error), operation, path),
+    }
+}
+
 fn repair_converted(
     source: PathBuf,
     current: PathBuf,
+    output: Option<PathBuf>,
     source_extdata_dir: Option<PathBuf>,
     from_version: Option<ConverterRevision>,
     options: RepairWriteOptions,
@@ -1132,11 +1165,17 @@ fn repair_converted(
     debug_assert!(!(options.dry_run && options.write));
     validate_slot_path(&source)?;
     validate_slot_path(&current)?;
-    if source.file_name() != current.file_name() {
+    let require_output_expectation = output.is_some();
+    let output_selection = output.unwrap_or_else(|| current.clone());
+    validate_slot_path(&output_selection)?;
+    if source.file_name() != current.file_name()
+        || source.file_name() != output_selection.file_name()
+    {
         return Err(ConversionError::InvalidSave(format!(
-            "original 3DS and current Cemu slots must have the same basename: {} vs {}",
+            "original 3DS, current Cemu, and output slots must have the same basename: {}, {}, {}",
             source.display(),
-            current.display()
+            current.display(),
+            output_selection.display()
         )));
     }
     let slot_name = source
@@ -1148,14 +1187,34 @@ fn repair_converted(
     })?;
     let current_dir = io_at_path(
         fs::canonicalize(current_parent),
-        "resolving compatibility target directory",
+        "resolving compatibility current directory",
         current_parent,
     )?;
+    let output_parent = output_selection.parent().ok_or_else(|| {
+        ConversionError::InvalidSave("compatibility output slot has no parent directory".to_owned())
+    })?;
+    let output_dir = io_at_path(
+        fs::canonicalize(output_parent),
+        "resolving compatibility output directory",
+        output_parent,
+    )?;
+    let output_path = output_dir.join(slot_name);
 
     let source_slot = read_file(&source, "reading original 3DS compatibility source")?;
     let current_slot = read_file(&current, "reading current Cemu compatibility target")?;
+    let output_slot_before =
+        read_optional_file(&output_path, "reading compatibility output target")?;
+    if let Some(bytes) = output_slot_before.as_deref()
+        && inspect_bytes(bytes)?.profile != SaveProfile::JpCemu
+    {
+        return Err(ConversionError::InvalidSave(format!(
+            "compatibility output must be a Japanese Cemu slot or an absent user# path: {}",
+            output_path.display()
+        )));
+    }
     let mut source_set = BTreeMap::from([(slot_name.to_owned(), source_slot.clone())]);
     let mut current_set = BTreeMap::from([(slot_name.to_owned(), current_slot.clone())]);
+    let mut output_set = BTreeMap::from([(slot_name.to_owned(), output_slot_before.clone())]);
 
     let slot_detection = detect_component_revision(&source_slot, &current_slot, slot_name)?;
     let mut repair_inputs = vec![RepairComponentInput {
@@ -1163,7 +1222,8 @@ fn repair_converted(
         detection: slot_detection,
         source: source_slot.clone(),
         current: current_slot.clone(),
-        target: current.clone(),
+        target: output_path.clone(),
+        target_before: output_slot_before,
     }];
     let mut preserved_components = Vec::new();
 
@@ -1198,6 +1258,22 @@ fn repair_converted(
             current_set.insert(component.to_owned(), current_bytes.clone());
 
             if matches!(component, "card1" | "card2" | "card3" | "cardbox") {
+                let output_path = output_dir.join(component);
+                let output_bytes = read_optional_file(
+                    &output_path,
+                    "reading compatibility ExtData output target",
+                )?
+                .ok_or_else(|| {
+                    ConversionError::InvalidSave(format!(
+                        "compatibility output ExtData component is missing; choose an initialized Wii U/Cemu output directory: {}",
+                        output_path.display()
+                    ))
+                })?;
+                mh3g_save_convert::converter::validate_cemu_external_component_named(
+                    &output_bytes,
+                    component,
+                )?;
+                output_set.insert(component.to_owned(), Some(output_bytes.clone()));
                 let detection =
                     detect_component_revision(&source_bytes, &current_bytes, component)?;
                 repair_inputs.push(RepairComponentInput {
@@ -1205,7 +1281,8 @@ fn repair_converted(
                     detection,
                     source: source_bytes,
                     current: current_bytes,
-                    target: current_path,
+                    target: output_path,
+                    target_before: Some(output_bytes),
                 });
             } else {
                 preserved_components.push(component.to_owned());
@@ -1224,21 +1301,30 @@ fn repair_converted(
         .into_iter()
         .map(|input| {
             let merge = merge_component(&input.source, &input.current, &input.component, revision)?;
+            let target_sha256_before = input.target_before.as_deref().map(sha256_hex);
+            let write_required = input
+                .target_before
+                .as_deref()
+                .is_none_or(|before| before != merge.bytes);
             Ok(RepairComponentReport {
                 component: input.component,
                 detection: input.detection,
                 modified: merge.current_sha256 != merge.merged_sha256,
+                write_required,
                 merge,
                 target: input.target,
+                target_sha256_before,
             })
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
 
     let source_set_sha256 = component_set_sha256(&source_set);
     let current_set_sha256 = component_set_sha256(&current_set);
+    let output_set_sha256 = component_state_set_sha256(&output_set);
     let preview_bytes = serde_json::to_vec(&(
         &source_set_sha256,
         &current_set_sha256,
+        &output_set_sha256,
         &detection,
         &components,
         &preserved_components,
@@ -1256,6 +1342,13 @@ fn repair_converted(
             &current_set_sha256,
             "current set",
         )?;
+        if require_output_expectation {
+            require_repair_expectation(
+                options.expected_output_set_sha256.as_deref(),
+                &output_set_sha256,
+                "output set",
+            )?;
+        }
         require_repair_expectation(
             options.expected_preview_sha256.as_deref(),
             &preview_sha256,
@@ -1266,17 +1359,17 @@ fn repair_converted(
     let mut manifests = Vec::new();
     let mut core_manifest = None;
     let mut extras_manifest = None;
-    if options.write && components[0].modified {
-        let manifest_path = manifest_path_for_target(&current)?;
+    if options.write && components[0].write_required {
+        let manifest_path = manifest_path_for_target(&output_path)?;
         install_compatibility_merge_with_expectations(
             &source_slot,
             &components[0].merge.bytes,
-            &current,
+            &output_path,
             &manifest_path,
             InstallExpectations {
                 source_sha256: Some(components[0].merge.source_sha256.as_str()),
-                target_sha256: Some(components[0].merge.current_sha256.as_str()),
-                target_must_be_absent: false,
+                target_sha256: components[0].target_sha256_before.as_deref(),
+                target_must_be_absent: components[0].target_sha256_before.is_none(),
             },
         )?;
         manifests.push(manifest_path.clone());
@@ -1293,11 +1386,13 @@ fn repair_converted(
             )
         })
         .collect::<Vec<_>>();
-    let cards_modified = card_components.iter().any(|component| component.modified);
-    if options.write && cards_modified {
-        let staging_parent = current_dir.parent().ok_or_else(|| {
+    let cards_write_required = card_components
+        .iter()
+        .any(|component| component.write_required);
+    if options.write && cards_write_required {
+        let staging_parent = output_dir.parent().ok_or_else(|| {
             ConversionError::InvalidSave(
-                "current Cemu save directory has no parent for compatibility staging".to_owned(),
+                "output Cemu save directory has no parent for compatibility staging".to_owned(),
             )
         })?;
         let staging_dir = staging_parent.join(format!(".mh3g-compat-staging-{}", Uuid::new_v4()));
@@ -1327,10 +1422,10 @@ fn repair_converted(
                 )?;
             }
             let groups = [ExtraGroup::GuildCards];
-            let dry_run = dry_run_extra_groups(&staging_dir, &current_dir, &groups, None, None)?;
+            let dry_run = dry_run_extra_groups(&staging_dir, &output_dir, &groups, None, None)?;
             install_extra_groups(
                 &staging_dir,
-                &current_dir,
+                &output_dir,
                 &groups,
                 Some(&dry_run.staging_set_sha256),
                 Some(&dry_run.target_set_sha256),
@@ -1356,18 +1451,19 @@ fn repair_converted(
         }
     }
 
-    let any_modified = components.iter().any(|component| component.modified);
+    let any_write_required = components.iter().any(|component| component.write_required);
     let compatibility_manifest = if options.write && !manifests.is_empty() {
         let transaction_id = Uuid::new_v4().hyphenated().to_string();
-        let manifest_path = current_dir.join(format!(
+        let manifest_path = output_dir.join(format!(
             "{COMPATIBILITY_REPAIR_MANIFEST_PREFIX}{transaction_id}.json"
         ));
         let manifest = CompatibilityRepairManifest {
             version: COMPATIBILITY_REPAIR_MANIFEST_VERSION,
             transaction_id,
-            current_dir: current_dir.clone(),
+            output_dir: output_dir.clone(),
             source_set_sha256: source_set_sha256.clone(),
             current_set_sha256: current_set_sha256.clone(),
+            output_set_sha256: Some(output_set_sha256.clone()),
             preview_sha256: preview_sha256.clone(),
             core_manifest: core_manifest.clone(),
             extras_manifest: extras_manifest.clone(),
@@ -1405,7 +1501,7 @@ fn repair_converted(
     Ok(RepairConvertedReport {
         operation: "repair-converted",
         status: if options.write {
-            if any_modified {
+            if any_write_required {
                 "written"
             } else {
                 "no-changes"
@@ -1415,9 +1511,11 @@ fn repair_converted(
         },
         source,
         current,
+        output: output_selection,
         source_extdata_dir,
         source_set_sha256,
         current_set_sha256,
+        output_set_sha256,
         preview_sha256,
         detection,
         components,
@@ -1484,9 +1582,9 @@ fn rollback_repair(manifest_path: PathBuf) -> Result<CompatibilityRollbackReport
 
     let bytes = read_file(&manifest_path, "reading compatibility repair manifest")?;
     let manifest: CompatibilityRepairManifest = serde_json::from_slice(&bytes)?;
-    if manifest.version != COMPATIBILITY_REPAIR_MANIFEST_VERSION
+    if !matches!(manifest.version, 1 | COMPATIBILITY_REPAIR_MANIFEST_VERSION)
         || manifest.transaction_id != transaction_id
-        || manifest.current_dir != parent
+        || manifest.output_dir != parent
         || manifest.core_manifest.is_none() && manifest.extras_manifest.is_none()
     {
         return Err(ConversionError::InvalidSave(
@@ -1502,6 +1600,16 @@ fn rollback_repair(manifest_path: PathBuf) -> Result<CompatibilityRollbackReport
             return Err(ConversionError::InvalidSave(format!(
                 "compatibility repair {label} SHA-256 is invalid"
             )));
+        }
+    }
+    match (manifest.version, manifest.output_set_sha256.as_deref()) {
+        (1, None) => {}
+        (COMPATIBILITY_REPAIR_MANIFEST_VERSION, Some(hash))
+            if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) => {}
+        _ => {
+            return Err(ConversionError::InvalidSave(
+                "compatibility repair output set SHA-256 is invalid".to_owned(),
+            ));
         }
     }
     for child in [
@@ -1597,6 +1705,23 @@ fn component_set_sha256(components: &BTreeMap<String, Vec<u8>>) -> String {
         digest.update((name.len() as u64).to_be_bytes());
         digest.update(name.as_bytes());
         digest.update(content_sha256.as_bytes());
+    }
+    hex::encode(digest.finalize())
+}
+
+fn component_state_set_sha256(components: &BTreeMap<String, Option<Vec<u8>>>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"mh3g-compatibility-output-state-v1\0");
+    for (name, bytes) in components {
+        digest.update((name.len() as u64).to_be_bytes());
+        digest.update(name.as_bytes());
+        match bytes {
+            Some(bytes) => {
+                digest.update([1]);
+                digest.update(sha256_hex(bytes).as_bytes());
+            }
+            None => digest.update([0]),
+        }
     }
     hex::encode(digest.finalize())
 }
@@ -1801,6 +1926,40 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
         assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn compatibility_manifest_v2_renames_output_directory_but_reads_v1_alias() {
+        let legacy: CompatibilityRepairManifest = serde_json::from_str(
+            r#"{
+                "version": 1,
+                "transaction_id": "legacy-id",
+                "current_dir": "legacy-output",
+                "source_set_sha256": "source",
+                "current_set_sha256": "current",
+                "preview_sha256": "preview",
+                "core_manifest": "core.json",
+                "extras_manifest": null
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.output_dir, PathBuf::from("legacy-output"));
+        assert_eq!(legacy.output_set_sha256, None);
+
+        let current = CompatibilityRepairManifest {
+            version: COMPATIBILITY_REPAIR_MANIFEST_VERSION,
+            transaction_id: "current-id".to_owned(),
+            output_dir: PathBuf::from("repaired-output"),
+            source_set_sha256: "source".to_owned(),
+            current_set_sha256: "current".to_owned(),
+            output_set_sha256: Some("output".to_owned()),
+            preview_sha256: "preview".to_owned(),
+            core_manifest: Some(PathBuf::from("core.json")),
+            extras_manifest: None,
+        };
+        let encoded = serde_json::to_value(current).unwrap();
+        assert_eq!(encoded["output_dir"], "repaired-output");
+        assert!(encoded.get("current_dir").is_none());
     }
 
     #[test]

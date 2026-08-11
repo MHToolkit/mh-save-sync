@@ -5,18 +5,22 @@ namespace MHToolkit.MH3GSaveConverter.Windows.Models;
 /// selections are convenience only: they always resolve to one direct child
 /// and are never searched recursively.
 /// </summary>
-public sealed record CoreSavePaths(string Source, string Target, string Slot);
+public sealed record CoreSavePaths(string Source, string Target, string Slot, string? Current = null);
 
 public enum SavePathResolutionError
 {
     MissingSourceSelection,
     MissingTargetSelection,
+    MissingCurrentSelection,
     InvalidSlot,
     SourcePathMissing,
     SourceSlotMissing,
     SourceSlotNameMismatch,
     TargetPathMissing,
     TargetSlotNameMismatch,
+    CurrentPathMissing,
+    CurrentSlotMissing,
+    CurrentSlotNameMismatch,
     ExtDataPathMissing,
     ExtDataUserDirectoryMissing,
     InvalidPath,
@@ -59,6 +63,32 @@ public static class SavePathResolver
         }
 
         paths = new CoreSavePaths(source, target, slot);
+        return true;
+    }
+
+    public static bool TryResolveRepairCore(
+        string sourceSelection,
+        string currentSelection,
+        string targetSelection,
+        string slot,
+        out CoreSavePaths? paths,
+        out SavePathResolutionError error)
+    {
+        paths = null;
+        if (!IsSlot(slot))
+        {
+            error = SavePathResolutionError.InvalidSlot;
+            return false;
+        }
+
+        if (!TryResolveSource(sourceSelection, slot, out var source, out error)
+            || !TryResolveCurrent(currentSelection, slot, out var current, out error)
+            || !TryResolveTarget(targetSelection, slot, out var target, out error))
+        {
+            return false;
+        }
+
+        paths = new CoreSavePaths(source, target, slot, current);
         return true;
     }
 
@@ -161,6 +191,62 @@ public static class SavePathResolver
         if (!string.Equals(Path.GetFileName(fullPath), slot, StringComparison.OrdinalIgnoreCase))
         {
             error = SavePathResolutionError.TargetSlotNameMismatch;
+            return false;
+        }
+
+        resolved = fullPath;
+        error = default;
+        return true;
+    }
+
+    public static bool TryResolveCurrent(
+        string selection,
+        string slot,
+        out string resolved,
+        out SavePathResolutionError error)
+    {
+        resolved = string.Empty;
+        if (string.IsNullOrWhiteSpace(selection))
+        {
+            error = SavePathResolutionError.MissingCurrentSelection;
+            return false;
+        }
+
+        if (!IsSlot(slot))
+        {
+            error = SavePathResolutionError.InvalidSlot;
+            return false;
+        }
+
+        if (!TryGetFullPath(selection, out var fullPath))
+        {
+            error = SavePathResolutionError.InvalidPath;
+            return false;
+        }
+
+        if (Directory.Exists(fullPath))
+        {
+            var candidate = Path.Combine(fullPath, slot);
+            if (!File.Exists(candidate))
+            {
+                error = SavePathResolutionError.CurrentSlotMissing;
+                return false;
+            }
+
+            resolved = candidate;
+            error = default;
+            return true;
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            error = SavePathResolutionError.CurrentPathMissing;
+            return false;
+        }
+
+        if (!string.Equals(Path.GetFileName(fullPath), slot, StringComparison.OrdinalIgnoreCase))
+        {
+            error = SavePathResolutionError.CurrentSlotNameMismatch;
             return false;
         }
 

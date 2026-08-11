@@ -14,9 +14,11 @@
 - 不扫描 SD 卡、MLC、ZIP、7z、RAR 或任意存档文件夹。所有输入都必须由用户
   选择准确文件或目录。
 - 全新转换流程固定为 `inspect` -> `convert --dry-run` -> 最终 SHA-256
-  复核 -> `convert --write`。修复模式则使用原始 3DS `user#`、当前同槽位
-  Cemu `user#` 与可选的完整 3DS ExtData，调用 `repair-converted`。自动检测
-  结果为歧义时，界面会要求选择 0.0.3 至 0.0.6 后重新 Dry Run。
+  复核 -> `convert --write`。修复模式明确提供三个独立控件：原始 3DS `user#`、
+  只读的当前同槽位 Cemu `user#`、修复结果输出文件/目录；三条路径都会传给
+  `repair-converted`。可选完整 3DS ExtData 用于修复公会名片；独立输出目录必须
+  已初始化相应卡片文件。自动检测结果为歧义时，界面会要求选择 0.0.3 至
+  0.0.6 后重新 Dry Run。
 - 写入前有确认对话框。普通转换记录单文件 manifest；兼容修复记录
   `.mh3g-compatibility-repair-<UUID>.json`，并通过 `rollback-repair` 总体回滚。
 - C# 仅用 `ProcessStartInfo.ArgumentList` 逐个传递 argv，且

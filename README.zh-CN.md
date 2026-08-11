@@ -279,38 +279,45 @@ NEW_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$NEW_DRY_RUN_JSON")
 
 ```text
 mh3g-save-convert repair-converted <原始-3DS-user#> --current <当前-Cemu-user#> \
+  [--output <修复后-Cemu-user#>] \
   [--source-extdata-dir <原始-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
-    --expected-current-set-sha256 <SHA256> --expected-preview-sha256 <SHA256>]
+    --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
+    --expected-preview-sha256 <SHA256>]
 ```
 
 该命令用于“曾用 0.0.3 至 0.0.6 转换，之后又在 Wii U/Cemu 中继续游玩”的存档。它不会把当前存档整体替换为旧 3DS 状态，而是为每个已知历史转换字段比较“旧版预期值、当前值、当前转换器预期值”：仍等于旧版结果的字段才修复；已在 Wii U 侧变化的整字段保留并报告冲突。因此当前 HR、装备、素材、仓库、任务进度、农场、狩猎船和其他继续游玩的数据以当前 Cemu 存档为准。
 
-CLI 必须接收两个编号相同、文件名相同的准确 `user1`、`user2` 或 `user3` 文件。原生 macOS/Windows 工作台可以让用户选择文件或其直接父目录，但最终仍只把解析出的准确文件传给 CLI。若启用公会名片修复，`--source-extdata-dir` 必须是含全部八个源文件的 3DS `.../00000481/user` 目录，并且当前 `user#` 的父目录必须含全部八个同名 Cemu 文件。当前转换器会字段级修复 `user#`、`card1`、`card2`、`card3`、`cardbox`；`quest1` 至 `quest4` 只参与集合校验并逐字节保留。`system`、`cec`、`phrase1` 至 `phrase3` 和未知文件不会被该命令读取或写入。
+三个路径的职责刻意分开：原始 3DS 槽位是只读转换源，`--current` 是保存玩家后续 Wii U/Cemu 进度的只读引用，`--output` 才是唯一允许写入的核心槽位。三者必须是编号和文件名相同的准确 `user1`、`user2` 或 `user3`。CLI 省略 `--output` 时仅为兼容旧脚本而继续原地写回 `--current`；原生 macOS/Windows 工作台不会隐藏这种复用，始终独立显示并传入“当前 Wii U 引用”和“修复后输出”。
+
+原生工作台可以让用户选择文件或其直接父目录，但最终仍只把解析出的准确文件传给 CLI。若启用公会名片修复，`--source-extdata-dir` 必须是含全部八个源文件的 3DS `.../00000481/user` 目录，并且当前 `user#` 的父目录必须含全部八个同名 Cemu 文件。若输出目录与当前引用目录不同，输出目录必须是已经初始化的 Cemu 存档目录，并至少含 `card1`、`card2`、`card3`、`cardbox`，否则多文件事务会失败关闭。当前转换器会字段级修复 `user#`、`card1`、`card2`、`card3`、`cardbox`；`quest1` 至 `quest4` 只参与集合校验并逐字节保留。`system`、`cec`、`phrase1` 至 `phrase3` 和未知文件不会被该命令读取或写入。
 
 先运行只读预览：
 
 ```bash
-REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+# SOURCE、CURRENT、OUTPUT 是三个独立但同槽位的 user# 路径。
+REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
   --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
 ```
 
-如果 JSON 顶层的 `detection.confidence` 为 `ambiguous`，不要直接写入；从其 `candidates` 中确认当时使用的版本，并用 `--from-version` 重新运行 Dry Run。所有选中组件始终共用这一份版本判断，不会把 `user#` 和 `card*` 分别按不同历史版本修复。自动检测不是读取存档内嵌版本号，因为旧版本没有写入可靠标记。写入必须复用同一次最终 Dry Run 的三个集合哈希：
+如果 JSON 顶层的 `detection.confidence` 为 `ambiguous`，不要直接写入；从其 `candidates` 中确认当时使用的版本，并用 `--from-version` 重新运行 Dry Run。所有选中组件始终共用这一份版本判断，不会把 `user#` 和 `card*` 分别按不同历史版本修复。自动检测不是读取存档内嵌版本号，因为旧版本没有写入可靠标记。写入必须复用同一次最终 Dry Run 的四个授权哈希：
 
 ```bash
 SOURCE_SET_SHA256=$(jq -er '.source_set_sha256' <<<"$REPAIR_JSON")
 CURRENT_SET_SHA256=$(jq -er '.current_set_sha256' <<<"$REPAIR_JSON")
+OUTPUT_SET_SHA256=$(jq -er '.output_set_sha256' <<<"$REPAIR_JSON")
 PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
-"${CLI[@]}" repair-converted "$SOURCE" --current "$TARGET" \
+"${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
   --source-extdata-dir "$EXTRAS_SOURCE" \
   --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
   --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
+  --expected-output-set-sha256 "$OUTPUT_SET_SHA256" \
   --expected-preview-sha256 "$PREVIEW_SHA256" \
   --write
 ```
 
-若 Dry Run 使用了 `--from-version`，写入必须传入同一个值。任一源文件、当前目标或预览在两步之间变化都会失败关闭。成功写入会返回总 manifest `.mh3g-compatibility-repair-<UUID>.json`；它协调核心槽位与可选公会名片子事务。完整回滚使用：
+若 Dry Run 使用了 `--from-version`，写入必须传入同一个值。任一原始源、当前 Wii U 引用、输出状态或预览在两步之间变化都会失败关闭。成功写入会返回总 manifest `.mh3g-compatibility-repair-<UUID>.json`；它协调核心槽位与可选公会名片子事务。完整回滚使用：
 
 ```bash
 "${CLI[@]}" rollback-repair --manifest "$COMPATIBILITY_MANIFEST"

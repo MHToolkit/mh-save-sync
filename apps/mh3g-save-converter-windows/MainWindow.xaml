@@ -215,11 +215,27 @@
                             <TextBlock Text="{Binding SourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                         </StackPanel>
 
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding Copy.TargetSlot}" FontWeight="SemiBold" />
+                        <StackPanel Spacing="7" Visibility="{Binding RepairCurrentVisibility}">
+                            <TextBlock Text="{Binding Copy.CurrentSlot}" FontWeight="SemiBold" />
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="TargetPathBox" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="matching Cemu user#" />
+                                <TextBox x:Name="CurrentPathBox" Text="{Binding CurrentPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="converted Wii U / Cemu user#" />
+                                <Button Grid.Column="1" Click="ChooseCurrentFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
+                                </Button>
+                                <Button Grid.Column="2" Click="ChooseCurrentFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
+                                </Button>
+                            </Grid>
+                            <TextBlock Text="{Binding Copy.CurrentSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding CurrentPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="7">
+                            <TextBlock Text="{Binding CoreTargetTitle}" FontWeight="SemiBold" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="TargetPathBox" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="{Binding CoreTargetPlaceholder}" />
                                 <Button Grid.Column="1" Click="ChooseTargetFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
                                     <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
                                 </Button>
@@ -227,7 +243,7 @@
                                     <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
                                 </Button>
                             </Grid>
-                            <TextBlock Text="{Binding Copy.TargetSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                            <TextBlock Text="{Binding CoreTargetHint}" Style="{StaticResource SectionCaptionTextStyle}" />
                             <TextBlock Text="{Binding TargetPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                         </StackPanel>
 

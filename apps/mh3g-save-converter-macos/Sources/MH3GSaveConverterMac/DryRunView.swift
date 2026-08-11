@@ -20,8 +20,18 @@ struct DryRunView: View {
                         path: workflow.input?.source.path,
                         state: workflow.sourceInspection == nil ? .pending : .ready
                     )
+                    if workflow.mode == .repairConverted {
+                        DryRunFlowRow(
+                            title: ConverterCopy.text("Input.Current", language: language),
+                            path: workflow.input?.current?.path,
+                            state: workflow.currentInspection == nil ? .pending : .ready
+                        )
+                    }
                     DryRunFlowRow(
-                        title: ConverterCopy.text("Input.Target", language: language),
+                        title: ConverterCopy.text(
+                            workflow.mode == .repairConverted ? "Input.RepairOutput" : "Input.Target",
+                            language: language
+                        ),
                         path: targetPath,
                         state: workflow.targetInspection == nil && !workflow.isNewTargetExport ? .pending : .ready
                     )
@@ -176,8 +186,13 @@ private struct RepairHashRows: View {
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
         }
-        LabeledContent(ConverterCopy.text("Write.TargetSHA256", language: language)) {
+        LabeledContent(ConverterCopy.text("Write.CurrentSetSHA256", language: language)) {
             Text(fingerprint.currentSetSHA256)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+        }
+        LabeledContent(ConverterCopy.text("Write.OutputSetSHA256", language: language)) {
+            Text(fingerprint.outputSetSHA256)
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
         }

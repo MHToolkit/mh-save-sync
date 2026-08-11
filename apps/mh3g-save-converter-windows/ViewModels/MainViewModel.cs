@@ -29,6 +29,7 @@ public sealed class MainViewModel : ObservableObject
     private string _repairDetectionSummary = string.Empty;
     private string _selectedSlot = SavePathResolver.AvailableSlots[1];
     private string _sourcePath = string.Empty;
+    private string _currentPath = string.Empty;
     private string _targetPath = string.Empty;
     private string _cliPath;
     private string _rollbackManifestPath = string.Empty;
@@ -53,8 +54,10 @@ public sealed class MainViewModel : ObservableObject
     private string _latestReport = string.Empty;
     private string _latestError = string.Empty;
     private bool _sourceInspected;
+    private bool _currentInspected;
     private bool _targetInspected;
     private FileFingerprint? _inspectedSource;
+    private FileFingerprint? _inspectedCurrent;
     private FileFingerprint? _inspectedTarget;
     private DryRunAuthorization? _coreAuthorization;
     private RepairDryRunAuthorization? _repairAuthorization;
@@ -114,6 +117,10 @@ public sealed class MainViewModel : ObservableObject
     public string ConversionModeDescription => IsRepairMode
         ? Copy.ConversionModeRepairDescription
         : Copy.ConversionModeNewDescription;
+    public Visibility RepairCurrentVisibility => IsRepairMode ? Visibility.Visible : Visibility.Collapsed;
+    public string CoreTargetTitle => IsRepairMode ? Copy.RepairOutputSlot : Copy.TargetSlot;
+    public string CoreTargetHint => IsRepairMode ? Copy.RepairOutputSlotHint : Copy.TargetSlotHint;
+    public string CoreTargetPlaceholder => IsRepairMode ? Copy.RepairOutputPlaceholder : Copy.NewOutputPlaceholder;
     public bool IsRepairRevisionSelectionRequired
     {
         get => _repairRevisionSelectionRequired;
@@ -164,6 +171,10 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedConversionMode));
         OnPropertyChanged(nameof(IsRepairMode));
         OnPropertyChanged(nameof(ConversionModeDescription));
+        OnPropertyChanged(nameof(RepairCurrentVisibility));
+        OnPropertyChanged(nameof(CoreTargetTitle));
+        OnPropertyChanged(nameof(CoreTargetHint));
+        OnPropertyChanged(nameof(CoreTargetPlaceholder));
         RaiseOptionalConfigurationAvailability();
     }
 
@@ -193,6 +204,19 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public string CurrentPath
+    {
+        get => _currentPath;
+        set
+        {
+            if (SetProperty(ref _currentPath, value))
+            {
+                InvalidateCoreAuthorization();
+                OnPropertyChanged(nameof(CurrentPathPreview));
+            }
+        }
+    }
+
     public string SelectedSlot
     {
         get => _selectedSlot;
@@ -202,6 +226,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 InvalidateCoreAuthorization();
                 OnPropertyChanged(nameof(SourcePathPreview));
+                OnPropertyChanged(nameof(CurrentPathPreview));
                 OnPropertyChanged(nameof(TargetPathPreview));
             }
         }
@@ -233,6 +258,21 @@ public sealed class MainViewModel : ObservableObject
 
             return SavePathResolver.TryResolveTarget(TargetPath, SelectedSlot, out var target, out var error)
                 ? Copy.DescribeResolvedTarget(target)
+                : Copy.DescribePathError(error);
+        }
+    }
+
+    public string CurrentPathPreview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(CurrentPath))
+            {
+                return string.Empty;
+            }
+
+            return SavePathResolver.TryResolveCurrent(CurrentPath, SelectedSlot, out var current, out var error)
+                ? Copy.DescribeResolvedCurrent(current)
                 : Copy.DescribePathError(error);
         }
     }
@@ -557,7 +597,7 @@ public sealed class MainViewModel : ObservableObject
     public bool CanRunCoreDryRun => !IsBusy
         && _sourceInspected
         && _targetInspected
-        && (!IsRepairMode || _inspectedTarget?.Exists == true)
+        && (!IsRepairMode || _currentInspected && _inspectedCurrent?.Exists == true)
         && SelectedOptionalDataIsConfigured
         && HasValidCorePaths();
     public bool CanWriteCore => !IsBusy
@@ -618,23 +658,42 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync("inspect", async cancellationToken =>
         {
             var sourceAtInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentAtInspection = IsRepairMode
+                ? await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)
+                : null;
             var targetAtInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
             var sourceReport = await ExecuteAsync("inspect", new[] { "inspect", paths.Source }, cancellationToken);
             RequireSuccess(sourceReport, "inspect source");
+            if (currentAtInspection is not null)
+            {
+                var currentReport = await ExecuteAsync(
+                    "inspect current",
+                    new[] { "inspect", paths.Current! },
+                    cancellationToken);
+                RequireSuccess(currentReport, "inspect current");
+            }
             if (targetAtInspection.Exists)
             {
                 var targetReport = await ExecuteAsync("inspect", new[] { "inspect", paths.Target }, cancellationToken);
                 RequireSuccess(targetReport, "inspect target");
             }
             var sourceAfterInspection = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentAfterInspection = IsRepairMode
+                ? await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)
+                : null;
             var targetAfterInspection = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
-            if (!sourceAtInspection.Matches(sourceAfterInspection) || !targetAtInspection.Matches(targetAfterInspection))
+            if (!sourceAtInspection.Matches(sourceAfterInspection)
+                || (currentAtInspection is not null
+                    && (currentAfterInspection is null || !currentAtInspection.Matches(currentAfterInspection)))
+                || !targetAtInspection.Matches(targetAfterInspection))
             {
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
             _sourceInspected = true;
+            _currentInspected = !IsRepairMode || currentAfterInspection?.Exists == true;
             _targetInspected = true;
             _inspectedSource = sourceAfterInspection;
+            _inspectedCurrent = currentAfterInspection;
             _inspectedTarget = targetAfterInspection;
             _coreAuthorization = null;
             Stage = WorkflowStage.Inspected;
@@ -654,10 +713,11 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync("inspect-progress", async cancellationToken =>
         {
             var arguments = new List<string> { "inspect-progress", paths.Source };
-            if (File.Exists(paths.Target))
+            var comparisonTarget = IsRepairMode ? paths.Current! : paths.Target;
+            if (File.Exists(comparisonTarget))
             {
                 arguments.Add("--target");
-                arguments.Add(paths.Target);
+                arguments.Add(comparisonTarget);
             }
             var result = await ExecuteAsync("inspect-progress", arguments, cancellationToken);
             RequireSuccess(result, "inspect progress");
@@ -675,10 +735,11 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync("inspect-events", async cancellationToken =>
         {
             var arguments = new List<string> { "inspect-events", paths.Source };
-            if (File.Exists(paths.Target))
+            var comparisonTarget = IsRepairMode ? paths.Current! : paths.Target;
+            if (File.Exists(comparisonTarget))
             {
                 arguments.Add("--target");
-                arguments.Add(paths.Target);
+                arguments.Add(comparisonTarget);
             }
             var result = await ExecuteAsync("inspect-events", arguments, cancellationToken);
             RequireSuccess(result, "inspect events");
@@ -703,8 +764,11 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         var inspectedSource = _inspectedSource;
+        var inspectedCurrent = _inspectedCurrent;
         var inspectedTarget = _inspectedTarget;
-        if (inspectedSource is null || inspectedTarget is null)
+        if (inspectedSource is null
+            || inspectedTarget is null
+            || (IsRepairMode && inspectedCurrent is null))
         {
             Fail(Copy.WriteUnavailable);
             return;
@@ -718,8 +782,14 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync(operation, async cancellationToken =>
         {
             var sourceBefore = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentBefore = IsRepairMode
+                ? await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)
+                : null;
             var targetBefore = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
-            if (!inspectedSource.Matches(sourceBefore) || !inspectedTarget.Matches(targetBefore))
+            if (!inspectedSource.Matches(sourceBefore)
+                || (IsRepairMode
+                    && (currentBefore is null || !inspectedCurrent!.Matches(currentBefore)))
+                || !inspectedTarget.Matches(targetBefore))
             {
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
@@ -729,7 +799,9 @@ public sealed class MainViewModel : ObservableObject
             {
                 var arguments = new List<string>
                 {
-                    "repair-converted", paths.Source, "--current", paths.Target,
+                    "repair-converted", paths.Source,
+                    "--current", paths.Current!,
+                    "--output", paths.Target,
                 };
                 string? extDataSource = null;
                 if (IncludeGuildCards)
@@ -753,9 +825,11 @@ public sealed class MainViewModel : ObservableObject
                 RequireStatus(result, "dry-run", "repair Dry Run");
                 var sourceSet = result.TryGetString("source_set_sha256");
                 var currentSet = result.TryGetString("current_set_sha256");
+                var outputSet = result.TryGetString("output_set_sha256");
                 var preview = result.TryGetString("preview_sha256");
                 if (string.IsNullOrWhiteSpace(sourceSet)
                     || string.IsNullOrWhiteSpace(currentSet)
+                    || string.IsNullOrWhiteSpace(outputSet)
                     || string.IsNullOrWhiteSpace(preview))
                 {
                     throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
@@ -766,11 +840,13 @@ public sealed class MainViewModel : ObservableObject
                 RepairDetectionSummary = detection.Summary;
                 _repairAuthorization = new RepairDryRunAuthorization(
                     sourceBefore,
+                    currentBefore!,
                     targetBefore,
                     extDataSource,
                     _repairFromVersion,
                     sourceSet,
                     currentSet,
+                    outputSet,
                     preview,
                     DateTimeOffset.UtcNow);
             }
@@ -785,8 +861,14 @@ public sealed class MainViewModel : ObservableObject
             }
 
             var sourceAfter = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentAfter = IsRepairMode
+                ? await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)
+                : null;
             var targetAfter = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
-            if (!sourceBefore.Matches(sourceAfter) || !targetBefore.Matches(targetAfter))
+            if (!sourceBefore.Matches(sourceAfter)
+                || (currentBefore is not null
+                    && (currentAfter is null || !currentBefore.Matches(currentAfter)))
+                || !targetBefore.Matches(targetAfter))
             {
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
             }
@@ -848,10 +930,17 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync(operation, async cancellationToken =>
         {
             var currentSource = await _fingerprints.CaptureAsync(paths.Source, cancellationToken);
+            var currentReference = IsRepairMode
+                ? await _fingerprints.CaptureAsync(paths.Current!, cancellationToken)
+                : null;
             var currentTarget = await _fingerprints.CaptureAsync(paths.Target, cancellationToken);
             var authorizedSource = IsRepairMode ? repairAuthorization!.Source : authorization!.Source;
-            var authorizedTarget = IsRepairMode ? repairAuthorization!.Current : authorization!.Target;
-            if (!authorizedSource.Matches(currentSource) || !authorizedTarget.Matches(currentTarget))
+            var authorizedTarget = IsRepairMode ? repairAuthorization!.Output : authorization!.Target;
+            if (!authorizedSource.Matches(currentSource)
+                || (IsRepairMode
+                    && (currentReference is null
+                        || !repairAuthorization!.Current.Matches(currentReference)))
+                || !authorizedTarget.Matches(currentTarget))
             {
                 InvalidateCoreAuthorization();
                 throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
@@ -863,7 +952,8 @@ public sealed class MainViewModel : ObservableObject
                 var repairArguments = new List<string>
                 {
                     "repair-converted", paths.Source,
-                    "--current", paths.Target,
+                    "--current", paths.Current!,
+                    "--output", paths.Target,
                 };
                 if (!string.IsNullOrWhiteSpace(repairAuthorization!.ExtDataSource))
                 {
@@ -880,6 +970,7 @@ public sealed class MainViewModel : ObservableObject
                     "--write",
                     "--expected-source-set-sha256", repairAuthorization.SourceSetSha256,
                     "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
+                    "--expected-output-set-sha256", repairAuthorization.OutputSetSha256,
                     "--expected-preview-sha256", repairAuthorization.PreviewSha256,
                 });
                 var repairResult = await ExecuteAsync(operation, repairArguments, cancellationToken);
@@ -1564,7 +1655,29 @@ public sealed class MainViewModel : ObservableObject
 
     private bool TryResolveCorePaths(out CoreSavePaths paths, out SavePathResolutionError error)
     {
-        if (SavePathResolver.TryResolveCore(SourcePath, TargetPath, SelectedSlot, out var resolved, out error))
+        CoreSavePaths? resolved;
+        bool resolvedSuccessfully;
+        if (IsRepairMode)
+        {
+            resolvedSuccessfully = SavePathResolver.TryResolveRepairCore(
+                SourcePath,
+                CurrentPath,
+                TargetPath,
+                SelectedSlot,
+                out resolved,
+                out error);
+        }
+        else
+        {
+            resolvedSuccessfully = SavePathResolver.TryResolveCore(
+                SourcePath,
+                TargetPath,
+                SelectedSlot,
+                out resolved,
+                out error);
+        }
+
+        if (resolvedSuccessfully)
         {
             paths = resolved!;
             return true;
@@ -1678,8 +1791,10 @@ public sealed class MainViewModel : ObservableObject
     private void InvalidateCoreAuthorization()
     {
         _sourceInspected = false;
+        _currentInspected = false;
         _targetInspected = false;
         _inspectedSource = null;
+        _inspectedCurrent = null;
         _inspectedTarget = null;
         _coreAuthorization = null;
         _repairAuthorization = null;

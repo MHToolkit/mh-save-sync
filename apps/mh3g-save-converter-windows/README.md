@@ -15,10 +15,12 @@ code.
 - It does not search an SD card, MLC, ZIP, 7z, RAR, or a generic save folder.
   The user selects exact paths.
 - New conversion exposes `inspect` -> `convert --dry-run` -> final SHA-256
-  recheck -> `convert --write`. Repair mode uses the original 3DS `user#`, the
-  current same-slot Cemu `user#`, and optional complete 3DS ExtData through
-  `repair-converted`. Ambiguous detection requires choosing 0.0.3 through
-  0.0.6 and repeating Dry Run.
+  recheck -> `convert --write`. Repair mode exposes separate controls for the
+  original 3DS `user#`, the read-only current same-slot Cemu `user#`, and the
+  repaired output file/directory. It passes all three paths to
+  `repair-converted`; optional complete 3DS ExtData enables guild-card repair.
+  A separate card output must already be initialized. Ambiguous detection
+  requires choosing 0.0.3 through 0.0.6 and repeating Dry Run.
 - The UI opens a confirmation dialog before writing. Normal conversion records
   its single-file manifest; repair records
   `.mh3g-compatibility-repair-<UUID>.json` and uses `rollback-repair`.

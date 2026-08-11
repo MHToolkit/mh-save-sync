@@ -48,6 +48,20 @@ final class WorkflowStatusPresentationTests: XCTestCase {
         XCTAssertEqual(dryRunStep?.iconName, "checkmark.shield")
     }
 
+    func testRepairInputRemainsIncompleteUntilCurrentReferenceIsInspected() {
+        let workflow = ConversionWorkflow(executable: URL(fileURLWithPath: "/tmp/converter"))
+        let current = URL(fileURLWithPath: "/tmp/apple-design-current/user1")
+        workflow.setMode(.repairConverted)
+        workflow.configure(input: ConversionInput(source: source, target: target, current: current))
+        workflow.applyInspections(source: sourceInspection, target: targetInspection)
+
+        XCTAssertFalse(workflow.coreInspectionComplete)
+        XCTAssertFalse(workflow.canStartDryRun)
+        XCTAssertEqual(workflow.statusPresentation.kind, .needsInspection)
+        let inputStep = workflow.stageRailPresentation.first { $0.route == .input }
+        XCTAssertEqual(inputStep?.tone, .current)
+    }
+
     func testStageRailLayoutContractRequiresAdaptiveReadableFallbacks() {
         XCTAssertEqual(
             WorkflowStageRailLayoutContract.adaptive.fallbackOrder,
