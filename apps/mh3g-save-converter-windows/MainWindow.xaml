@@ -344,7 +344,16 @@
                                     <TextBox x:Name="SystemSourceBox" Text="{Binding SystemSourcePath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
                                     <Button Grid.Column="1" Click="ChooseSystemSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
                                 </Grid>
-                                <TextBlock Text="{Binding Copy.SystemTarget}" FontWeight="SemiBold" />
+                                <StackPanel Visibility="{Binding RepairModeVisibility}" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.SystemCurrent}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="SystemCurrentBox" Text="{Binding SystemCurrentPath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
+                                        <Button Grid.Column="1" Click="ChooseSystemCurrent_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                    </Grid>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Copy.SystemTarget}" FontWeight="SemiBold" Visibility="{Binding NewConversionVisibility}" />
+                                <TextBlock Text="{Binding Copy.SystemRepairOutput}" FontWeight="SemiBold" Visibility="{Binding RepairModeVisibility}" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                     <TextBox x:Name="SystemTargetBox" Text="{Binding SystemTargetPath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
@@ -367,42 +376,98 @@
 
                         <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
                         <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />
+                        <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" Visibility="{Binding NewConversionVisibility}" />
                         <StackPanel Orientation="Horizontal" Spacing="16">
                             <CheckBox x:Name="GuildCardsCheckBox" Content="{Binding Copy.GuildCards}" IsChecked="{Binding IncludeGuildCards, Mode=TwoWay}" />
                             <CheckBox x:Name="QuestsCheckBox" Content="{Binding Copy.Quests}" IsChecked="{Binding IncludeQuests, Mode=TwoWay}" />
                         </StackPanel>
-                        <Grid ColumnSpacing="14">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="7">
-                                <TextBlock Text="{Binding Copy.ExtDataSource}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../extdata/.../user" /><Button Grid.Column="1" Click="ChooseExtrasSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                                <TextBlock Text="{Binding Copy.ExtDataSourceHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                <TextBlock Text="{Binding ExtrasSourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+                        <StackPanel Visibility="{Binding NewConversionVisibility}" Spacing="12">
+                            <Grid ColumnSpacing="14">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="7">
+                                    <TextBlock Text="{Binding Copy.ExtDataSource}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../extdata/.../user" /><Button Grid.Column="1" Click="ChooseExtrasSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                    <TextBlock Text="{Binding Copy.ExtDataSourceHint}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                    <TextBlock Text="{Binding ExtrasSourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.StagingDirectory}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasStagingBox" Text="{Binding ExtrasStagingDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="new empty directory" /><Button Grid.Column="1" Click="ChooseExtrasStaging_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.ExtDataTarget}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasTargetBox" Text="{Binding ExtrasTargetDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../80000001" /><Button Grid.Column="1" Click="ChooseExtrasTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <Button Click="ExtrasStageDryRun_Click" IsEnabled="{Binding CanRunExtrasStageDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewStaging}" /></Button>
+                                <Button Click="StageExtras_Click" IsEnabled="{Binding CanStageExtras}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.WriteStaging}" /></Button>
+                                <Button Click="ExtrasInstallDryRun_Click" IsEnabled="{Binding CanRunExtrasInstallDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewInstall}" /></Button>
+                                <Button Click="InstallExtras_Click" IsEnabled="{Binding CanInstallExtras}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.InstallExtData}" /></StackPanel></Button>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="7">
-                                <TextBlock Text="{Binding Copy.StagingDirectory}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasStagingBox" Text="{Binding ExtrasStagingDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="new empty directory" /><Button Grid.Column="1" Click="ChooseExtrasStaging_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="7">
-                                <TextBlock Text="{Binding Copy.ExtDataTarget}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasTargetBox" Text="{Binding ExtrasTargetDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../80000001" /><Button Grid.Column="1" Click="ChooseExtrasTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                            </StackPanel>
-                        </Grid>
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <Button Click="ExtrasStageDryRun_Click" IsEnabled="{Binding CanRunExtrasStageDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewStaging}" /></Button>
-                            <Button Click="StageExtras_Click" IsEnabled="{Binding CanStageExtras}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.WriteStaging}" /></Button>
-                            <Button Click="ExtrasInstallDryRun_Click" IsEnabled="{Binding CanRunExtrasInstallDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewInstall}" /></Button>
-                            <Button Click="InstallExtras_Click" IsEnabled="{Binding CanInstallExtras}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.InstallExtData}" /></StackPanel></Button>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="ExtrasRollbackManifestBox" Text="{Binding ExtrasRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".mh3g-extras-install.json" Header="{Binding Copy.ExtDataManifest}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                                    <Button Click="ChooseExtrasRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                    <Button Click="RollbackExtras_Click" IsEnabled="{Binding CanRollbackExtras}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <TextBox x:Name="ExtrasRollbackManifestBox" Text="{Binding ExtrasRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".mh3g-extras-install.json" Header="{Binding Copy.ExtDataManifest}" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
-                                <Button Click="ChooseExtrasRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                <Button Click="RollbackExtras_Click" IsEnabled="{Binding CanRollbackExtras}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
-                            </StackPanel>
-                        </Grid>
+                        <StackPanel Visibility="{Binding RepairModeVisibility}" Spacing="12">
+                            <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Message="{Binding Copy.ExtDataRepairPathHint}" />
+                            <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataRepairOutputWarning}" />
+                            <Grid ColumnSpacing="14">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="7">
+                                    <TextBlock Text="{Binding Copy.ExtDataSource}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasRepairSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../extdata/.../user" /><Button Grid.Column="1" Click="ChooseRepairExtrasSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                    <TextBlock Text="{Binding ExtrasSourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.ExtDataCurrent}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasCurrentBox" Text="{Binding ExtrasCurrentDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../80000001" /><Button Grid.Column="1" Click="ChooseExtrasCurrent_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.ExtDataRepairOutput}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasRepairTargetBox" Text="{Binding ExtrasTargetDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../80000001" /><Button Grid.Column="1" Click="ChooseRepairExtrasTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
+                                </StackPanel>
+                            </Grid>
+                            <Border Padding="12" Background="#FFF3F6FA" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
+                                <StackPanel Spacing="9">
+                                    <TextBlock Text="{Binding Copy.GuildCards}" FontWeight="SemiBold" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Click="RepairGuildCardsDryRun_Click" IsEnabled="{Binding CanRunRepairGuildCardsDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RepairGroupDryRun}" /></Button>
+                                        <Button Click="WriteRepairGuildCards_Click" IsEnabled="{Binding CanWriteRepairGuildCards}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.RepairGroupWrite}" /></StackPanel></Button>
+                                    </StackPanel>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="RepairGuildCardsManifestBox" Text="{Binding RepairGuildCardsRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".mh3g-extras-install.json" Header="{Binding Copy.GuildCardsManifest}" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                                            <Button Click="ChooseRepairGuildCardsManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                            <Button Click="RollbackRepairGuildCards_Click" IsEnabled="{Binding CanRollbackRepairGuildCards}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <Border Padding="12" Background="#FFF3F6FA" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
+                                <StackPanel Spacing="9">
+                                    <TextBlock Text="{Binding Copy.Quests}" FontWeight="SemiBold" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Click="RepairQuestsDryRun_Click" IsEnabled="{Binding CanRunRepairQuestsDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RepairGroupDryRun}" /></Button>
+                                        <Button Click="WriteRepairQuests_Click" IsEnabled="{Binding CanWriteRepairQuests}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.RepairGroupWrite}" /></StackPanel></Button>
+                                    </StackPanel>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="RepairQuestsManifestBox" Text="{Binding RepairQuestsRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".mh3g-extras-install.json" Header="{Binding Copy.QuestsManifest}" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                                            <Button Click="ChooseRepairQuestsManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                            <Button Click="RollbackRepairQuests_Click" IsEnabled="{Binding CanRollbackRepairQuests}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                         <Button Click="GoToCoreWorkflow_Click" Style="{StaticResource QuietButtonStyle}" HorizontalAlignment="Left">
                             <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding Copy.GoToCoreDryRun}" /></StackPanel>
                         </Button>
@@ -423,7 +488,16 @@
                                     <Button Grid.Column="1" Click="ChooseCecDirectory_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button>
                                 </Grid>
                                 <TextBlock Text="{Binding Copy.CecSourceDirectoryHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                <TextBlock Text="{Binding Copy.CecTargetCache}" FontWeight="SemiBold" />
+                                <StackPanel Visibility="{Binding RepairModeVisibility}" Spacing="7">
+                                    <TextBlock Text="{Binding Copy.CecCurrentCache}" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="CecCurrentBox" Text="{Binding CecCurrentPath, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../cec" />
+                                        <Button Grid.Column="1" Click="ChooseCecCurrent_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                    </Grid>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Copy.CecTargetCache}" FontWeight="SemiBold" Visibility="{Binding NewConversionVisibility}" />
+                                <TextBlock Text="{Binding Copy.CecRepairOutput}" FontWeight="SemiBold" Visibility="{Binding RepairModeVisibility}" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                     <TextBox x:Name="CecTargetBox" Text="{Binding CecTargetPath, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../cec" />

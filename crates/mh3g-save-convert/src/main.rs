@@ -12,7 +12,8 @@ use mh3g_save_convert::{
     ConversionError,
     cec::{
         CecInstallExpectations, convert_cec_records, empty_cemu_cec, inspect_cec,
-        install_cec_from_source_with_expectations, rollback_cec,
+        install_cec_from_source_with_expectations, install_precomputed_cec_with_target_expectation,
+        repair_cec_records, rollback_cec, validate_cemu_cec,
     },
     compatibility::{
         CompatibilityMerge, DetectionConfidence, RevisionDetection, combine_revision_detections,
@@ -173,6 +174,88 @@ enum Command {
         #[arg(long, conflicts_with = "dry_run")]
         write: bool,
     },
+    /// Repair one complete ExtData domain independently of the core slot.
+    RepairExtras {
+        /// Original 3DS MH3G ExtData `user` directory.
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// Continued-play Wii U/Cemu save directory used as the read-only authority.
+        #[arg(long)]
+        current_dir: PathBuf,
+        /// Initialized Wii U/Cemu output directory for this repaired domain.
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Repair exactly one indivisible ExtData group per transaction.
+        #[arg(long, value_enum)]
+        group: ExtraGroup,
+        /// Override automatic historical-version classification for this domain.
+        #[arg(long, value_enum)]
+        from_version: Option<ConverterRevision>,
+        #[arg(long, requires = "write")]
+        expected_source_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_current_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_output_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_preview_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Repair the shared gallery/movie flags as an independent system transaction.
+    RepairSystem {
+        /// Original Japanese 3DS shared `system` file.
+        source: PathBuf,
+        /// Continued-play Wii U/Cemu `system` used as the read-only authority.
+        #[arg(long)]
+        current: PathBuf,
+        /// Independent Wii U/Cemu `system` output. It may be absent before write.
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, requires = "write")]
+        expected_source_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_current_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_output_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_preview_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        write: bool,
+    },
+    /// Experimentally repair/import CEC records using a separate current cache and output.
+    RepairCec {
+        /// Original 3DS MH3G CEC mailbox directory.
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// Continued-play Wii U/Cemu `cec` cache used as the read-only authority.
+        #[arg(long)]
+        current: PathBuf,
+        /// Independent Wii U/Cemu `cec` output. It may be absent before write.
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        slot: Option<usize>,
+        #[arg(long, requires = "write")]
+        expected_source_record_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_current_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_output_set_sha256: Option<String>,
+        #[arg(long, requires = "write")]
+        expected_preview_sha256: Option<String>,
+        #[arg(long, conflicts_with = "write")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run", requires = "experimental")]
+        write: bool,
+        /// Acknowledge that CEC conversion still has file-level evidence only.
+        #[arg(long)]
+        experimental: bool,
+    },
     /// Roll back a compatibility repair as one coordinated transaction.
     RollbackRepair {
         #[arg(long)]
@@ -271,7 +354,7 @@ struct CecConversionOptions {
     experimental: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RepairWriteOptions {
     expected_source_set_sha256: Option<String>,
     expected_current_set_sha256: Option<String>,
@@ -456,6 +539,60 @@ struct RepairConvertedReport {
     compatibility_manifest: Option<PathBuf>,
 }
 
+#[derive(Debug, Serialize)]
+struct RepairExtrasReport {
+    operation: &'static str,
+    status: &'static str,
+    group: ExtraGroup,
+    source_dir: PathBuf,
+    current_dir: PathBuf,
+    output_dir: PathBuf,
+    source_set_sha256: String,
+    current_set_sha256: String,
+    output_set_sha256: String,
+    preview_sha256: String,
+    detection: RevisionDetection,
+    components: Vec<RepairComponentReport>,
+    manifest: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct RepairSystemReport {
+    operation: &'static str,
+    status: &'static str,
+    source: PathBuf,
+    current: PathBuf,
+    output: PathBuf,
+    source_set_sha256: String,
+    current_set_sha256: String,
+    output_set_sha256: String,
+    preview_sha256: String,
+    source_gallery_sha256: String,
+    current_gallery_sha256: String,
+    repaired_gallery_sha256: String,
+    write_required: bool,
+    manifest: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct RepairCecReport {
+    operation: &'static str,
+    status: &'static str,
+    source_dir: PathBuf,
+    current: PathBuf,
+    output: PathBuf,
+    imported_messages: usize,
+    slots: Vec<usize>,
+    source_record_set_sha256: String,
+    current_set_sha256: String,
+    output_set_sha256: String,
+    preview_sha256: String,
+    current_sha256: String,
+    output_sha256_before: Option<String>,
+    output_sha256_after: String,
+    manifest: Option<PathBuf>,
+}
+
 const COMPATIBILITY_REPAIR_MANIFEST_VERSION: u32 = 2;
 const COMPATIBILITY_REPAIR_MANIFEST_PREFIX: &str = ".mh3g-compatibility-repair-";
 
@@ -617,6 +754,93 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 },
             )?)?
         ),
+        Command::RepairExtras {
+            source_dir,
+            current_dir,
+            output_dir,
+            group,
+            from_version,
+            expected_source_set_sha256,
+            expected_current_set_sha256,
+            expected_output_set_sha256,
+            expected_preview_sha256,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&repair_extras(
+                source_dir,
+                current_dir,
+                output_dir,
+                group,
+                from_version,
+                RepairWriteOptions {
+                    expected_source_set_sha256,
+                    expected_current_set_sha256,
+                    expected_output_set_sha256,
+                    expected_preview_sha256,
+                    dry_run,
+                    write,
+                },
+            )?)?
+        ),
+        Command::RepairSystem {
+            source,
+            current,
+            output,
+            expected_source_set_sha256,
+            expected_current_set_sha256,
+            expected_output_set_sha256,
+            expected_preview_sha256,
+            dry_run,
+            write,
+        } => println!(
+            "{}",
+            serde_json::to_string(&repair_system(
+                source,
+                current,
+                output,
+                RepairWriteOptions {
+                    expected_source_set_sha256,
+                    expected_current_set_sha256,
+                    expected_output_set_sha256,
+                    expected_preview_sha256,
+                    dry_run,
+                    write,
+                },
+            )?)?
+        ),
+        Command::RepairCec {
+            source_dir,
+            current,
+            output,
+            slot,
+            expected_source_record_set_sha256,
+            expected_current_set_sha256,
+            expected_output_set_sha256,
+            expected_preview_sha256,
+            dry_run,
+            write,
+            experimental,
+        } => println!(
+            "{}",
+            serde_json::to_string(&repair_cec(
+                source_dir,
+                current,
+                output,
+                slot,
+                expected_source_record_set_sha256,
+                RepairWriteOptions {
+                    expected_source_set_sha256: None,
+                    expected_current_set_sha256,
+                    expected_output_set_sha256,
+                    expected_preview_sha256,
+                    dry_run,
+                    write,
+                },
+                experimental,
+            )?)?
+        ),
         Command::RollbackRepair { manifest } => {
             println!("{}", serde_json::to_string(&rollback_repair(manifest)?)?)
         }
@@ -665,6 +889,9 @@ fn run(cli: Cli) -> Result<(), ConversionError> {
                 | Command::InstallExtras { .. }
                 | Command::RollbackExtras { .. }
                 | Command::RepairConverted { .. }
+                | Command::RepairExtras { .. }
+                | Command::RepairSystem { .. }
+                | Command::RepairCec { .. }
                 | Command::RollbackRepair { .. } => unreachable!(),
             };
             println!("{}", serde_json::to_string(&report)?);
@@ -1523,6 +1750,453 @@ fn repair_converted(
         manifests,
         compatibility_manifest,
     })
+}
+
+fn repair_extras(
+    source_dir: PathBuf,
+    current_dir: PathBuf,
+    output_dir: PathBuf,
+    group: ExtraGroup,
+    from_version: Option<ConverterRevision>,
+    options: RepairWriteOptions,
+) -> Result<RepairExtrasReport, ConversionError> {
+    debug_assert!(!(options.dry_run && options.write));
+    let source_dir = canonical_directory(&source_dir, "3DS ExtData source directory")?;
+    let current_dir = canonical_directory(&current_dir, "current Cemu ExtData directory")?;
+    let output_dir = canonical_directory(&output_dir, "output Cemu ExtData directory")?;
+
+    let mut source_set = BTreeMap::new();
+    let mut current_set = BTreeMap::new();
+    let mut output_set = BTreeMap::new();
+    let mut inputs = Vec::new();
+    for component in group.components() {
+        let source_path = source_dir.join(component);
+        let current_path = current_dir.join(component);
+        let output_path = output_dir.join(component);
+        let source = read_file(&source_path, "reading original 3DS ExtData repair source")?;
+        let current = read_file(
+            &current_path,
+            "reading current Cemu ExtData repair authority",
+        )?;
+        let output = read_file(
+            &output_path,
+            "reading initialized Cemu ExtData repair output",
+        )?;
+        convert_external_component_to_cemu_named(&source, component)?;
+        mh3g_save_convert::converter::validate_cemu_external_component_named(&current, component)?;
+        mh3g_save_convert::converter::validate_cemu_external_component_named(&output, component)?;
+        let detection = detect_component_revision(&source, &current, component)?;
+        source_set.insert((*component).to_owned(), source.clone());
+        current_set.insert((*component).to_owned(), current.clone());
+        output_set.insert((*component).to_owned(), Some(output.clone()));
+        inputs.push(RepairComponentInput {
+            component: (*component).to_owned(),
+            source,
+            current,
+            target: output_path,
+            target_before: Some(output),
+            detection,
+        });
+    }
+
+    let detection = combine_revision_detections(
+        &inputs
+            .iter()
+            .map(|input| input.detection.clone())
+            .collect::<Vec<_>>(),
+    );
+    let revision = select_repair_revision(&detection, from_version, !options.write)?;
+    let components = inputs
+        .into_iter()
+        .map(|input| {
+            let merge = merge_component(&input.source, &input.current, &input.component, revision)?;
+            let target_sha256_before = input.target_before.as_deref().map(sha256_hex);
+            let write_required = input
+                .target_before
+                .as_deref()
+                .is_none_or(|before| before != merge.bytes);
+            Ok(RepairComponentReport {
+                component: input.component,
+                detection: input.detection,
+                modified: merge.current_sha256 != merge.merged_sha256,
+                write_required,
+                merge,
+                target: input.target,
+                target_sha256_before,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+
+    let source_set_sha256 = component_set_sha256(&source_set);
+    let current_set_sha256 = component_set_sha256(&current_set);
+    let output_set_sha256 = component_state_set_sha256(&output_set);
+    let preview_bytes = serde_json::to_vec(&(
+        group,
+        &source_set_sha256,
+        &current_set_sha256,
+        &output_set_sha256,
+        &detection,
+        &components,
+    ))?;
+    let preview_sha256 = hex::encode(Sha256::digest(preview_bytes));
+
+    if options.write {
+        require_repair_expectation(
+            options.expected_source_set_sha256.as_deref(),
+            &source_set_sha256,
+            "source set",
+        )?;
+        require_repair_expectation(
+            options.expected_current_set_sha256.as_deref(),
+            &current_set_sha256,
+            "current set",
+        )?;
+        require_repair_expectation(
+            options.expected_output_set_sha256.as_deref(),
+            &output_set_sha256,
+            "output set",
+        )?;
+        require_repair_expectation(
+            options.expected_preview_sha256.as_deref(),
+            &preview_sha256,
+            "preview",
+        )?;
+    }
+
+    let write_required = components.iter().any(|component| component.write_required);
+    let manifest = if options.write && write_required {
+        let staging_parent = output_dir.parent().ok_or_else(|| {
+            ConversionError::InvalidSave(
+                "output ExtData directory has no parent for repair staging".to_owned(),
+            )
+        })?;
+        let staging_dir =
+            staging_parent.join(format!(".mh3g-domain-repair-staging-{}", Uuid::new_v4()));
+        io_at_path(
+            fs::create_dir(&staging_dir),
+            "creating domain repair staging directory",
+            &staging_dir,
+        )?;
+        let result = (|| {
+            for component in &components {
+                let path = staging_dir.join(&component.component);
+                io_at_path(
+                    fs::write(&path, &component.merge.bytes),
+                    "writing domain repair staging component",
+                    &path,
+                )?;
+            }
+            let groups = [group];
+            let dry_run = dry_run_extra_groups(&staging_dir, &output_dir, &groups, None, None)?;
+            install_extra_groups(
+                &staging_dir,
+                &output_dir,
+                &groups,
+                Some(&dry_run.staging_set_sha256),
+                Some(&dry_run.target_set_sha256),
+            )
+        })();
+        let _ = fs::remove_dir_all(&staging_dir);
+        Some(result?.manifest_path)
+    } else {
+        None
+    };
+
+    Ok(RepairExtrasReport {
+        operation: "repair-extras",
+        status: if options.write {
+            if write_required {
+                "written"
+            } else {
+                "no-changes"
+            }
+        } else {
+            "dry-run"
+        },
+        group,
+        source_dir,
+        current_dir,
+        output_dir,
+        source_set_sha256,
+        current_set_sha256,
+        output_set_sha256,
+        preview_sha256,
+        detection,
+        components,
+        manifest,
+    })
+}
+
+fn repair_system(
+    source: PathBuf,
+    current: PathBuf,
+    output: PathBuf,
+    options: RepairWriteOptions,
+) -> Result<RepairSystemReport, ConversionError> {
+    debug_assert!(!(options.dry_run && options.write));
+    validate_system_path(&source)?;
+    validate_system_path(&current)?;
+    validate_system_path(&output)?;
+    let output_parent = output.parent().ok_or_else(|| {
+        ConversionError::InvalidSave("system output has no parent directory".to_owned())
+    })?;
+    let output_parent = canonical_directory(output_parent, "system output directory")?;
+    let output = output_parent.join("system");
+
+    let source_bytes = read_file(&source, "reading original 3DS system repair source")?;
+    let current_bytes = read_file(&current, "reading current Cemu system repair authority")?;
+    if inspect_bytes(&source_bytes)?.profile != SaveProfile::JpThreeDsSystem {
+        return Err(ConversionError::InvalidSave(
+            "repair-system requires a Japanese MH3G 3DS system source".to_owned(),
+        ));
+    }
+    if inspect_bytes(&current_bytes)?.profile != SaveProfile::JpCemuSystem {
+        return Err(ConversionError::InvalidSave(
+            "repair-system requires an initialized Japanese MH3G Cemu current system".to_owned(),
+        ));
+    }
+    let output_before = read_optional_file(&output, "reading Cemu system repair output")?;
+    if let Some(bytes) = output_before.as_deref()
+        && inspect_bytes(bytes)?.profile != SaveProfile::JpCemuSystem
+    {
+        return Err(ConversionError::InvalidSave(format!(
+            "repair-system output is not an initialized Japanese MH3G Cemu system: {}",
+            output.display()
+        )));
+    }
+
+    let merged = merge_3ds_system_gallery_into_cemu_named(&source_bytes, &current_bytes, "system")?;
+    let source_set_sha256 = component_set_sha256(&BTreeMap::from([(
+        "system".to_owned(),
+        source_bytes.clone(),
+    )]));
+    let current_set_sha256 = component_set_sha256(&BTreeMap::from([(
+        "system".to_owned(),
+        current_bytes.clone(),
+    )]));
+    let output_set_sha256 = component_state_set_sha256(&BTreeMap::from([(
+        "system".to_owned(),
+        output_before.clone(),
+    )]));
+    let source_gallery_start = 4 + SYSTEM_GALLERY_PAYLOAD_RANGE.start;
+    let source_gallery_end = 4 + SYSTEM_GALLERY_PAYLOAD_RANGE.end;
+    let current_payload_start =
+        current_bytes.len() - mh3g_save_convert::profile::SYSTEM_PAYLOAD_SIZE;
+    let current_gallery_start = current_payload_start + SYSTEM_GALLERY_PAYLOAD_RANGE.start;
+    let current_gallery_end = current_payload_start + SYSTEM_GALLERY_PAYLOAD_RANGE.end;
+    let source_gallery_sha256 = sha256_hex(&source_bytes[source_gallery_start..source_gallery_end]);
+    let current_gallery_sha256 =
+        sha256_hex(&current_bytes[current_gallery_start..current_gallery_end]);
+    let repaired_gallery_sha256 = sha256_hex(&merged[current_gallery_start..current_gallery_end]);
+    let write_required = output_before
+        .as_deref()
+        .is_none_or(|before| before != merged);
+    let source_sha256 = sha256_hex(&source_bytes);
+    let output_before_sha256 = output_before.as_deref().map(sha256_hex);
+    let preview_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&(
+        &source_set_sha256,
+        &current_set_sha256,
+        &output_set_sha256,
+        &source_gallery_sha256,
+        &current_gallery_sha256,
+        &repaired_gallery_sha256,
+        sha256_hex(&merged),
+    ))?));
+
+    if options.write {
+        require_repair_expectation(
+            options.expected_source_set_sha256.as_deref(),
+            &source_set_sha256,
+            "source set",
+        )?;
+        require_repair_expectation(
+            options.expected_current_set_sha256.as_deref(),
+            &current_set_sha256,
+            "current set",
+        )?;
+        require_repair_expectation(
+            options.expected_output_set_sha256.as_deref(),
+            &output_set_sha256,
+            "output set",
+        )?;
+        require_repair_expectation(
+            options.expected_preview_sha256.as_deref(),
+            &preview_sha256,
+            "preview",
+        )?;
+    }
+
+    let manifest = if options.write && write_required {
+        let manifest_path = manifest_path_for_target(&output)?;
+        install_merged_component_with_expectations(
+            &source_bytes,
+            &merged,
+            &output,
+            &manifest_path,
+            InstallExpectations {
+                source_sha256: Some(&source_sha256),
+                target_sha256: output_before_sha256.as_deref(),
+                target_must_be_absent: output_before.is_none(),
+            },
+        )?;
+        Some(manifest_path)
+    } else {
+        None
+    };
+
+    Ok(RepairSystemReport {
+        operation: "repair-system",
+        status: if options.write {
+            if write_required {
+                "written"
+            } else {
+                "no-changes"
+            }
+        } else {
+            "dry-run"
+        },
+        source,
+        current,
+        output,
+        source_set_sha256,
+        current_set_sha256,
+        output_set_sha256,
+        preview_sha256,
+        source_gallery_sha256,
+        current_gallery_sha256,
+        repaired_gallery_sha256,
+        write_required,
+        manifest,
+    })
+}
+
+fn repair_cec(
+    source_dir: PathBuf,
+    current: PathBuf,
+    output: PathBuf,
+    slot: Option<usize>,
+    expected_source_record_set_sha256: Option<String>,
+    options: RepairWriteOptions,
+    experimental: bool,
+) -> Result<RepairCecReport, ConversionError> {
+    debug_assert!(!(options.dry_run && options.write));
+    if options.write && !experimental {
+        return Err(ConversionError::UnsafeInstall(
+            "repair-cec --write requires --experimental acknowledgement".to_owned(),
+        ));
+    }
+    let source_dir = canonical_directory(&source_dir, "3DS CEC source directory")?;
+    if current.file_name().and_then(|name| name.to_str()) != Some("cec")
+        || output.file_name().and_then(|name| name.to_str()) != Some("cec")
+    {
+        return Err(ConversionError::InvalidSave(
+            "repair-cec current and output files must both be named cec".to_owned(),
+        ));
+    }
+    let output_parent = output.parent().ok_or_else(|| {
+        ConversionError::InvalidSave("CEC repair output has no parent directory".to_owned())
+    })?;
+    let output = canonical_directory(output_parent, "CEC repair output directory")?.join("cec");
+    let current_bytes = read_file(&current, "reading current Cemu CEC repair authority")?;
+    validate_cemu_cec(&current_bytes)?;
+    let output_before = read_optional_file(&output, "reading Cemu CEC repair output")?;
+    if let Some(bytes) = output_before.as_deref() {
+        validate_cemu_cec(bytes)?;
+    }
+    let conversion = repair_cec_records(&source_dir, &current_bytes, slot)?;
+    let current_sha256 = sha256_hex(&current_bytes);
+    let output_sha256_before = output_before.as_deref().map(sha256_hex);
+    let output_sha256_after = conversion.after_sha256.clone();
+    let current_set_sha256 =
+        component_set_sha256(&BTreeMap::from([("cec".to_owned(), current_bytes)]));
+    let output_set_sha256 =
+        component_state_set_sha256(&BTreeMap::from([("cec".to_owned(), output_before.clone())]));
+    let preview_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&(
+        &conversion.source_record_set_sha256,
+        &current_set_sha256,
+        &output_set_sha256,
+        &conversion.after_sha256,
+        &conversion.slots,
+    ))?));
+
+    if options.write {
+        require_repair_expectation(
+            expected_source_record_set_sha256.as_deref(),
+            &conversion.source_record_set_sha256,
+            "source record set",
+        )?;
+        require_repair_expectation(
+            options.expected_current_set_sha256.as_deref(),
+            &current_set_sha256,
+            "current set",
+        )?;
+        require_repair_expectation(
+            options.expected_output_set_sha256.as_deref(),
+            &output_set_sha256,
+            "output set",
+        )?;
+        require_repair_expectation(
+            options.expected_preview_sha256.as_deref(),
+            &preview_sha256,
+            "preview",
+        )?;
+    }
+
+    let write_required = output_before
+        .as_deref()
+        .is_none_or(|before| before != conversion.bytes);
+    let manifest = if options.write && write_required {
+        let expected_output_sha256 = output_sha256_before
+            .clone()
+            .unwrap_or(sha256_hex(&empty_cemu_cec()?));
+        Some(
+            install_precomputed_cec_with_target_expectation(
+                &source_dir,
+                &output,
+                &conversion,
+                &expected_output_sha256,
+            )?
+            .manifest,
+        )
+    } else {
+        None
+    };
+
+    Ok(RepairCecReport {
+        operation: "repair-cec",
+        status: if options.write {
+            if write_required {
+                "written"
+            } else {
+                "no-changes"
+            }
+        } else {
+            "dry-run"
+        },
+        source_dir,
+        current,
+        output,
+        imported_messages: conversion.records.len(),
+        slots: conversion.slots,
+        source_record_set_sha256: conversion.source_record_set_sha256,
+        current_set_sha256,
+        output_set_sha256,
+        preview_sha256,
+        current_sha256,
+        output_sha256_before,
+        output_sha256_after,
+        manifest,
+    })
+}
+
+fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, ConversionError> {
+    if !path.is_dir() {
+        return Err(ConversionError::InvalidSave(format!(
+            "{label} is not a directory: {}",
+            path.display()
+        )));
+    }
+    io_at_path(fs::canonicalize(path), "resolving repair directory", path)
 }
 
 fn write_compatibility_manifest(

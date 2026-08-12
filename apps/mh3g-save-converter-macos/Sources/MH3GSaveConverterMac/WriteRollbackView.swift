@@ -11,6 +11,8 @@ struct WriteRollbackView: View {
     @State private var coreManifest: URL?
     @State private var systemManifest: URL?
     @State private var extrasManifest: URL?
+    @State private var repairExtrasManifests = [ExtraGroup: URL]()
+    @State private var selectedRepairExtraGroup: ExtraGroup?
     @State private var isRunning = false
 
     var body: some View {
@@ -73,9 +75,7 @@ struct WriteRollbackView: View {
                     language: language
                 ),
                 target: workflow.input?.target,
-                files: workflow.mode == .repairConverted && workflow.components.includeGuildCards
-                    ? ConverterCopy.text("Write.RepairTargets", language: language)
-                    : ConverterCopy.text("Write.OneTarget", language: language),
+                files: ConverterCopy.text("Write.OneTarget", language: language),
                 language: language,
                 verificationDetails: coreConfirmationDetails,
                 onConfirm: writeCore,
@@ -86,7 +86,7 @@ struct WriteRollbackView: View {
             TransactionConfirmationSheet(
                 title: ConverterCopy.text("Write.WriteSystem", language: language),
                 targetLabel: ConverterCopy.text("Write.Target", language: language),
-                target: workflow.components.systemTarget,
+                target: systemTargetForDisplay,
                 files: ConverterCopy.text("Write.OneTarget", language: language),
                 language: language,
                 verificationDetails: systemConfirmationDetails,
@@ -98,11 +98,11 @@ struct WriteRollbackView: View {
             TransactionConfirmationSheet(
                 title: ConverterCopy.text("Write.ExtrasInstall", language: language),
                 targetLabel: ConverterCopy.text("Write.TargetDirectory", language: language),
-                target: workflow.components.extraTargetDirectory,
-                files: selectedExtraGroups,
+                target: extrasTargetForDisplay,
+                files: selectedRepairExtraGroup.map(extraGroupLabel) ?? selectedExtraGroups,
                 language: language,
                 verificationDetails: extrasConfirmationDetails,
-                onConfirm: installExtras,
+                onConfirm: confirmExtrasWrite,
                 onCancel: { showExtrasConfirmation = false }
             )
         }
@@ -178,43 +178,85 @@ struct WriteRollbackView: View {
                 Text(selectedExtraGroups)
                     .foregroundStyle(.secondary)
             }
-            LabeledContent(ConverterCopy.text("Write.Authorization", language: language)) {
-                authorizationLabel(workflow.canStageExtras, readyKey: "Write.StageReady")
-            }
-            Button(ConverterCopy.text("Write.ExtrasStageDryRun", language: language)) {
-                runExtrasStageDryRun()
-            }
-            .disabled(!hasExtraPaths || isRunning)
-            Button(ConverterCopy.text("Write.ExtrasStage", language: language)) {
-                stageExtras()
-            }
-            .disabled(!workflow.canStageExtras || isRunning)
+            if workflow.mode == .repairConverted {
+                ForEach(
+                    workflow.components.selectedGroups.sorted { $0.rawValue < $1.rawValue },
+                    id: \.self
+                ) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(extraGroupLabel(group))
+                            .font(.headline)
+                        LabeledContent(ConverterCopy.text("Write.Authorization", language: language)) {
+                            authorizationLabel(workflow.canWriteRepairExtraGroup(group))
+                        }
+                        HStack {
+                            Button(ConverterCopy.text("Write.ExtrasInstallDryRun", language: language)) {
+                                runRepairExtraDryRun(group)
+                            }
+                            .disabled(!hasExtraPaths || isRunning)
+                            Button(ConverterCopy.text("Write.ExtrasInstall", language: language)) {
+                                selectedRepairExtraGroup = group
+                                showExtrasConfirmation = true
+                            }
+                            .disabled(!workflow.canWriteRepairExtraGroup(group) || isRunning)
+                        }
+                        SelectedPathRow(
+                            title: ConverterCopy.text("Write.ExtrasManifest", language: language),
+                            value: repairExtrasManifests[group],
+                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                        ) {
+                            repairExtrasManifests[group] = selectManifest(
+                                title: "\(extraGroupLabel(group)) · \(ConverterCopy.text("Write.ExtrasManifest", language: language))"
+                            )
+                        }
+                        Button(ConverterCopy.text("Write.Rollback", language: language)) {
+                            rollbackRepairExtra(group)
+                        }
+                        .disabled(repairExtrasManifests[group] == nil || isRunning)
+                    }
+                }
+            } else {
+                LabeledContent(ConverterCopy.text("Write.Authorization", language: language)) {
+                    authorizationLabel(workflow.canStageExtras, readyKey: "Write.StageReady")
+                }
+                Button(ConverterCopy.text("Write.ExtrasStageDryRun", language: language)) {
+                    runExtrasStageDryRun()
+                }
+                .disabled(!hasExtraPaths || isRunning)
+                Button(ConverterCopy.text("Write.ExtrasStage", language: language)) {
+                    stageExtras()
+                }
+                .disabled(!workflow.canStageExtras || isRunning)
 
-            LabeledContent(ConverterCopy.text("Write.Authorization", language: language)) {
-                authorizationLabel(workflow.canInstallExtras, readyKey: "Write.InstallReady")
+                LabeledContent(ConverterCopy.text("Write.Authorization", language: language)) {
+                    authorizationLabel(workflow.canInstallExtras, readyKey: "Write.InstallReady")
+                }
+                Button(ConverterCopy.text("Write.ExtrasInstallDryRun", language: language)) {
+                    runExtrasInstallDryRun()
+                }
+                .disabled(!hasExtraPaths || isRunning)
+                Button(ConverterCopy.text("Write.ExtrasInstall", language: language)) {
+                    selectedRepairExtraGroup = nil
+                    showExtrasConfirmation = true
+                }
+                .disabled(!workflow.canInstallExtras || isRunning)
             }
-            Button(ConverterCopy.text("Write.ExtrasInstallDryRun", language: language)) {
-                runExtrasInstallDryRun()
-            }
-            .disabled(!hasExtraPaths || isRunning)
-            Button(ConverterCopy.text("Write.ExtrasInstall", language: language)) {
-                showExtrasConfirmation = true
-            }
-            .disabled(!workflow.canInstallExtras || isRunning)
 
-            SelectedPathRow(
-                title: ConverterCopy.text("Write.ExtrasManifest", language: language),
-                value: extrasManifest,
-                chooseTitle: ConverterCopy.text("Input.Select", language: language)
-            ) {
-                extrasManifest = selectManifest(
-                    title: ConverterCopy.text("Write.ExtrasManifest", language: language)
-                )
+            if workflow.mode == .newConversion {
+                SelectedPathRow(
+                    title: ConverterCopy.text("Write.ExtrasManifest", language: language),
+                    value: extrasManifest,
+                    chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                ) {
+                    extrasManifest = selectManifest(
+                        title: ConverterCopy.text("Write.ExtrasManifest", language: language)
+                    )
+                }
+                Button(ConverterCopy.text("Write.Rollback", language: language)) {
+                    rollbackExtras()
+                }
+                .disabled(extrasManifest == nil || isRunning)
             }
-            Button(ConverterCopy.text("Write.Rollback", language: language)) {
-                rollbackExtras()
-            }
-            .disabled(extrasManifest == nil || isRunning)
         } header: {
             Text(ConverterCopy.text("Write.Extras", language: language))
         } footer: {
@@ -223,28 +265,46 @@ struct WriteRollbackView: View {
     }
 
     private var hasSystemPaths: Bool {
-        workflow.components.systemSource != nil && workflow.components.systemTarget != nil
+        guard workflow.components.systemSource != nil,
+              workflow.components.systemTarget != nil
+        else { return false }
+        return workflow.mode == .newConversion || workflow.components.systemCurrent != nil
     }
 
     private var hasExtraPaths: Bool {
-        !workflow.components.selectedGroups.isEmpty
-            && workflow.components.extraSourceDirectory != nil
-            && workflow.components.extraStagingDirectory != nil
+        guard !workflow.components.selectedGroups.isEmpty,
+              workflow.components.extraSourceDirectory != nil
+        else { return false }
+        if workflow.mode == .repairConverted {
+            return workflow.components.extraCurrentDirectory != nil
+                && workflow.components.extraTargetDirectory != nil
+        }
+        return workflow.components.extraStagingDirectory != nil
             && workflow.components.extraTargetDirectory != nil
+    }
+
+    private var systemTargetForDisplay: URL? {
+        return workflow.components.systemTarget
+    }
+
+    private var extrasTargetForDisplay: URL? {
+        return workflow.components.extraTargetDirectory
     }
 
     private var selectedExtraGroups: String {
         workflow.components.selectedGroups
             .sorted { $0.rawValue < $1.rawValue }
-            .map { group in
-                switch group {
-                case .guildCards:
-                    ConverterCopy.text("Components.GuildCards", language: language)
-                case .quests:
-                    ConverterCopy.text("Components.Quests", language: language)
-                }
-            }
+            .map(extraGroupLabel)
             .joined(separator: " · ")
+    }
+
+    private func extraGroupLabel(_ group: ExtraGroup) -> String {
+        switch group {
+        case .guildCards:
+            ConverterCopy.text("Components.GuildCards", language: language)
+        case .quests:
+            ConverterCopy.text("Components.Quests", language: language)
+        }
     }
 
     private var coreConfirmationDetails: [TransactionConfirmationDetail] {
@@ -284,6 +344,22 @@ struct WriteRollbackView: View {
     }
 
     private var systemConfirmationDetails: [TransactionConfirmationDetail] {
+        if let fingerprint = workflow.repairSystemDryRunFingerprint {
+            return [
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.SourceSHA256", language: language),
+                    value: fingerprint.sourceSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.CurrentSetSHA256", language: language),
+                    value: fingerprint.currentSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.OutputSetSHA256", language: language),
+                    value: fingerprint.outputSetSHA256
+                ),
+            ]
+        }
         guard let fingerprint = workflow.systemDryRunFingerprint else { return [] }
         return [
             TransactionConfirmationDetail(
@@ -298,6 +374,23 @@ struct WriteRollbackView: View {
     }
 
     private var extrasConfirmationDetails: [TransactionConfirmationDetail] {
+        if let group = selectedRepairExtraGroup,
+           let fingerprint = workflow.repairExtrasDryRunFingerprints[group] {
+            return [
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.CurrentSetSHA256", language: language),
+                    value: fingerprint.currentSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Write.OutputSetSHA256", language: language),
+                    value: fingerprint.outputSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("Repair.PreviewSHA256", language: language),
+                    value: fingerprint.previewSHA256
+                ),
+            ]
+        }
         guard let fingerprint = workflow.extrasInstallDryRunFingerprint else { return [] }
         return [
             TransactionConfirmationDetail(
@@ -385,6 +478,14 @@ struct WriteRollbackView: View {
         }
     }
 
+    private func runRepairExtraDryRun(_ group: ExtraGroup) {
+        isRunning = true
+        Task {
+            defer { isRunning = false }
+            try? await workflow.runRepairExtraDryRun(group: group)
+        }
+    }
+
     private func stageExtras() {
         isRunning = true
         Task {
@@ -413,6 +514,40 @@ struct WriteRollbackView: View {
         }
     }
 
+    private func confirmExtrasWrite() {
+        if let group = selectedRepairExtraGroup {
+            writeRepairExtra(group)
+        } else {
+            installExtras()
+        }
+    }
+
+    private func writeRepairExtra(_ group: ExtraGroup) {
+        showExtrasConfirmation = false
+        isRunning = true
+        Task {
+            defer { isRunning = false }
+            do {
+                try await workflow.writeRepairExtraGroup(group)
+                if let manifest = capturedManifest() {
+                    repairExtrasManifests[group] = manifest
+                }
+            } catch {}
+        }
+    }
+
+    private func rollbackRepairExtra(_ group: ExtraGroup) {
+        guard let manifest = repairExtrasManifests[group] else { return }
+        isRunning = true
+        Task {
+            defer { isRunning = false }
+            do {
+                try await workflow.rollback(manifest: manifest, extraGroup: true)
+                repairExtrasManifests[group] = nil
+            } catch {}
+        }
+    }
+
     private func rollbackExtras() {
         guard let extrasManifest else { return }
         isRunning = true
@@ -423,10 +558,14 @@ struct WriteRollbackView: View {
     }
 
     private func captureManifest(into destination: inout URL?) {
+        destination = capturedManifest()
+    }
+
+    private func capturedManifest() -> URL? {
         guard let report = workflow.latestReport,
               let path = report.compatibilityManifest ?? report.manifest
-        else { return }
-        destination = URL(fileURLWithPath: path)
+        else { return nil }
+        return URL(fileURLWithPath: path)
     }
 }
 

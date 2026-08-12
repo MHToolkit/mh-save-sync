@@ -67,6 +67,38 @@ public sealed record SystemDryRunAuthorization(
     string SourceReportHash,
     DateTimeOffset CompletedAt);
 
+public sealed record RepairSystemDryRunAuthorization(
+    string SourcePath,
+    string CurrentPath,
+    string OutputPath,
+    string SourceSetSha256,
+    string CurrentSetSha256,
+    string OutputSetSha256,
+    string PreviewSha256,
+    DateTimeOffset CompletedAt);
+
+public sealed record RepairExtrasDryRunAuthorization(
+    string Group,
+    string SourceDirectory,
+    string CurrentDirectory,
+    string OutputDirectory,
+    string? FromVersion,
+    string SourceSetSha256,
+    string CurrentSetSha256,
+    string OutputSetSha256,
+    string PreviewSha256,
+    DateTimeOffset CompletedAt);
+
+public sealed record RepairCecDryRunAuthorization(
+    string SourceDirectory,
+    string CurrentPath,
+    string OutputPath,
+    string SourceRecordSetSha256,
+    string CurrentSetSha256,
+    string OutputSetSha256,
+    string PreviewSha256,
+    DateTimeOffset CompletedAt);
+
 public sealed record ExtrasStageDryRunAuthorization(
     string SourceDirectory,
     string StagingDirectory,

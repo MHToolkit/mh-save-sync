@@ -35,8 +35,8 @@ public struct WorkflowStatusPresentation: Equatable, Sendable {
 public extension ConversionWorkflow {
     /// The single presentation source for the toolbar and the always-visible
     /// safety card. Ordering is deliberate: an in-flight operation or failure
-    /// always wins over stale authorizations, and incomplete optional data is
-    /// shown as blocked instead of looking like a ready core write.
+    /// always wins over stale authorizations. Optional domains deliberately do
+    /// not block or downgrade an independently authorized core transaction.
     var statusPresentation: WorkflowStatusPresentation {
         if activeOperation != nil || state == .writing {
             return .init(
@@ -59,14 +59,6 @@ public extension ConversionWorkflow {
                 kind: .blocked,
                 titleKey: "Status.RevisionRequired",
                 detailKey: "Status.Detail.RevisionRequired",
-                isBlocking: true
-            )
-        }
-        if !selectedOptionalDataIsConfigured {
-            return .init(
-                kind: .blocked,
-                titleKey: "Status.OptionalDataBlocked",
-                detailKey: "Status.Detail.OptionalDataBlocked",
                 isBlocking: true
             )
         }

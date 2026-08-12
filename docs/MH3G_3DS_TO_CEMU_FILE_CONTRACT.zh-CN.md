@@ -58,27 +58,64 @@ CLI 只接受普通文件系统中的文件和目录。它不能打开 ZIP、7z�
 
 ### 旧转换存档兼容修复
 
-`repair-converted` 与全新 `convert` 是两个独立契约。它需要一个原始 3DS `user#` 和一个已经由 0.0.3 至 0.0.6 转换、之后可能继续游玩的同名 Cemu `user#`：
+兼容修复与全新转换是两个独立流程。兼容修复分成五个彼此独立授权的域；选择或完成其中一个域，不会替另一个域授权、写入或回滚：
+
+| 修复域 | 原始 3DS 输入 | 只读当前 Wii U/Cemu 权威数据 | 独立输出 | 命令 |
+| --- | --- | --- | --- | --- |
+| 核心槽位 | 准确的 `user1`、`user2` 或 `user3` | 同名 `user#` | 同名 `user#` | `repair-converted` |
+| 公会名片 | 含 `card1`-`card3`、`cardbox` 的 ExtData `user` 目录 | 含已初始化同名文件的目录 | 含已初始化同名文件的目录 | `repair-extras --group guild-cards` |
+| 任务 | 含 `quest1`-`quest4` 的 ExtData `user` 目录 | 含已初始化同名文件的目录 | 含已初始化同名文件的目录 | `repair-extras --group quests` |
+| 共享画廊/动画 | 准确的 3DS `system` | 准确且已初始化的 Cemu `system` | 准确的 `system` 路径 | `repair-system` |
+| 擦身/CEC 缓存 | 准确的 MH3G CEC 邮箱目录 | 准确且已初始化的 Cemu `cec` | 准确的 `cec` 路径 | `repair-cec` |
+
+每个域都有自己的 Dry Run 指纹、写入授权、事务 manifest 和回滚。原始 3DS、当前 Wii U/Cemu 与输出路径不会在控件之间自动复制或级联。原生界面的核心槽位可选择准确 `user#` 文件或其直接父目录，但不会递归扫描 3DS SD 根目录、Cemu MLC 或压缩包；`system` 和 `cec` 使用准确文件。公会名片与任务在物理上位于同一个目录，因此共用三组 ExtData 目录选择器，但两组仍各自执行 Dry Run、写入、记录 manifest 和回滚。
+
+核心槽位契约为：
 
 ```text
 mh3g-save-convert repair-converted <3DS-user#> --current <当前-Cemu-user#> \
-  [--output <修复后-Cemu-user#>] \
-  [--source-extdata-dir <3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  --output <修复后-Cemu-user#> \
+  [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
     --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
     --expected-preview-sha256 <SHA256>]
 ```
 
-这是三个独立的路径职责：原始 3DS 槽位与 `--current` 当前 Wii U/Cemu
-槽位都是只读合并输入，`--output` 才是写入目标；三者必须指向同名的
-`user1`、`user2` 或 `user3`。省略 `--output` 只用于兼容 CLI 旧脚本，此时
-仍采用原地写回 `--current`；原生 UI 始终独立显示并显式传入输出路径。
+原始 3DS 槽位与 `--current` 都是只读合并输入，只有 `--output` 可以写 payload；三者必须为同名槽位。当前 Cemu 数据是继续游玩的权威数据。只有仍等于所选旧转换器输出的已知历史字段才会更新，之后在 Wii U 侧变化的字段会保留并报告为冲突。省略 `--output` 仅保留给 CLI 旧脚本原地写回；macOS/Windows 原生界面始终单独显示并传入输出。
 
-该操作以当前 Cemu 数据为继续游玩的权威数据，只对 0.0.3 至 0.0.6 之间已知变化的完整语义字段执行三方比较。当前字段仍等于历史版本输出时才替换为当前转换器输出；若当前字段不同于历史值和当前转换器值，则按 Wii U 后续进度保留并报告冲突。它不会按字节盲合并，也不会重建整个 Cemu 槽位。
+两个 ExtData 域使用：
 
-仅修核心槽位时不传 `--source-extdata-dir`。修复公会名片时，该目录必须含全部八个 3DS ExtData 文件，当前 `user#` 的父目录也必须含全部八个 Cemu 文件。若输出与当前引用不同，输出目录还必须已有初始化的 `card1`、`card2`、`card3`、`cardbox`。`user#` 和四个 `card*` 是可修复组件；`quest1` 至 `quest4` 会被验证并纳入集合 SHA-256，但逐字节保持当前 Cemu 内容。该命令不处理 `system`、`cec` 或 `phrase*`。
+```text
+mh3g-save-convert repair-extras --group <guild-cards|quests> \
+  --source-dir <3DS-ExtData-user> --current-dir <当前-Cemu-存档目录> \
+  --output-dir <已初始化的输出-Cemu-存档目录> \
+  [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] [--dry-run | --write ...]
+```
 
-Dry Run 会把全部选中组件汇总成一个顶层版本判断，可能报告 `exact`、`compatible-range`、`ambiguous` 或 `unknown`；所有组件共用同一个最终历史版本。`ambiguous` 写入必须显式指定一个未被证据否定的 `--from-version` 并重新 Dry Run；`unknown` 拒绝修复。显式输出写入必须提交紧邻 Dry Run 返回的 `source_set_sha256`、`current_set_sha256`、`output_set_sha256` 与 `preview_sha256`。成功时返回 `.mh3g-compatibility-repair-<UUID>.json`；`rollback-repair --manifest <path>` 会按“公会名片子事务，再核心子事务”的顺序恢复。
+所选输出组必须已经初始化并且完整：公会名片组必须同时包含 `card1`、`card2`、`card3`、`cardbox`；任务组必须同时包含 `quest1`、`quest2`、`quest3`、`quest4`。不允许单文件修复。公会名片字段使用历史三方合并；任务 payload 目前没有经过审查的历史缺陷映射，所以任务修复只校验完整组，并把**当前 Wii U 字节**逐字节写入独立输出，不会恢复成原始 3DS 任务数据。
+
+共享 `system` 修复使用：
+
+```text
+mh3g-save-convert repair-system <3DS-system> --current <当前-Cemu-system> \
+  --output <修复后-Cemu-system> [--dry-run | --write ...]
+```
+
+它只把已确认的画廊/动画位范围并集合并到当前 Cemu 权威数据，其余当前字节（包括其他槽位共享状态）全部保留。输出文件可以尚不存在，但父目录必须存在；该事务与核心槽位和 ExtData 完全独立。
+
+实验性 CEC 修复使用：
+
+```text
+mh3g-save-convert repair-cec --source-dir <3DS-MH3G-CEC-邮箱目录> \
+  --current <当前-Cemu-cec> --output <修复后-Cemu-cec> \
+  [--slot <N>] [--dry-run | --write --experimental ...]
+```
+
+它会替换准确识别出的历史记录，保留无关当前槽位，其余记录只填入空槽。CEC 仍是实验性功能，写入必须显式确认；输出可以尚不存在，但当前与输出文件名都必须为 `cec`。
+
+核心、公会名片、任务的 Dry Run 会分别报告 `exact`、`compatible-range`、`ambiguous` 或 `unknown`。`ambiguous` 必须显式选择未被证据否定的 `--from-version` 并重新 Dry Run，`unknown` 会拒绝修复。因为三个域来自同一次历史转换，原生界面会复用同一个手动选择的 0.0.3-0.0.6 版本，但每个域仍独立产生证据与写入授权；`system` 和 CEC 不使用历史转换器版本。
+
+为兼容旧脚本，`repair-converted --source-extdata-dir` 仍可使用，并可通过一个旧式总 manifest 协调核心与公会名片；新的原生界面不再使用该耦合参数。应优先使用独立命令及其对应回滚：核心用 `rollback-repair`，单个 ExtData 组用 `rollback-extras`，`system` 用 `rollback`，CEC 用 `rollback-cec`。`phrase1` 至 `phrase3` 仍不属于修复范围。
 
 ### 可选的共享 `system`
 
@@ -159,7 +196,11 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 | `inspect-progress <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `inspect-events <user#> [--target <user#>]` | 源槽位和可选目标槽位 | 无 | 不适用 |
 | `convert <user#> --output <same user#>` | 源槽位；只有安装时才读取已有目标和旧事务记录 | 无 | 指定目标槽位及下述核心事务文件 |
-| `repair-converted <3DS-user#> --current <当前-Cemu-user#> --output <修复后-Cemu-user#>` | 原始 3DS 槽位、只读当前 Cemu 槽位、独立输出槽位；可选完整 3DS/当前 Cemu ExtData 集合 | 无 | 只改变输出侧报告中确认需要修复的同名 `user#` 和完整公会名片组，并创建协调 manifest；当前引用与任务文件保持不变 |
+| `repair-converted <3DS-user#> --current <当前-Cemu-user#> --output <修复后-Cemu-user#>` | 原始 3DS 槽位、只读当前 Cemu 槽位和独立输出状态 | 无 | 只改变输出侧确认需要修复的同名 `user#` 字段，并创建核心兼容 manifest；当前引用保持不变 |
+| `repair-extras --group guild-cards ...` | 完整的原始、当前、输出公会名片组 | 无 | 只改变完整输出 `card1`-`card3`/`cardbox` 组，并创建独立 ExtData 事务 |
+| `repair-extras --group quests ...` | 完整的原始、当前、输出任务组 | 无 | 把完整当前 `quest1`-`quest4` 组复制到独立输出并记录自己的事务；绝不恢复原始任务 payload |
+| `repair-system system --current system --output system` | 原始 3DS `system`、只读当前 Cemu `system` 和独立输出状态 | 无 | 基于当前 Cemu 字节只写已确认的画廊/动画并集，并创建核心式 manifest |
+| `repair-cec --source-dir ... --current cec --output cec` | 3DS CEC 邮箱、只读当前 Cemu `cec` 和独立输出状态 | 无 | 在输出 `cec` 中替换准确历史记录/填充空槽并创建 CEC manifest；要求 `--experimental` |
 | `convert-system system --output <已有 Cemu system>` | Dry Run 和写入都会读取 3DS 源 `system` 与已初始化的 Cemu 目标 | 无 | 只把已确认的画廊/动画标记并集合并到指定目标，并创建相同模式的事务文件 |
 | `convert-extras --source-dir ... --output-dir ...` | 全部八个 ExtData 文件 | 无，也不会创建输出目录 | 只写入 `output-dir` 下生成的八个文件 |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | 完整暂存 ExtData 集合及被选中、已初始化的目标组件组 | 无 | 只改变被选中的完整 Cemu 组件组，以及下文一个绑定 manifest 的 ExtData 恢复事务 |
@@ -180,7 +221,7 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 
 短暂存在的 `.<user#|system>.mh3g-install.lock` 和临时文件会在事务结束后删除。`convert-extras` 故意不提供目标备份、manifest 或覆盖路径：如果八个同名暂存输出中的任何一个已经存在，`--write` 会拒绝执行。应使用新暂存目录，并对比报告的哈希。
 
-`install-extras` 提供受控安装步骤。它会在目标下创建唯一隐藏的 `.mh3g-extra-transaction-.../` 目录，目录内包含返回的 `.mh3g-extra-recovery.json` manifest 和保留的旧组件字节；`.mh3g-extra-install.lock` 只短暂存在。`rollback-extras` 只接受这个返回的 manifest，并恢复其中记录的完整组件组；不接受单个组件路径。
+`install-extras` 提供受控安装步骤。它会在目标下创建唯一隐藏的 `.mh3g-extra-transaction-.../` 目录，目录内包含返回的 `.mh3g-extra-recovery.json` manifest 和保留的旧组件字节。 advisory lock 只会在操作期间持有，但常规文件 `.mh3g-extra-install.lock` 会作为稳定 lock inode 持续保留。`rollback-extras` 只接受返回的 manifest，并恢复其中记录的完整组件组；不接受单个组件路径。回滚后事务目录和 manifest 仍作为审计证据保留，但被选中 payload 的每一个字节都会恢复。
 
 实验性 CEC 对应的持久文件名为：
 
@@ -198,7 +239,9 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 - `convert-extras` 不会修改任何源文件、用户槽位、`system` 或 `cec`；它只写入明确的暂存输出。
 - `install-extras` 不会修改源文件、任何 `user#`、`system`、`cec` 或未被选中的 ExtData 组件组；只会改变选中的完整目标组件组及其受控事务文件。
 - `convert-cec` 不会修改 `user#`、`system`、`card*` 或 `quest*`。
-- `repair-converted` 不会修改其他 `user#`、`system`、`cec`、`phrase*` 或 `quest1` 至 `quest4`；未选择 ExtData 时也不会读取或修改任何 `card*`。
+- 原生独立域流程中的 `repair-converted` 只改变明确输出的 `user#`；唯一耦合例外是为旧 CLI 脚本保留的 `--source-extdata-dir`。
+- `repair-extras` 只改变选中的完整输出组。即使公会名片和任务三组目录控件填写了相同路径，两次运行也不会互相授权或回滚。
+- `repair-system` 只改变明确输出的 `system`；`repair-cec` 只改变明确输出的 `cec`。
 - 任何转换器命令都没有枚举 `phrase1`、`phrase2` 或 `phrase3`，MH3G 转换实现不会读取或写入它们。
 - 从该 CLI 的视角看，3DS 源存档文件始终只读。
 
@@ -208,9 +251,9 @@ CEC 既不属于 `user#`，也不属于 `card*`，正常公会名片/离线伙�
 
 本契约来自可执行实现和测试：
 
-- `crates/mh3g-save-convert/src/main.rs`：CLI 参数、同名槽位校验、八文件 `convert-extras` 循环、dry-run 行为和新输出目录拒绝规则。
+- `crates/mh3g-save-convert/src/main.rs`：CLI 参数、同名槽位校验、独立的 `repair-converted`/`repair-extras`/`repair-system`/`repair-cec` 授权与 manifest、八文件 `convert-extras` 循环和 Dry Run 不写入行为。
 - `crates/mh3g-save-convert/src/converter.rs`：准确的八个 ExtData 文件名、逐组件校验、公会名片与任务的不同转换行为，以及源只读的纯槽位转换。
 - `crates/mh3g-save-convert/src/profile.rs`：接受的 `user1`/`user2`/`user3` 和 `system` basename，以及源/Cemu 字节大小 profile。
 - `crates/mh3g-save-convert/src/transaction.rs`：核心/system 原子安装、backup、manifest、history、lock 和 rollback 边界。
-- `crates/mh3g-save-convert/src/cec.rs`：仅收件箱的实验性 CEC 导入、`cec` 目标校验以及 CEC backup/manifest 行为。
-- `crates/mh3g-save-convert/tests/cli.rs` 和 `crates/mh3g-save-convert/src/converter.rs` 测试：dry-run 不写入、跨槽位拒绝、八组件暂存、CEC outbox 拒绝以及离线猎人/名片 anchor 回归覆盖。
+- `crates/mh3g-save-convert/src/cec.rs`：仅收件箱的实验性 CEC 导入、修复时准确历史记录替换、`cec` 目标校验以及 CEC backup/manifest 行为。
+- `crates/mh3g-save-convert/tests/cli.rs` 和 `crates/mh3g-save-convert/src/converter.rs` 测试：Dry Run 不写入、跨槽位拒绝、独立输出/当前引用保留、完整任务组复制、system 共享字节保留、CEC outbox 拒绝以及离线猎人/名片 anchor 回归覆盖。

@@ -84,52 +84,102 @@ candidate/cache data.  `convert` never automatically opens `system`,
 
 ### Compatibility Repair for an Older Conversion
 
-`repair-converted` is separate from a new `convert`. It requires one original
-3DS `user#` plus the same-named Cemu `user#` that was created by 0.0.3 through
-0.0.6 and may have been played further:
+Compatibility repair is separate from a new conversion. It has five
+independently authorized domains; selecting or completing one never authorizes,
+writes, or rolls back another:
+
+| Repair domain | Original 3DS input | Read-only current Wii U/Cemu authority | Independent output | Command |
+| --- | --- | --- | --- | --- |
+| Core slot | Exact `user1`, `user2`, or `user3` | Same-named `user#` | Same-named `user#` | `repair-converted` |
+| Guild cards | ExtData `user` directory containing `card1`-`card3`, `cardbox` | Directory containing initialized matching files | Directory containing initialized matching files | `repair-extras --group guild-cards` |
+| Quests | ExtData `user` directory containing `quest1`-`quest4` | Directory containing initialized matching files | Directory containing initialized matching files | `repair-extras --group quests` |
+| Shared gallery/movie state | Exact 3DS `system` | Exact initialized Cemu `system` | Exact `system` path | `repair-system` |
+| StreetPass/CEC cache | Exact MH3G CEC mailbox directory | Exact initialized Cemu `cec` | Exact `cec` path | `repair-cec` |
+
+Every domain has its own Dry Run fingerprint, write authorization, transaction
+manifest, and rollback. Source, current, and output path values are never
+copied or cascaded between controls. The native interfaces accept a core
+`user#` file or its direct parent directory; they do not recursively scan a
+3DS SD root, a Cemu MLC, or an archive. `system` and `cec` are exact files.
+Cards and quests share the same three ExtData directory selectors because they
+are siblings in one physical directory, but each group still has a separate
+Dry Run, write button, manifest, and rollback.
+
+The core contract is:
 
 ```text
 mh3g-save-convert repair-converted <3DS-user#> --current <current-Cemu-user#> \
-  [--output <repaired-Cemu-user#>] \
-  [--source-extdata-dir <3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  --output <repaired-Cemu-user#> \
+  [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
     --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
     --expected-preview-sha256 <SHA256>]
 ```
 
-These are three distinct path roles. The original 3DS slot and `--current`
-Wii U/Cemu slot are read-only merge inputs; `--output` is the write
-destination. All must name the same `user1`, `user2`, or `user3` slot. Omitting
-`--output` preserves the legacy CLI in-place behavior (`output = current`), but
-the native UIs always expose and pass an explicit output selection.
+The original 3DS slot and `--current` slot are read-only merge inputs;
+`--output` is the only payload path that may be written. All three must name
+the same slot. Current Cemu data is authoritative for continued gameplay. A
+known historical field is replaced only when the current value still equals
+the selected old converter output; later Wii U changes are preserved and
+reported as conflicts. Omitting `--output` retains legacy CLI in-place behavior
+only; both native UIs always display and pass a separate output.
 
-Current Cemu data is authoritative for continued gameplay. The operation
-three-way compares complete semantic fields known to differ across 0.0.3
-through 0.0.6. A field is replaced with the current converter result only when
-its current value still equals the historical output. A value different from
-both the historical and current-converter outputs is preserved as later Wii U
-progress and reported as a conflict. The operation does not blindly merge bytes
-or rebuild the whole Cemu slot.
+The two ExtData domains use:
 
-Omit `--source-extdata-dir` for a core-only repair. Guild-card repair requires
-all eight 3DS ExtData files in that directory and all eight current Cemu files
-beside the current `user#`. When output differs from current, its directory
-must already contain initialized `card1`, `card2`, `card3`, and `cardbox`
-targets. The `user#` and four `card*` components are
-repairable; `quest1` through `quest4` are validated and included in the set
-SHA-256 but retain the current Cemu bytes exactly. This command does not handle
-`system`, `cec`, or `phrase*`.
+```text
+mh3g-save-convert repair-extras --group <guild-cards|quests> \
+  --source-dir <3DS-ExtData-user> --current-dir <current-Cemu-save-dir> \
+  --output-dir <initialized-output-Cemu-save-dir> \
+  [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] [--dry-run | --write ...]
+```
 
-Dry Run aggregates every selected component into one top-level revision
-decision: `exact`, `compatible-range`, `ambiguous`, or `unknown`. Every
-component shares that final historical revision. An `ambiguous` write requires
-an explicit, non-contradicted `--from-version` followed by another Dry Run;
-`unknown` is refused. A write with explicit output must submit the immediate
-Dry Run's `source_set_sha256`, `current_set_sha256`, `output_set_sha256`, and
-`preview_sha256`. Success returns
-`.mh3g-compatibility-repair-<UUID>.json`; `rollback-repair --manifest <path>`
-restores the guild-card subtransaction first and the core subtransaction
-second.
+The selected output group must already be initialized and complete:
+`card1`, `card2`, `card3`, and `cardbox` for `guild-cards`; `quest1`,
+`quest2`, `quest3`, and `quest4` for `quests`. Partial-file repair is refused.
+Guild-card fields use the historical three-way merge. Quest payloads have no
+reviewed historical defect map, so the quest repair transaction validates the
+complete group and copies the **current Wii U bytes** to output exactly; it
+does not restore original 3DS quest data.
+
+The shared `system` repair uses:
+
+```text
+mh3g-save-convert repair-system <3DS-system> --current <current-Cemu-system> \
+  --output <repaired-Cemu-system> [--dry-run | --write ...]
+```
+
+Only the verified gallery/movie bit range is unioned from the source into the
+current Cemu authority; all other current bytes, including other-slot shared
+state, are preserved. The output file may be new, but its parent directory must
+exist. This is intentionally independent from both core and ExtData repair.
+
+Experimental CEC repair uses:
+
+```text
+mh3g-save-convert repair-cec --source-dir <3DS-MH3G-CEC-mailbox> \
+  --current <current-Cemu-cec> --output <repaired-Cemu-cec> \
+  [--slot <N>] [--dry-run | --write --experimental ...]
+```
+
+It replaces exact recognized historical records, preserves unrelated current
+slots, and otherwise fills empty slots only. CEC remains experimental and its
+write requires explicit acknowledgement. Its output may be new, but both
+current and output basenames must be `cec`.
+
+For core, guild cards, and quests, Dry Run reports `exact`,
+`compatible-range`, `ambiguous`, or `unknown`. An `ambiguous` result requires
+an explicit, non-contradicted `--from-version` and a new Dry Run; `unknown` is
+refused. The native workflow reuses one manually selected historical revision
+for these three domains because they originated from one converter run, while
+each domain still produces independent evidence and authorization. `system`
+and CEC do not use a historical converter revision.
+
+`repair-converted --source-extdata-dir` remains accepted for older scripts and
+can still coordinate core plus cards through one legacy manifest. New native
+UI flows do not use this coupled option. Prefer the domain-scoped commands and
+their matching rollback routes: `rollback-repair` for core,
+`rollback-extras` for one ExtData group, `rollback` for `system`, and
+`rollback-cec` for CEC. `phrase1` through `phrase3` remain outside repair.
 
 ### Optional Shared `system`
 
@@ -261,7 +311,11 @@ record import remains explicitly experimental.
 | `inspect-progress <user#> [--target <user#>]` | Source and optional target slots | Nothing | N/A |
 | `inspect-events <user#> [--target <user#>]` | Source and optional target slots | Nothing | N/A |
 | `convert <user#> --output <same user#>` | Source slot; existing target and prior transaction records only when installing | Nothing | Named target slot plus core transaction artifacts below |
-| `repair-converted <3DS-user#> --current <current-Cemu-user#> --output <repaired-Cemu-user#>` | Original 3DS slot, read-only current Cemu slot, independent output slot, and optional complete 3DS/current-Cemu ExtData sets | Nothing | Only the output-side same-named `user#` and complete guild-card group fields proven to need repair, plus a coordinator manifest; current reference and quest files remain unchanged |
+| `repair-converted <3DS-user#> --current <current-Cemu-user#> --output <repaired-Cemu-user#>` | Original 3DS slot, read-only current Cemu slot, and independent output state | Nothing | Only the output-side same-named `user#` fields proven to need repair, plus a core compatibility manifest; the current reference remains unchanged |
+| `repair-extras --group guild-cards ...` | Complete original, current, and output guild-card groups | Nothing | Only the complete output `card1`-`card3`/`cardbox` group and its independent ExtData transaction |
+| `repair-extras --group quests ...` | Complete original, current, and output quest groups | Nothing | Copies the complete current `quest1`-`quest4` group to the independent output and records its own transaction; original quest payload is never restored |
+| `repair-system system --current system --output system` | Original 3DS `system`, read-only current Cemu `system`, and independent output state | Nothing | Only the verified gallery/movie union based on current Cemu bytes, plus a core-style manifest |
+| `repair-cec --source-dir ... --current cec --output cec` | 3DS CEC mailbox, read-only current Cemu `cec`, and independent output state | Nothing | Exact historical record replacements/empty-slot additions in output `cec`, plus its CEC manifest; requires `--experimental` |
 | `convert-system system --output <existing Cemu system>` | 3DS source `system` and existing initialized Cemu target on Dry Run and write | Nothing | Only the verified gallery/movie flag union in the named target, plus the same transaction artifact pattern |
 | `convert-extras --source-dir ... --output-dir ...` | All eight extdata files | Nothing, and no output directory is created | Only the eight generated files under `output-dir` |
 | `install-extras --staging-dir ... --target-dir ... --groups ...` | Complete staged ExtData set and selected initialized target group(s) | Nothing | Only the selected complete Cemu group(s), plus one manifest-bound ExtData recovery transaction below |
@@ -291,9 +345,12 @@ compare the reported hashes.
 `install-extras` provides the controlled install step. It writes a unique
 hidden `.mh3g-extra-transaction-.../` directory below the target containing
 the returned `.mh3g-extra-recovery.json` manifest and retained prior component
-bytes. Its `.mh3g-extra-install.lock` is short-lived. `rollback-extras` accepts
-only that returned manifest and restores the complete group(s) named by it; it
-does not accept individual component paths.
+bytes. The advisory lock is held only during an operation, while the regular
+`.mh3g-extra-install.lock` pathname intentionally remains as a stable lock
+inode. `rollback-extras` accepts only the returned manifest and restores the
+complete group(s) named by it; it does not accept individual component paths.
+The transaction directory and manifest remain afterward as audit evidence,
+even though every selected payload byte is restored.
 
 For experimental CEC, the equivalent persistent names are:
 
@@ -317,9 +374,14 @@ particular:
   or a non-selected ExtData group; it changes only the selected complete target
   group(s) and their controlled transaction artifacts.
 - `convert-cec` does not modify `user#`, `system`, `card*`, or `quest*`.
-- `repair-converted` does not modify another `user#`, `system`, `cec`,
-  `phrase*`, or `quest1` through `quest4`; without ExtData selected it also
-  does not read or modify any `card*`.
+- `repair-converted` in the native domain-scoped flow changes only its explicit
+  output `user#`. The legacy `--source-extdata-dir` option is the sole coupled
+  exception retained for old CLI scripts.
+- `repair-extras` changes only the selected complete output group. Guild-card
+  and quest runs do not authorize or roll back each other, even when their
+  directory selectors contain the same path values.
+- `repair-system` changes only its explicit output `system`; `repair-cec`
+  changes only its explicit output `cec`.
 - `phrase1`, `phrase2`, and `phrase3` are not enumerated by any converter
   command and are not read or written by the MH3G conversion implementation.
 - The source 3DS save files are always read-only from this CLI's perspective.
@@ -332,8 +394,9 @@ manifest, history, lock, and temporary transaction artifacts described above.
 This contract is derived from the executable implementation and tests:
 
 - `crates/mh3g-save-convert/src/main.rs`: CLI parameters, same-name slot
-  validation, the eight-file `convert-extras` loop, dry-run behavior, and its
-  new-output-directory refusal.
+  validation, independent `repair-converted`/`repair-extras`/`repair-system`/
+  `repair-cec` authorization and manifests, the eight-file `convert-extras`
+  loop, and dry-run non-write behavior.
 - `crates/mh3g-save-convert/src/converter.rs`: the exact eight extdata names,
   per-component validation, guild-card versus quest conversion behavior, and
   the source-read-only pure slot conversion.
@@ -342,8 +405,10 @@ This contract is derived from the executable implementation and tests:
 - `crates/mh3g-save-convert/src/transaction.rs`: atomic core/system install,
   backup, manifest, history, lock, and rollback boundaries.
 - `crates/mh3g-save-convert/src/cec.rs`: inbox-only experimental CEC import,
-  `cec` target validation, and CEC backup/manifest behavior.
+  exact historical-record replacement for repair, `cec` target validation,
+  and CEC backup/manifest behavior.
 - `crates/mh3g-save-convert/tests/cli.rs` and
   `crates/mh3g-save-convert/src/converter.rs` tests: dry-run non-write,
-  cross-slot rejection, eight-component staging, CEC outbox rejection, and
+  cross-slot rejection, independent output/current preservation, complete-group
+  quest copying, system shared-byte preservation, CEC outbox rejection, and
   offline-hunter/card-anchor regression coverage.

@@ -71,21 +71,20 @@ final class WorkflowStatusPresentationTests: XCTestCase {
         XCTAssertTrue(WorkflowStageRailLayoutContract.adaptive.preservesAccessibilityStateLabels)
     }
 
-    func testIncompleteOptionalSelectionOverridesAStaleCoreAuthorization() throws {
+    func testIncompleteOptionalSelectionDoesNotOverrideCoreAuthorization() throws {
         let workflow = configuredWorkflow()
         try workflow.authorizeDryRunForTesting()
         XCTAssertEqual(workflow.statusPresentation.kind, .authorized)
 
         workflow.setComponents(ComponentSelection(includeGuildCards: true))
 
-        XCTAssertEqual(workflow.statusPresentation.kind, .blocked)
-        XCTAssertEqual(workflow.statusPresentation.titleKey, "Status.OptionalDataBlocked")
-        XCTAssertTrue(workflow.statusPresentation.isBlocking)
-        XCTAssertFalse(workflow.canWrite)
+        XCTAssertEqual(workflow.statusPresentation.kind, .authorized)
+        XCTAssertFalse(workflow.statusPresentation.isBlocking)
+        XCTAssertTrue(workflow.canWrite)
         let dryRunStep = workflow.stageRailPresentation.first { $0.route == .dryRun }
-        XCTAssertEqual(dryRunStep?.tone, .blocked)
-        XCTAssertEqual(dryRunStep?.iconName, "exclamationmark.triangle.fill")
-        XCTAssertEqual(dryRunStep?.accessibilityStateKey, "Status.Blocked")
+        XCTAssertEqual(dryRunStep?.tone, .complete)
+        XCTAssertEqual(dryRunStep?.iconName, "checkmark.circle.fill")
+        XCTAssertEqual(dryRunStep?.accessibilityStateKey, "Status.Succeeded")
     }
 
     private func configuredWorkflow() -> ConversionWorkflow {

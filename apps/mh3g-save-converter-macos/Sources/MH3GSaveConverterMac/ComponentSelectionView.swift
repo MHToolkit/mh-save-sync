@@ -14,8 +14,7 @@ struct ComponentSelectionView: View {
             subtitle: ConverterCopy.text("Components.Subtitle", language: language)
         ) {
             Form {
-                if workflow.mode == .newConversion {
-                    Section {
+                Section {
                     Toggle(ConverterCopy.text("Components.System", language: language), isOn: binding(\.includeSystem))
                     if workflow.components.includeSystem {
                         SelectedPathRow(
@@ -25,12 +24,29 @@ struct ComponentSelectionView: View {
                         ) {
                             chooseSystemSource()
                         }
-                        SelectedPathRow(
-                            title: ConverterCopy.text("Components.SystemTarget", language: language),
-                            value: workflow.components.systemTarget,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
-                        ) {
-                            chooseSystemTarget()
+                        if workflow.mode == .newConversion {
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Components.SystemTarget", language: language),
+                                value: workflow.components.systemTarget,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseSystemTarget()
+                            }
+                        } else {
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Input.Current", language: language),
+                                value: workflow.components.systemCurrent,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseSystemCurrent()
+                            }
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Input.RepairOutput", language: language),
+                                value: workflow.components.systemTarget,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseSystemTarget()
+                            }
                         }
                         Label(
                             ConverterCopy.text("Components.SystemWarning", language: language),
@@ -39,9 +55,8 @@ struct ComponentSelectionView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                     }
-                    } footer: {
-                        Text(ConverterCopy.text("Components.SystemFooter", language: language))
-                    }
+                } footer: {
+                    Text(ConverterCopy.text("Components.SystemFooter", language: language))
                 }
 
                 Section {
@@ -56,19 +71,18 @@ struct ComponentSelectionView: View {
                         enabled: workflow.components.includeGuildCards,
                         language: language
                     )
-                    if workflow.mode == .newConversion {
-                        Toggle(ConverterCopy.text("Components.Quests", language: language), isOn: binding(\.includeQuests))
-                        Text(ConverterCopy.text("Components.QuestsDetail", language: language))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 6)
-                        GroupScopeCaption(
-                            image: "scroll",
-                            names: ExtraGroup.quests.componentNames.joined(separator: " · "),
-                            enabled: workflow.components.includeQuests,
-                            language: language
-                        )
-                    } else {
+                    Toggle(ConverterCopy.text("Components.Quests", language: language), isOn: binding(\.includeQuests))
+                    Text(ConverterCopy.text("Components.QuestsDetail", language: language))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
+                    GroupScopeCaption(
+                        image: "scroll",
+                        names: ExtraGroup.quests.componentNames.joined(separator: " · "),
+                        enabled: workflow.components.includeQuests,
+                        language: language
+                    )
+                    if workflow.mode == .repairConverted {
                         Text(ConverterCopy.text("Components.RepairExtData", language: language))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -91,6 +105,21 @@ struct ComponentSelectionView: View {
                             }
                             SelectedPathRow(
                                 title: ConverterCopy.text("Components.Target", language: language),
+                                value: workflow.components.extraTargetDirectory,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseExtraTarget()
+                            }
+                        } else {
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Input.Current", language: language),
+                                value: workflow.components.extraCurrentDirectory,
+                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            ) {
+                                chooseExtraCurrent()
+                            }
+                            SelectedPathRow(
+                                title: ConverterCopy.text("Input.RepairOutput", language: language),
                                 value: workflow.components.extraTargetDirectory,
                                 chooseTitle: ConverterCopy.text("Input.Select", language: language)
                             ) {
@@ -184,6 +213,14 @@ struct ComponentSelectionView: View {
         update { $0.systemTarget = url }
     }
 
+    private func chooseSystemCurrent() {
+        guard let url = OpenPanel.selectFile(
+            title: ConverterCopy.text("Input.Current", language: language),
+            message: ConverterCopy.text("Components.SystemTargetMessage", language: language)
+        ) else { return }
+        update { $0.systemCurrent = url }
+    }
+
     private func chooseExtraSource() {
         guard let url = OpenPanel.selectDirectory(
             title: ConverterCopy.text("Components.ExtDataSource", language: language),
@@ -206,6 +243,14 @@ struct ComponentSelectionView: View {
         update { $0.extraStagingDirectory = url }
     }
 
+    private func chooseExtraCurrent() {
+        guard let url = OpenPanel.selectDirectory(
+            title: ConverterCopy.text("Input.Current", language: language),
+            message: ConverterCopy.text("Components.TargetMessage", language: language)
+        ) else { return }
+        update { $0.extraCurrentDirectory = url }
+    }
+
     private func chooseExtraTarget() {
         guard let url = OpenPanel.selectDirectory(
             title: ConverterCopy.text("Components.Target", language: language),
@@ -219,6 +264,7 @@ struct ComponentSelectionView: View {
         change(&next)
         workflow.setComponents(next)
     }
+
 }
 
 private struct GroupScopeCaption: View {

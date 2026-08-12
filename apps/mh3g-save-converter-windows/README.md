@@ -15,15 +15,22 @@ code.
 - It does not search an SD card, MLC, ZIP, 7z, RAR, or a generic save folder.
   The user selects exact paths.
 - New conversion exposes `inspect` -> `convert --dry-run` -> final SHA-256
-  recheck -> `convert --write`. Repair mode exposes separate controls for the
-  original 3DS `user#`, the read-only current same-slot Cemu `user#`, and the
-  repaired output file/directory. It passes all three paths to
-  `repair-converted`; optional complete 3DS ExtData enables guild-card repair.
-  A separate card output must already be initialized. Ambiguous detection
-  requires choosing 0.0.3 through 0.0.6 and repeating Dry Run.
+  recheck -> `convert --write`. Repair mode splits core, guild cards, quests,
+  shared `system`, and experimental CEC into independent transactions. Every
+  domain has separate original 3DS, read-only current Cemu, and output path
+  roles plus its own Dry Run, write authorization, manifest, and rollback.
+  Path values never cascade between those controls. Core accepts an exact
+  `user#` file or its direct parent; `system` and CEC use exact files.
+  Cards and quests share one physical ExtData directory triplet but retain
+  separate actions/manifests. Each output group must already contain all four
+  initialized files. Quest repair preserves current Wii U bytes exactly.
+  Ambiguous core/card/quest detection requires choosing 0.0.3 through 0.0.6
+  and repeating that domain's Dry Run.
 - The UI opens a confirmation dialog before writing. Normal conversion records
-  its single-file manifest; repair records
-  `.mh3g-compatibility-repair-<UUID>.json` and uses `rollback-repair`.
+  its single-file manifest. Core repair uses
+  `.mh3g-compatibility-repair-<UUID>.json`; cards/quests, `system`, and CEC each
+  retain their own matching manifest and rollback route. Failure in one domain
+  does not revoke another domain's successful Dry Run.
 - The process bridge uses `ProcessStartInfo.ArgumentList`, sets
   `UseShellExecute = false`, and parses the CLI's JSON stdout. No shell command
   string is built and no conversion behavior is duplicated in C#.
@@ -39,8 +46,9 @@ code.
   The Windows backend installs complete ExtData groups through `ReplaceFileW`,
   manifest-bound backups, and a durable recovery journal. The UI never guesses
   a Cemu MLC directory or silently installs a group. Compatibility repair
-  field-updates only `user#` and guild-card values that still match an older
-  conversion; current `quest1` through `quest4` bytes are preserved.
+  field-updates only core/guild-card values that still match an older
+  conversion; current `quest1` through `quest4` bytes are preserved. An
+  incomplete optional domain never blocks core or another complete domain.
 
 Quit Nemessix, Azahar, and Cemu before any write or rollback. See the root
 [English CLI contract](../../docs/MH3G_3DS_TO_CEMU_FILE_CONTRACT.md) and

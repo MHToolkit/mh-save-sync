@@ -7,6 +7,9 @@ public enum ConverterOperation: String, CaseIterable, Codable, Sendable {
     case inspect
     case convert
     case repairConverted = "repair-converted"
+    case repairExtras = "repair-extras"
+    case repairSystem = "repair-system"
+    case repairCEC = "repair-cec"
     case rollbackRepair = "rollback-repair"
     case convertSystem = "convert-system"
     case convertExtras = "convert-extras"
@@ -184,11 +187,14 @@ public struct ComponentSelection: Equatable, Sendable {
     public var includeGuildCards: Bool
     public var includeQuests: Bool
     public var systemSource: URL?
+    public var systemCurrent: URL?
     public var systemTarget: URL?
     public var extraSourceDirectory: URL?
+    public var extraCurrentDirectory: URL?
     public var extraStagingDirectory: URL?
     public var extraTargetDirectory: URL?
     public var cecSourceDirectory: URL?
+    public var cecCurrent: URL?
     public var cecTarget: URL?
     public var acknowledgeExperimentalCEC: Bool
 
@@ -197,11 +203,14 @@ public struct ComponentSelection: Equatable, Sendable {
         includeGuildCards: Bool = false,
         includeQuests: Bool = false,
         systemSource: URL? = nil,
+        systemCurrent: URL? = nil,
         systemTarget: URL? = nil,
         extraSourceDirectory: URL? = nil,
+        extraCurrentDirectory: URL? = nil,
         extraStagingDirectory: URL? = nil,
         extraTargetDirectory: URL? = nil,
         cecSourceDirectory: URL? = nil,
+        cecCurrent: URL? = nil,
         cecTarget: URL? = nil,
         acknowledgeExperimentalCEC: Bool = false
     ) {
@@ -209,11 +218,14 @@ public struct ComponentSelection: Equatable, Sendable {
         self.includeGuildCards = includeGuildCards
         self.includeQuests = includeQuests
         self.systemSource = systemSource?.standardizedFileURL
+        self.systemCurrent = systemCurrent?.standardizedFileURL
         self.systemTarget = systemTarget?.standardizedFileURL
         self.extraSourceDirectory = extraSourceDirectory?.standardizedFileURL
+        self.extraCurrentDirectory = extraCurrentDirectory?.standardizedFileURL
         self.extraStagingDirectory = extraStagingDirectory?.standardizedFileURL
         self.extraTargetDirectory = extraTargetDirectory?.standardizedFileURL
         self.cecSourceDirectory = cecSourceDirectory?.standardizedFileURL
+        self.cecCurrent = cecCurrent?.standardizedFileURL
         self.cecTarget = cecTarget?.standardizedFileURL
         self.acknowledgeExperimentalCEC = acknowledgeExperimentalCEC
     }
@@ -226,7 +238,7 @@ public struct ComponentSelection: Equatable, Sendable {
     }
 
     public var includesCEC: Bool {
-        cecSourceDirectory != nil || cecTarget != nil
+        cecSourceDirectory != nil || cecCurrent != nil || cecTarget != nil
     }
 }
 
@@ -303,6 +315,71 @@ public struct RepairComponentFingerprint: Equatable, Sendable {
     public let currentSHA256: String
     public let mergedSHA256: String
     public let modified: Bool
+}
+
+public struct RepairExtrasDryRunFingerprint: Equatable, Sendable {
+    public let group: ExtraGroup
+    public let sourceDirectory: URL
+    public let currentDirectory: URL
+    public let outputDirectory: URL
+    public let fromVersion: HistoricalConverterRevision?
+    public let sourceSetSHA256: String
+    public let currentSetSHA256: String
+    public let outputSetSHA256: String
+    public let previewSHA256: String
+    public let components: [RepairComponentFingerprint]
+
+    public init(
+        group: ExtraGroup,
+        sourceDirectory: URL,
+        currentDirectory: URL,
+        outputDirectory: URL,
+        fromVersion: HistoricalConverterRevision?,
+        sourceSetSHA256: String,
+        currentSetSHA256: String,
+        outputSetSHA256: String,
+        previewSHA256: String,
+        components: [RepairComponentFingerprint]
+    ) {
+        self.group = group
+        self.sourceDirectory = sourceDirectory.standardizedFileURL
+        self.currentDirectory = currentDirectory.standardizedFileURL
+        self.outputDirectory = outputDirectory.standardizedFileURL
+        self.fromVersion = fromVersion
+        self.sourceSetSHA256 = sourceSetSHA256
+        self.currentSetSHA256 = currentSetSHA256
+        self.outputSetSHA256 = outputSetSHA256
+        self.previewSHA256 = previewSHA256
+        self.components = components
+    }
+}
+
+public struct RepairSystemDryRunFingerprint: Equatable, Sendable {
+    public let source: URL
+    public let current: URL
+    public let output: URL
+    public let sourceSetSHA256: String
+    public let currentSetSHA256: String
+    public let outputSetSHA256: String
+    public let previewSHA256: String
+
+    public init(
+        source: URL,
+        current: URL,
+        output: URL,
+        sourceSetSHA256: String,
+        currentSetSHA256: String,
+        outputSetSHA256: String,
+        previewSHA256: String
+    ) {
+        self.source = source.standardizedFileURL
+        self.current = current.standardizedFileURL
+        self.output = output.standardizedFileURL
+        self.sourceSetSHA256 = sourceSetSHA256
+        self.currentSetSHA256 = currentSetSHA256
+        self.outputSetSHA256 = outputSetSHA256
+        self.previewSHA256 = previewSHA256
+    }
 }
 
 /// `system` is a distinct 3DS/Wii U file pair, so it must retain its own
@@ -432,6 +509,34 @@ public struct CECDryRunFingerprint: Equatable, Sendable {
     }
 }
 
+public struct RepairCECDryRunFingerprint: Equatable, Sendable {
+    public let sourceDirectory: URL
+    public let current: URL
+    public let output: URL
+    public let sourceRecordSetSHA256: String
+    public let currentSetSHA256: String
+    public let outputSetSHA256: String
+    public let previewSHA256: String
+
+    public init(
+        sourceDirectory: URL,
+        current: URL,
+        output: URL,
+        sourceRecordSetSHA256: String,
+        currentSetSHA256: String,
+        outputSetSHA256: String,
+        previewSHA256: String
+    ) {
+        self.sourceDirectory = sourceDirectory.standardizedFileURL
+        self.current = current.standardizedFileURL
+        self.output = output.standardizedFileURL
+        self.sourceRecordSetSHA256 = sourceRecordSetSHA256
+        self.currentSetSHA256 = currentSetSHA256
+        self.outputSetSHA256 = outputSetSHA256
+        self.previewSHA256 = previewSHA256
+    }
+}
+
 public struct PlannedConverterCommand: Equatable, Sendable {
     public let operation: ConverterOperation
     public let arguments: [String]
@@ -510,6 +615,7 @@ public struct ConverterReport: Decodable, Sendable {
     public let sourceRecordSetSHA256: String?
     public let components: [ConverterExtraComponent]?
     public let groups: [ExtraGroup]?
+    public let group: ExtraGroup?
     public let stagingSetSHA256: String?
     public let targetSetSHA256Before: String?
     public let sourceSetSHA256: String?
@@ -525,6 +631,7 @@ public struct ConverterReport: Decodable, Sendable {
     public let targetDirectory: String?
     public let source: String?
     public let current: String?
+    public let currentDirectory: String?
     public let target: String?
     public let entries: [ConverterExtraInstallEntry]?
     public let backupPaths: [String]?
@@ -534,11 +641,12 @@ public struct ConverterReport: Decodable, Sendable {
     public let stderr: String?
 
     enum CodingKeys: String, CodingKey {
-        case operation, status, profile, size, hashes, output, backup, manifest, stderr, components, groups, manifests, detection
+        case operation, status, profile, size, hashes, output, backup, manifest, stderr, components, groups, group, manifests, detection
         case source, current, target, entries
         case compatibilityManifest = "compatibility_manifest"
         case sourceDirectory = "source_dir"
         case outputDirectory = "output_dir"
+        case currentDirectory = "current_dir"
         case stagingDirectory = "staging_dir"
         case targetDirectory = "target_dir"
         case backupPaths = "backup_paths"
