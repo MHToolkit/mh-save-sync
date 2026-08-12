@@ -298,7 +298,7 @@ fn keys(value: &Value) -> BTreeSet<String> {
 }
 
 #[test]
-fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
+fn repair_converted_repairs_the_historical_packed_mask_byte_swap() {
     #[cfg(target_os = "macos")]
     let _guard = PROCESS_GUARD.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -317,7 +317,7 @@ fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
 
     let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
     let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
-    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    current[lamp..lamp + 2].copy_from_slice(&[0x00, 0x1E]);
     let unrelated = JP_CEMU_HEADER.len() + 0x240;
     current[unrelated] ^= 0x5A;
     let unrelated_after = current[unrelated];
@@ -330,7 +330,7 @@ fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
         "--current".into(),
         current_path.to_string_lossy().into_owned(),
         "--from-version".into(),
-        "0.0.5".into(),
+        "0.0.6".into(),
         "--dry-run".into(),
     ]);
     assert_eq!(dry["status"], "dry-run");
@@ -343,7 +343,7 @@ fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
         "--current".into(),
         current_path.to_string_lossy().into_owned(),
         "--from-version".into(),
-        "0.0.5".into(),
+        "0.0.6".into(),
         "--write".into(),
         "--expected-source-set-sha256".into(),
         dry["source_set_sha256"].as_str().unwrap().to_owned(),
@@ -354,7 +354,7 @@ fn repair_converted_dry_run_then_write_repairs_only_an_old_lamp_field() {
     ]);
     assert_eq!(written["status"], "written");
     let installed = fs::read(&current_path).unwrap();
-    assert_eq!(&installed[lamp..lamp + 2], &[0x00, 0x1E]);
+    assert_eq!(&installed[lamp..lamp + 2], &[0x1E, 0x00]);
     assert_eq!(installed[unrelated], unrelated_after);
     assert!(written["manifests"].as_array().unwrap().len() == 1);
     let compatibility_manifest = written["compatibility_manifest"]
@@ -386,7 +386,7 @@ fn repair_converted_can_read_current_and_write_a_separate_output() {
 
     let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
     let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
-    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    current[lamp..lamp + 2].copy_from_slice(&[0x00, 0x1E]);
     let unrelated = JP_CEMU_HEADER.len() + 0x240;
     current[unrelated] ^= 0x5A;
     let current_before = current.clone();
@@ -400,7 +400,7 @@ fn repair_converted_can_read_current_and_write_a_separate_output() {
         "--output".into(),
         output_path.to_string_lossy().into_owned(),
         "--from-version".into(),
-        "0.0.5".into(),
+        "0.0.6".into(),
         "--dry-run".into(),
     ]);
     assert_eq!(dry["status"], "dry-run");
@@ -417,7 +417,7 @@ fn repair_converted_can_read_current_and_write_a_separate_output() {
         "--output".into(),
         output_path.to_string_lossy().into_owned(),
         "--from-version".into(),
-        "0.0.5".into(),
+        "0.0.6".into(),
         "--write".into(),
         "--expected-source-set-sha256".into(),
         dry["source_set_sha256"].as_str().unwrap().to_owned(),
@@ -431,7 +431,7 @@ fn repair_converted_can_read_current_and_write_a_separate_output() {
     assert_eq!(written["status"], "written");
     assert_eq!(fs::read(&current_path).unwrap(), current_before);
     let installed = fs::read(&output_path).unwrap();
-    assert_eq!(&installed[lamp..lamp + 2], &[0x00, 0x1E]);
+    assert_eq!(&installed[lamp..lamp + 2], &[0x1E, 0x00]);
     assert_eq!(installed[unrelated], current_before[unrelated]);
 
     let compatibility_manifest = written["compatibility_manifest"]
@@ -645,7 +645,7 @@ fn repair_converted_write_rejects_a_current_save_changed_after_dry_run() {
     let mut current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
     let lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
     let source_lamp = JP_3DS_HEADER.len() + 0x6F44 + 0xE4;
-    current[lamp..lamp + 2].copy_from_slice(&source[source_lamp..source_lamp + 2]);
+    current[lamp..lamp + 2].copy_from_slice(&[source[source_lamp + 1], source[source_lamp]]);
     fs::write(&current_path, &current).unwrap();
 
     let dry = run_json(&[
@@ -695,8 +695,7 @@ fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change()
     let current_path = current_dir.join("user2");
     let mut current_slot = convert_3ds_to_cemu_named(&source_slot, "user2").unwrap();
     let current_lamp = JP_CEMU_HEADER.len() + 0x6F44 + 0xE4;
-    current_slot[current_lamp..current_lamp + 2]
-        .copy_from_slice(&source_slot[source_lamp..source_lamp + 2]);
+    current_slot[current_lamp..current_lamp + 2].copy_from_slice(&[0x00, 0x1E]);
     fs::write(&current_path, &current_slot).unwrap();
     let current_slot_before = current_slot.clone();
 
