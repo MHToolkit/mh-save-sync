@@ -826,6 +826,287 @@ fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change()
 }
 
 #[test]
+fn repair_quests_copies_current_wiiu_bytes_to_an_independent_output_and_is_idempotent() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("3ds-extdata");
+    let current_dir = temp.path().join("current-cemu");
+    let output_dir = temp.path().join("output-cemu");
+    fs::create_dir(&source_dir).unwrap();
+    fs::create_dir(&current_dir).unwrap();
+    fs::create_dir(&output_dir).unwrap();
+
+    let components = ["quest1", "quest2", "quest3", "quest4"];
+    let mut output_before = BTreeMap::new();
+    for (index, component) in components.iter().enumerate() {
+        let mut source = vec![0_u8; 0x29_000];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        source[4] = index as u8;
+        let baseline = convert_external_component_to_cemu_named(&source, component).unwrap();
+        let mut current = baseline.clone();
+        current[0x120 + index] ^= 0x5A;
+        fs::write(source_dir.join(component), source).unwrap();
+        fs::write(current_dir.join(component), current).unwrap();
+        fs::write(output_dir.join(component), &baseline).unwrap();
+        output_before.insert(*component, baseline);
+    }
+    let current_before = components
+        .iter()
+        .map(|component| (*component, fs::read(current_dir.join(component)).unwrap()))
+        .collect::<BTreeMap<_, _>>();
+
+    let dry = run_json(&[
+        "repair-extras".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current-dir".into(),
+        current_dir.to_string_lossy().into_owned(),
+        "--output-dir".into(),
+        output_dir.to_string_lossy().into_owned(),
+        "--group".into(),
+        "quests".into(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+    assert!(
+        dry["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|component| component["modified"] == false)
+    );
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-extras".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current-dir".into(),
+        current_dir.to_string_lossy().into_owned(),
+        "--output-dir".into(),
+        output_dir.to_string_lossy().into_owned(),
+        "--group".into(),
+        "quests".into(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    for component in components {
+        assert_eq!(
+            fs::read(output_dir.join(component)).unwrap(),
+            current_before[component]
+        );
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            current_before[component]
+        );
+    }
+
+    let second = run_json(&[
+        "repair-extras".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current-dir".into(),
+        current_dir.to_string_lossy().into_owned(),
+        "--output-dir".into(),
+        output_dir.to_string_lossy().into_owned(),
+        "--group".into(),
+        "quests".into(),
+        "--dry-run".into(),
+    ]);
+    assert!(
+        second["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|component| component["write_required"] == false)
+    );
+
+    let manifest = written["manifest"].as_str().unwrap();
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-extras".into(),
+        "--manifest".into(),
+        manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    for component in components {
+        assert_eq!(
+            fs::read(output_dir.join(component)).unwrap(),
+            output_before[component]
+        );
+        assert_eq!(
+            fs::read(current_dir.join(component)).unwrap(),
+            current_before[component]
+        );
+    }
+}
+
+#[test]
+fn repair_system_preserves_current_shared_bytes_and_rolls_back_a_new_output() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let current_dir = temp.path().join("current");
+    let output_dir = temp.path().join("output");
+    fs::create_dir(&source_dir).unwrap();
+    fs::create_dir(&current_dir).unwrap();
+    fs::create_dir(&output_dir).unwrap();
+    let source = source_dir.join("system");
+    let current = current_dir.join("system");
+    let output = output_dir.join("system");
+
+    let mut source_bytes = vec![0_u8; THREE_DS_SYSTEM_SIZE];
+    source_bytes[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+    source_bytes[0x44..0x48].copy_from_slice(&1_u32.to_le_bytes());
+    fs::write(&source, source_bytes).unwrap();
+    let mut current_bytes = build_jp_cemu_header("system", CEMU_SYSTEM_SIZE - 40)
+        .unwrap()
+        .to_vec();
+    current_bytes.resize(CEMU_SYSTEM_SIZE, 0);
+    current_bytes[0x180] = 0xA5;
+    fs::write(&current, &current_bytes).unwrap();
+
+    let dry = run_json(&[
+        "repair-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+    assert_eq!(dry["write_required"], true);
+    assert!(!output.exists());
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--expected-source-set-sha256".into(),
+        dry["source_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    let repaired = fs::read(&output).unwrap();
+    assert_eq!(repaired[0x180], 0xA5);
+    assert_eq!(&repaired[0x68..0x6C], &1_u32.to_be_bytes());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+
+    let second = run_json(&[
+        "repair-system".into(),
+        source.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(second["write_required"], false);
+
+    let manifest = written["manifest"].as_str().unwrap();
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback".into(),
+        "--manifest".into(),
+        manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert!(!output.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+}
+
+#[test]
+fn repair_cec_keeps_current_read_only_and_rolls_back_an_independent_output() {
+    #[cfg(target_os = "macos")]
+    let _guard = PROCESS_GUARD.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = cec_fixture(&temp);
+    let current = cemu_cec_fixture(&temp);
+    let current_before = fs::read(&current).unwrap();
+    let output_dir = temp.path().join("cec-output");
+    fs::create_dir(&output_dir).unwrap();
+    let output = output_dir.join("cec");
+
+    let dry = run_json(&[
+        "repair-cec".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(dry["status"], "dry-run");
+    assert!(!output.exists());
+
+    let written = run_json_with_stopped_emulators(&[
+        "repair-cec".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--write".into(),
+        "--experimental".into(),
+        "--expected-source-record-set-sha256".into(),
+        dry["source_record_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-current-set-sha256".into(),
+        dry["current_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-output-set-sha256".into(),
+        dry["output_set_sha256"].as_str().unwrap().to_owned(),
+        "--expected-preview-sha256".into(),
+        dry["preview_sha256"].as_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(written["status"], "written");
+    assert_ne!(fs::read(&output).unwrap(), current_before);
+    assert_eq!(fs::read(&current).unwrap(), current_before);
+
+    let second = run_json(&[
+        "repair-cec".into(),
+        "--source-dir".into(),
+        source_dir.to_string_lossy().into_owned(),
+        "--current".into(),
+        current.to_string_lossy().into_owned(),
+        "--output".into(),
+        output.to_string_lossy().into_owned(),
+        "--dry-run".into(),
+    ]);
+    assert_eq!(
+        second["output_sha256_before"],
+        second["output_sha256_after"]
+    );
+
+    let manifest = written["manifest"].as_str().unwrap();
+    let rolled_back = run_json_with_stopped_emulators(&[
+        "rollback-cec".into(),
+        "--manifest".into(),
+        manifest.to_owned(),
+    ]);
+    assert_eq!(rolled_back["status"], "rolled-back");
+    assert!(!output.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_before);
+}
+
+#[test]
 fn inspect_reports_metadata_without_decoded_player_data() {
     let temp = tempfile::tempdir().unwrap();
     let source = source_fixture(&temp);

@@ -378,6 +378,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ChooseSystemCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            SystemCurrentBox.Text = path;
+            ViewModel.SystemCurrentPath = path;
+        }
+    }
+
     private async void ChooseSystemRollbackManifest_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync(".json");
@@ -395,6 +405,36 @@ public sealed partial class MainWindow : Window
         {
             ExtrasSourceBox.Text = path;
             ViewModel.ExtrasSourceDirectory = path;
+        }
+    }
+
+    private async void ChooseRepairExtrasSource_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasRepairSourceBox.Text = path;
+            ViewModel.ExtrasSourceDirectory = path;
+        }
+    }
+
+    private async void ChooseExtrasCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasCurrentBox.Text = path;
+            ViewModel.ExtrasCurrentDirectory = path;
+        }
+    }
+
+    private async void ChooseRepairExtrasTarget_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (path is not null)
+        {
+            ExtrasRepairTargetBox.Text = path;
+            ViewModel.ExtrasTargetDirectory = path;
         }
     }
 
@@ -428,6 +468,26 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ChooseRepairGuildCardsManifest_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync(".json");
+        if (path is not null)
+        {
+            RepairGuildCardsManifestBox.Text = path;
+            ViewModel.RepairGuildCardsRollbackManifestPath = path;
+        }
+    }
+
+    private async void ChooseRepairQuestsManifest_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync(".json");
+        if (path is not null)
+        {
+            RepairQuestsManifestBox.Text = path;
+            ViewModel.RepairQuestsRollbackManifestPath = path;
+        }
+    }
+
     private async void ChooseCecDirectory_Click(object sender, RoutedEventArgs e)
     {
         var path = await PickFolderAsync();
@@ -445,6 +505,16 @@ public sealed partial class MainWindow : Window
         {
             CecTargetBox.Text = path;
             ViewModel.CecTargetPath = path;
+        }
+    }
+
+    private async void ChooseCecCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("*");
+        if (path is not null)
+        {
+            CecCurrentBox.Text = path;
+            ViewModel.CecCurrentPath = path;
         }
     }
 
@@ -522,6 +592,10 @@ public sealed partial class MainWindow : Window
         {
             ViewModel.CecTargetPath = CecTargetBox.Text;
         }
+        else if (ReferenceEquals(sender, CecCurrentBox))
+        {
+            ViewModel.CecCurrentPath = CecCurrentBox.Text;
+        }
     }
 
     private void SystemPath_TextChanged(object sender, TextChangedEventArgs e)
@@ -534,6 +608,10 @@ public sealed partial class MainWindow : Window
         {
             ViewModel.SystemTargetPath = SystemTargetBox.Text;
         }
+        else if (ReferenceEquals(sender, SystemCurrentBox))
+        {
+            ViewModel.SystemCurrentPath = SystemCurrentBox.Text;
+        }
     }
 
     private void ExtrasPath_TextChanged(object sender, TextChangedEventArgs e)
@@ -542,6 +620,10 @@ public sealed partial class MainWindow : Window
         {
             ViewModel.ExtrasSourceDirectory = ExtrasSourceBox.Text;
         }
+        else if (ReferenceEquals(sender, ExtrasRepairSourceBox))
+        {
+            ViewModel.ExtrasSourceDirectory = ExtrasRepairSourceBox.Text;
+        }
         else if (ReferenceEquals(sender, ExtrasStagingBox))
         {
             ViewModel.ExtrasStagingDirectory = ExtrasStagingBox.Text;
@@ -549,6 +631,14 @@ public sealed partial class MainWindow : Window
         else if (ReferenceEquals(sender, ExtrasTargetBox))
         {
             ViewModel.ExtrasTargetDirectory = ExtrasTargetBox.Text;
+        }
+        else if (ReferenceEquals(sender, ExtrasCurrentBox))
+        {
+            ViewModel.ExtrasCurrentDirectory = ExtrasCurrentBox.Text;
+        }
+        else if (ReferenceEquals(sender, ExtrasRepairTargetBox))
+        {
+            ViewModel.ExtrasTargetDirectory = ExtrasRepairTargetBox.Text;
         }
     }
 
@@ -559,6 +649,8 @@ public sealed partial class MainWindow : Window
     private async void SystemDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunSystemDryRunAsync);
     private async void ExtrasStageDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasStageDryRunAsync);
     private async void ExtrasInstallDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasInstallDryRunAsync);
+    private async void RepairGuildCardsDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunRepairGuildCardsDryRunAsync);
+    private async void RepairQuestsDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunRepairQuestsDryRunAsync);
     private async void InspectCec_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectCecAsync);
     private async void CecDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunCecDryRunAsync);
 
@@ -612,6 +704,38 @@ public sealed partial class MainWindow : Window
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackExtrasAsync);
+        }
+    }
+
+    private async void WriteRepairGuildCards_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
+        {
+            await RunSafelyAsync(ViewModel.WriteRepairGuildCardsAsync);
+        }
+    }
+
+    private async void RollbackRepairGuildCards_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
+        {
+            await RunSafelyAsync(ViewModel.RollbackRepairGuildCardsAsync);
+        }
+    }
+
+    private async void WriteRepairQuests_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
+        {
+            await RunSafelyAsync(ViewModel.WriteRepairQuestsAsync);
+        }
+    }
+
+    private async void RollbackRepairQuests_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
+        {
+            await RunSafelyAsync(ViewModel.RollbackRepairQuestsAsync);
         }
     }
 

@@ -35,15 +35,20 @@ public sealed class MainViewModel : ObservableObject
     private string _rollbackManifestPath = string.Empty;
     private bool _isSystemEnabled;
     private string _systemSourcePath = string.Empty;
+    private string _systemCurrentPath = string.Empty;
     private string _systemTargetPath = string.Empty;
     private string _systemRollbackManifestPath = string.Empty;
     private bool _includeGuildCards;
     private bool _includeQuests;
     private string _extrasSourceDirectory = string.Empty;
+    private string _extrasCurrentDirectory = string.Empty;
     private string _extrasStagingDirectory = string.Empty;
     private string _extrasTargetDirectory = string.Empty;
     private string _extrasRollbackManifestPath = string.Empty;
+    private string _repairGuildCardsRollbackManifestPath = string.Empty;
+    private string _repairQuestsRollbackManifestPath = string.Empty;
     private string _cecSourceDirectory = string.Empty;
+    private string _cecCurrentPath = string.Empty;
     private string _cecTargetPath = string.Empty;
     private string _cecRollbackManifestPath = string.Empty;
     private bool _isCecEnabled;
@@ -62,10 +67,16 @@ public sealed class MainViewModel : ObservableObject
     private DryRunAuthorization? _coreAuthorization;
     private RepairDryRunAuthorization? _repairAuthorization;
     private SystemDryRunAuthorization? _systemAuthorization;
+    private RepairSystemDryRunAuthorization? _repairSystemAuthorization;
     private ExtrasStageDryRunAuthorization? _extrasStageAuthorization;
     private ExtrasInstallDryRunAuthorization? _extrasInstallAuthorization;
+    private RepairExtrasDryRunAuthorization? _repairGuildCardsAuthorization;
+    private RepairExtrasDryRunAuthorization? _repairQuestsAuthorization;
     private CecDryRunAuthorization? _cecAuthorization;
+    private RepairCecDryRunAuthorization? _repairCecAuthorization;
     private bool _systemWriteCompleted;
+    private bool _repairGuildCardsWriteCompleted;
+    private bool _repairQuestsWriteCompleted;
     private WorkflowGuidance _workflowGuidance;
 
     private enum AuthorizationDomain
@@ -73,6 +84,8 @@ public sealed class MainViewModel : ObservableObject
         Core,
         System,
         Extras,
+        GuildCards,
+        Quests,
         Cec,
     }
 
@@ -87,6 +100,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     private sealed record RepairRevisionDetection(bool IsAmbiguous, string Summary);
+    private sealed record RepairExtrasPaths(string Source, string Current, string Output);
 
     public MainViewModel(
         ConverterCliClient? cliClient = null,
@@ -118,6 +132,8 @@ public sealed class MainViewModel : ObservableObject
         ? Copy.ConversionModeRepairDescription
         : Copy.ConversionModeNewDescription;
     public Visibility RepairCurrentVisibility => IsRepairMode ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RepairModeVisibility => IsRepairMode ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility NewConversionVisibility => IsRepairMode ? Visibility.Collapsed : Visibility.Visible;
     public string CoreTargetTitle => IsRepairMode ? Copy.RepairOutputSlot : Copy.TargetSlot;
     public string CoreTargetHint => IsRepairMode ? Copy.RepairOutputSlotHint : Copy.TargetSlotHint;
     public string CoreTargetPlaceholder => IsRepairMode ? Copy.RepairOutputPlaceholder : Copy.NewOutputPlaceholder;
@@ -143,9 +159,12 @@ public sealed class MainViewModel : ObservableObject
         }
         _repairFromVersion = revision;
         _repairAuthorization = null;
+        _repairGuildCardsAuthorization = null;
+        _repairQuestsAuthorization = null;
         IsRepairRevisionSelectionRequired = false;
         RepairDetectionSummary = string.Empty;
         OnPropertyChanged(nameof(CanWriteCore));
+        RaiseRepairExtrasActionAvailability();
         OnPropertyChanged(nameof(WriteUnavailableVisibility));
     }
 
@@ -159,19 +178,19 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         _conversionMode = mode;
-        if (IsRepairMode)
-        {
-            IsSystemEnabled = false;
-            IncludeQuests = false;
-        }
         _repairFromVersion = null;
         IsRepairRevisionSelectionRequired = false;
         RepairDetectionSummary = string.Empty;
         InvalidateCoreAuthorization();
+        InvalidateSystemAuthorization();
+        InvalidateExtrasAuthorization();
+        InvalidateCecAuthorization();
         OnPropertyChanged(nameof(SelectedConversionMode));
         OnPropertyChanged(nameof(IsRepairMode));
         OnPropertyChanged(nameof(ConversionModeDescription));
         OnPropertyChanged(nameof(RepairCurrentVisibility));
+        OnPropertyChanged(nameof(RepairModeVisibility));
+        OnPropertyChanged(nameof(NewConversionVisibility));
         OnPropertyChanged(nameof(CoreTargetTitle));
         OnPropertyChanged(nameof(CoreTargetHint));
         OnPropertyChanged(nameof(CoreTargetPlaceholder));
@@ -332,6 +351,18 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public string SystemCurrentPath
+    {
+        get => _systemCurrentPath;
+        set
+        {
+            if (SetProperty(ref _systemCurrentPath, value))
+            {
+                InvalidateSystemAuthorization();
+            }
+        }
+    }
+
     public string SystemRollbackManifestPath
     {
         get => _systemRollbackManifestPath;
@@ -408,6 +439,18 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public string ExtrasCurrentDirectory
+    {
+        get => _extrasCurrentDirectory;
+        set
+        {
+            if (SetProperty(ref _extrasCurrentDirectory, value))
+            {
+                InvalidateExtrasAuthorization();
+            }
+        }
+    }
+
     public string ExtrasTargetDirectory
     {
         get => _extrasTargetDirectory;
@@ -432,6 +475,30 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public string RepairGuildCardsRollbackManifestPath
+    {
+        get => _repairGuildCardsRollbackManifestPath;
+        set
+        {
+            if (SetProperty(ref _repairGuildCardsRollbackManifestPath, value))
+            {
+                OnPropertyChanged(nameof(CanRollbackRepairGuildCards));
+            }
+        }
+    }
+
+    public string RepairQuestsRollbackManifestPath
+    {
+        get => _repairQuestsRollbackManifestPath;
+        set
+        {
+            if (SetProperty(ref _repairQuestsRollbackManifestPath, value))
+            {
+                OnPropertyChanged(nameof(CanRollbackRepairQuests));
+            }
+        }
+    }
+
     public bool IsCecEnabled
     {
         get => _isCecEnabled;
@@ -439,11 +506,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _isCecEnabled, value))
             {
-                _cecAuthorization = null;
-                ClearOptionalGuidance();
-                OnPropertyChanged(nameof(CanInspectCec));
-                OnPropertyChanged(nameof(CanRunCecDryRun));
-                OnPropertyChanged(nameof(CanWriteCec));
+                InvalidateCecAuthorization();
             }
         }
     }
@@ -467,11 +530,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _cecSourceDirectory, value))
             {
-                _cecAuthorization = null;
-                ClearOptionalGuidance();
-                OnPropertyChanged(nameof(CanInspectCec));
-                OnPropertyChanged(nameof(CanRunCecDryRun));
-                OnPropertyChanged(nameof(CanWriteCec));
+                InvalidateCecAuthorization();
             }
         }
     }
@@ -483,11 +542,19 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _cecTargetPath, value))
             {
-                _cecAuthorization = null;
-                ClearOptionalGuidance();
-                OnPropertyChanged(nameof(CanInspectCec));
-                OnPropertyChanged(nameof(CanRunCecDryRun));
-                OnPropertyChanged(nameof(CanWriteCec));
+                InvalidateCecAuthorization();
+            }
+        }
+    }
+
+    public string CecCurrentPath
+    {
+        get => _cecCurrentPath;
+        set
+        {
+            if (SetProperty(ref _cecCurrentPath, value))
+            {
+                InvalidateCecAuthorization();
             }
         }
     }
@@ -526,6 +593,12 @@ public sealed class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(CanRunExtrasInstallDryRun));
                 OnPropertyChanged(nameof(CanInstallExtras));
                 OnPropertyChanged(nameof(CanRollbackExtras));
+                OnPropertyChanged(nameof(CanRunRepairGuildCardsDryRun));
+                OnPropertyChanged(nameof(CanWriteRepairGuildCards));
+                OnPropertyChanged(nameof(CanRollbackRepairGuildCards));
+                OnPropertyChanged(nameof(CanRunRepairQuestsDryRun));
+                OnPropertyChanged(nameof(CanWriteRepairQuests));
+                OnPropertyChanged(nameof(CanRollbackRepairQuests));
                 OnPropertyChanged(nameof(CanInspectCec));
                 OnPropertyChanged(nameof(CanRunCecDryRun));
                 OnPropertyChanged(nameof(CanWriteCec));
@@ -580,11 +653,13 @@ public sealed class MainViewModel : ObservableObject
     public bool ShowPostOptionalGuidance => _workflowGuidance == WorkflowGuidance.OptionalStepComplete;
     public bool ShowPostRollbackGuidance => _workflowGuidance == WorkflowGuidance.RolledBack;
     public bool SelectedOptionalDataIsConfigured => IsRepairMode
-        ? !IncludeGuildCards || SavePathResolver.TryResolveExtDataUserDirectory(
-            ExtrasSourceDirectory, out _, out _)
+        ? (!IsSystemEnabled || HasSystemPaths())
+            && (!HasSelectedExtraGroups() || HasRepairExtrasPaths())
         : (!IsSystemEnabled || HasSystemPaths())
             && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
-    public bool HasPendingSelectedOptionalWork => IsSystemEnabled && !_systemWriteCompleted;
+    public bool HasPendingSelectedOptionalWork => (IsSystemEnabled && !_systemWriteCompleted)
+        || (IsRepairMode && IncludeGuildCards && !_repairGuildCardsWriteCompleted)
+        || (IsRepairMode && IncludeQuests && !_repairQuestsWriteCompleted);
     public string PostWriteGuidanceMessage => HasPendingSelectedOptionalWork
         ? Copy.NextAfterCoreWriteWithOptionalData
         : Copy.NextAfterWrite;
@@ -598,25 +673,35 @@ public sealed class MainViewModel : ObservableObject
         && _sourceInspected
         && _targetInspected
         && (!IsRepairMode || _currentInspected && _inspectedCurrent?.Exists == true)
-        && SelectedOptionalDataIsConfigured
         && HasValidCorePaths();
     public bool CanWriteCore => !IsBusy
-        && SelectedOptionalDataIsConfigured
         && (IsRepairMode ? _repairAuthorization is not null : _coreAuthorization is not null)
         && HasValidCorePaths();
     public Visibility WriteUnavailableVisibility => CanWriteCore ? Visibility.Collapsed : Visibility.Visible;
     public bool CanRollbackCore => !IsBusy && !string.IsNullOrWhiteSpace(RollbackManifestPath);
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
-    public bool CanWriteSystem => !IsBusy && IsSystemEnabled && _systemAuthorization is not null && HasSystemPaths();
+    public bool CanWriteSystem => !IsBusy && IsSystemEnabled
+        && (IsRepairMode ? _repairSystemAuthorization is not null : _systemAuthorization is not null)
+        && HasSystemPaths();
     public bool CanRollbackSystem => !IsBusy && IsSystemEnabled && !string.IsNullOrWhiteSpace(SystemRollbackManifestPath);
     public bool CanRunExtrasStageDryRun => !IsBusy && HasExtrasStagePaths();
     public bool CanStageExtras => !IsBusy && _extrasStageAuthorization is not null && HasExtrasStagePaths();
     public bool CanRunExtrasInstallDryRun => !IsBusy && HasExtrasInstallPaths();
     public bool CanInstallExtras => SupportsSafeExtrasInstall && !IsBusy && _extrasInstallAuthorization is not null && HasExtrasInstallPaths();
     public bool CanRollbackExtras => SupportsSafeExtrasInstall && !IsBusy && HasSelectedExtraGroups() && !string.IsNullOrWhiteSpace(ExtrasRollbackManifestPath);
+    public bool CanRunRepairGuildCardsDryRun => !IsBusy && IsRepairMode && IncludeGuildCards && HasRepairExtrasPaths();
+    public bool CanWriteRepairGuildCards => !IsBusy && IsRepairMode && IncludeGuildCards
+        && _repairGuildCardsAuthorization is not null && HasRepairExtrasPaths();
+    public bool CanRollbackRepairGuildCards => !IsBusy && !string.IsNullOrWhiteSpace(RepairGuildCardsRollbackManifestPath);
+    public bool CanRunRepairQuestsDryRun => !IsBusy && IsRepairMode && IncludeQuests && HasRepairExtrasPaths();
+    public bool CanWriteRepairQuests => !IsBusy && IsRepairMode && IncludeQuests
+        && _repairQuestsAuthorization is not null && HasRepairExtrasPaths();
+    public bool CanRollbackRepairQuests => !IsBusy && !string.IsNullOrWhiteSpace(RepairQuestsRollbackManifestPath);
     public bool CanInspectCec => !IsBusy && IsCecEnabled && HasCecPaths();
     public bool CanRunCecDryRun => !IsBusy && IsCecEnabled && HasCecPaths();
-    public bool CanWriteCec => !IsBusy && IsCecEnabled && IsCecAcknowledged && _cecAuthorization is not null && HasCecPaths();
+    public bool CanWriteCec => !IsBusy && IsCecEnabled && IsCecAcknowledged
+        && (IsRepairMode ? _repairCecAuthorization is not null : _cecAuthorization is not null)
+        && HasCecPaths();
     public bool CanRollbackCec => !IsBusy && IsCecEnabled && !string.IsNullOrWhiteSpace(CecRollbackManifestPath);
 
     public void SetLanguage(string? tag)
@@ -749,11 +834,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RunCoreDryRunAsync()
     {
-        if (!SelectedOptionalDataIsConfigured)
-        {
-            Fail(Copy.OptionalDataNeedsConfiguration);
-            return;
-        }
         if (!CanRunCoreDryRun)
         {
             Fail(Copy.WriteUnavailable);
@@ -803,17 +883,6 @@ public sealed class MainViewModel : ObservableObject
                     "--current", paths.Current!,
                     "--output", paths.Target,
                 };
-                string? extDataSource = null;
-                if (IncludeGuildCards)
-                {
-                    if (!SavePathResolver.TryResolveExtDataUserDirectory(
-                        ExtrasSourceDirectory, out extDataSource, out _))
-                    {
-                        throw new InvalidOperationException(Copy.ExtrasPathsRequired);
-                    }
-                    arguments.Add("--source-extdata-dir");
-                    arguments.Add(extDataSource);
-                }
                 if (!string.IsNullOrWhiteSpace(_repairFromVersion))
                 {
                     arguments.Add("--from-version");
@@ -842,7 +911,7 @@ public sealed class MainViewModel : ObservableObject
                     sourceBefore,
                     currentBefore!,
                     targetBefore,
-                    extDataSource,
+                    null,
                     _repairFromVersion,
                     sourceSet,
                     currentSet,
@@ -909,11 +978,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task WriteCoreAsync()
     {
-        if (!SelectedOptionalDataIsConfigured)
-        {
-            Fail(Copy.OptionalDataNeedsConfiguration);
-            return;
-        }
         var authorization = _coreAuthorization;
         var repairAuthorization = _repairAuthorization;
         if (IsRepairMode ? repairAuthorization is null : authorization is null)
@@ -955,11 +1019,6 @@ public sealed class MainViewModel : ObservableObject
                     "--current", paths.Current!,
                     "--output", paths.Target,
                 };
-                if (!string.IsNullOrWhiteSpace(repairAuthorization!.ExtDataSource))
-                {
-                    repairArguments.Add("--source-extdata-dir");
-                    repairArguments.Add(repairAuthorization.ExtDataSource);
-                }
                 if (!string.IsNullOrWhiteSpace(repairAuthorization.FromVersion))
                 {
                     repairArguments.Add("--from-version");
@@ -1057,6 +1116,45 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        if (IsRepairMode)
+        {
+            _repairSystemAuthorization = null;
+            RaiseSystemActionAvailability();
+            await RunOperationAsync("repair-system --dry-run", async cancellationToken =>
+            {
+                var result = await ExecuteAsync(
+                    "repair-system --dry-run",
+                    new[]
+                    {
+                        "repair-system", SystemSourcePath,
+                        "--current", SystemCurrentPath,
+                        "--output", SystemTargetPath,
+                        "--dry-run",
+                    },
+                    cancellationToken);
+                RequireSuccess(result, "system repair Dry Run");
+                RequireStatus(result, "dry-run", "system repair Dry Run");
+                var sourceSet = RequireReportSha256(result, "source_set_sha256");
+                var currentSet = RequireReportSha256(result, "current_set_sha256");
+                var outputSet = RequireReportSha256(result, "output_set_sha256");
+                var preview = RequireReportSha256(result, "preview_sha256");
+                _repairSystemAuthorization = new RepairSystemDryRunAuthorization(
+                    Path.GetFullPath(SystemSourcePath),
+                    Path.GetFullPath(SystemCurrentPath),
+                    Path.GetFullPath(SystemTargetPath),
+                    sourceSet,
+                    currentSet,
+                    outputSet,
+                    preview,
+                    DateTimeOffset.UtcNow);
+                Stage = WorkflowStage.DryRunAuthorized;
+                StatusText = Copy.DryRunAuthorized;
+                SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+                RaiseSystemActionAvailability();
+            }, AuthorizationDomain.System);
+            return;
+        }
+
         _systemAuthorization = null;
         RaiseSystemActionAvailability();
         await RunOperationAsync("convert-system --dry-run", async cancellationToken =>
@@ -1091,6 +1189,47 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task WriteSystemAsync()
     {
+        if (IsRepairMode)
+        {
+            var repairAuthorization = _repairSystemAuthorization;
+            if (repairAuthorization is null || !MatchesRepairSystemAuthorization(repairAuthorization))
+            {
+                InvalidateSystemAuthorization();
+                Fail(Copy.WriteUnavailable);
+                return;
+            }
+            await RunOperationAsync("repair-system --write", async cancellationToken =>
+            {
+                var result = await ExecuteAsync(
+                    "repair-system --write",
+                    new[]
+                    {
+                        "repair-system", SystemSourcePath,
+                        "--current", SystemCurrentPath,
+                        "--output", SystemTargetPath,
+                        "--write",
+                        "--expected-source-set-sha256", repairAuthorization.SourceSetSha256,
+                        "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
+                        "--expected-output-set-sha256", repairAuthorization.OutputSetSha256,
+                        "--expected-preview-sha256", repairAuthorization.PreviewSha256,
+                    },
+                    cancellationToken);
+                RequireSuccess(result, "repair system");
+                if (result.Status is not ("written" or "no-changes"))
+                {
+                    throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                }
+                SystemRollbackManifestPath = result.TryGetString("manifest") ?? SystemRollbackManifestPath;
+                _repairSystemAuthorization = null;
+                _systemWriteCompleted = true;
+                Stage = WorkflowStage.Written;
+                StatusText = Copy.Written;
+                SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+                RaiseSystemActionAvailability();
+                RaiseOptionalConfigurationAvailability();
+            }, AuthorizationDomain.System);
+            return;
+        }
         var authorization = _systemAuthorization;
         if (authorization is null || !HasSystemPaths())
         {
@@ -1151,12 +1290,183 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback system");
             RequireStatus(result, "rolled-back", "rollback system");
+            SystemRollbackManifestPath = string.Empty;
             _systemWriteCompleted = false;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
             RaiseOptionalConfigurationAvailability();
         }, AuthorizationDomain.System);
+    }
+
+    public Task RunRepairGuildCardsDryRunAsync() => RunRepairExtrasDryRunAsync("guild-cards");
+
+    public Task WriteRepairGuildCardsAsync() => WriteRepairExtrasAsync("guild-cards");
+
+    public Task RollbackRepairGuildCardsAsync() => RollbackRepairExtrasAsync("guild-cards");
+
+    public Task RunRepairQuestsDryRunAsync() => RunRepairExtrasDryRunAsync("quests");
+
+    public Task WriteRepairQuestsAsync() => WriteRepairExtrasAsync("quests");
+
+    public Task RollbackRepairQuestsAsync() => RollbackRepairExtrasAsync("quests");
+
+    private async Task RunRepairExtrasDryRunAsync(string group)
+    {
+        if (!IsRepairMode || !IsRepairGroupSelected(group) || !TryRequireRepairExtrasPaths(out var paths))
+        {
+            return;
+        }
+        SetRepairExtrasAuthorization(group, null);
+        RaiseRepairExtrasActionAvailability();
+        await RunOperationAsync($"repair-extras {group} --dry-run", async cancellationToken =>
+        {
+            var arguments = new List<string>
+            {
+                "repair-extras",
+                "--source-dir", paths.Source,
+                "--current-dir", paths.Current,
+                "--output-dir", paths.Output,
+                "--group", group,
+            };
+            if (!string.IsNullOrWhiteSpace(_repairFromVersion))
+            {
+                arguments.Add("--from-version");
+                arguments.Add(_repairFromVersion);
+            }
+            arguments.Add("--dry-run");
+            var result = await ExecuteAsync($"repair-extras {group} --dry-run", arguments, cancellationToken);
+            RequireSuccess(result, $"{group} repair Dry Run");
+            RequireStatus(result, "dry-run", $"{group} repair Dry Run");
+            if (!string.Equals(result.TryGetString("group"), group, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+            }
+            var detection = ReadRepairRevisionDetection(result);
+            IsRepairRevisionSelectionRequired =
+                detection.IsAmbiguous && string.IsNullOrWhiteSpace(_repairFromVersion);
+            RepairDetectionSummary = detection.Summary;
+            if (IsRepairRevisionSelectionRequired)
+            {
+                SetRepairExtrasAuthorization(group, null);
+                Stage = WorkflowStage.Inspected;
+                StatusText = Copy.RepairVersionRequired;
+                RaiseRepairExtrasActionAvailability();
+                return;
+            }
+            var authorization = new RepairExtrasDryRunAuthorization(
+                group,
+                paths.Source,
+                paths.Current,
+                paths.Output,
+                _repairFromVersion,
+                RequireReportSha256(result, "source_set_sha256"),
+                RequireReportSha256(result, "current_set_sha256"),
+                RequireReportSha256(result, "output_set_sha256"),
+                RequireReportSha256(result, "preview_sha256"),
+                DateTimeOffset.UtcNow);
+            SetRepairExtrasAuthorization(group, authorization);
+            Stage = WorkflowStage.DryRunAuthorized;
+            StatusText = Copy.DryRunAuthorized;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+            RaiseRepairExtrasActionAvailability();
+        }, group == "guild-cards" ? AuthorizationDomain.GuildCards : AuthorizationDomain.Quests);
+    }
+
+    private async Task WriteRepairExtrasAsync(string group)
+    {
+        var authorization = GetRepairExtrasAuthorization(group);
+        if (authorization is null
+            || !TryRequireRepairExtrasPaths(out var paths)
+            || !MatchesRepairExtrasAuthorization(authorization, paths))
+        {
+            SetRepairExtrasAuthorization(group, null);
+            RaiseRepairExtrasActionAvailability();
+            Fail(Copy.WriteUnavailable);
+            return;
+        }
+        await RunOperationAsync($"repair-extras {group} --write", async cancellationToken =>
+        {
+            var arguments = new List<string>
+            {
+                "repair-extras",
+                "--source-dir", paths.Source,
+                "--current-dir", paths.Current,
+                "--output-dir", paths.Output,
+                "--group", group,
+            };
+            if (!string.IsNullOrWhiteSpace(authorization.FromVersion))
+            {
+                arguments.Add("--from-version");
+                arguments.Add(authorization.FromVersion);
+            }
+            arguments.AddRange(new[]
+            {
+                "--write",
+                "--expected-source-set-sha256", authorization.SourceSetSha256,
+                "--expected-current-set-sha256", authorization.CurrentSetSha256,
+                "--expected-output-set-sha256", authorization.OutputSetSha256,
+                "--expected-preview-sha256", authorization.PreviewSha256,
+            });
+            var result = await ExecuteAsync($"repair-extras {group} --write", arguments, cancellationToken);
+            RequireSuccess(result, $"repair {group}");
+            if (result.Status is not ("written" or "no-changes")
+                || !string.Equals(result.TryGetString("group"), group, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+            }
+            var manifest = result.TryGetString("manifest");
+            if (group == "guild-cards")
+            {
+                RepairGuildCardsRollbackManifestPath = manifest ?? RepairGuildCardsRollbackManifestPath;
+                _repairGuildCardsWriteCompleted = true;
+            }
+            else
+            {
+                RepairQuestsRollbackManifestPath = manifest ?? RepairQuestsRollbackManifestPath;
+                _repairQuestsWriteCompleted = true;
+            }
+            SetRepairExtrasAuthorization(group, null);
+            Stage = WorkflowStage.Written;
+            StatusText = Copy.Written;
+            SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+            RaiseRepairExtrasActionAvailability();
+            RaiseOptionalConfigurationAvailability();
+        }, group == "guild-cards" ? AuthorizationDomain.GuildCards : AuthorizationDomain.Quests);
+    }
+
+    private async Task RollbackRepairExtrasAsync(string group)
+    {
+        var manifest = group == "guild-cards"
+            ? RepairGuildCardsRollbackManifestPath
+            : RepairQuestsRollbackManifestPath;
+        if (string.IsNullOrWhiteSpace(manifest))
+        {
+            return;
+        }
+        await RunOperationAsync($"rollback-extras {group}", async cancellationToken =>
+        {
+            var result = await ExecuteAsync(
+                $"rollback-extras {group}",
+                new[] { "rollback-extras", "--manifest", manifest },
+                cancellationToken);
+            RequireSuccess(result, $"rollback {group}");
+            RequireStatus(result, "rolled-back", $"rollback {group}");
+            if (group == "guild-cards")
+            {
+                _repairGuildCardsWriteCompleted = false;
+                RepairGuildCardsRollbackManifestPath = string.Empty;
+            }
+            else
+            {
+                _repairQuestsWriteCompleted = false;
+                RepairQuestsRollbackManifestPath = string.Empty;
+            }
+            Stage = WorkflowStage.RolledBack;
+            StatusText = Copy.RolledBack;
+            SetWorkflowGuidance(WorkflowGuidance.RolledBack);
+            RaiseOptionalConfigurationAvailability();
+        }, group == "guild-cards" ? AuthorizationDomain.GuildCards : AuthorizationDomain.Quests);
     }
 
     public async Task RunExtrasStageDryRunAsync()
@@ -1319,6 +1629,7 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback ExtData");
             RequireStatus(result, "rolled-back", "rollback ExtData");
+            ExtrasRollbackManifestPath = string.Empty;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
@@ -1336,10 +1647,11 @@ public sealed class MainViewModel : ObservableObject
         await RunOperationAsync("inspect-cec", async cancellationToken =>
         {
             var arguments = new List<string> { "inspect-cec", "--source-dir", CecSourceDirectory };
-            if (File.Exists(CecTargetPath))
+            var inspectionTarget = IsRepairMode ? CecCurrentPath : CecTargetPath;
+            if (File.Exists(inspectionTarget))
             {
                 arguments.Add("--target");
-                arguments.Add(CecTargetPath);
+                arguments.Add(inspectionTarget);
             }
             if (SavePathResolver.TryResolveSource(SourcePath, SelectedSlot, out var sourceSlot, out _))
             {
@@ -1362,7 +1674,41 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         _cecAuthorization = null;
+        _repairCecAuthorization = null;
         OnPropertyChanged(nameof(CanWriteCec));
+
+        if (IsRepairMode)
+        {
+            await RunOperationAsync("repair-cec --dry-run", async cancellationToken =>
+            {
+                var result = await ExecuteAsync(
+                    "repair-cec --dry-run",
+                    new[]
+                    {
+                        "repair-cec", "--source-dir", CecSourceDirectory,
+                        "--current", CecCurrentPath,
+                        "--output", CecTargetPath,
+                        "--dry-run",
+                    },
+                    cancellationToken);
+                RequireSuccess(result, "CEC repair Dry Run");
+                RequireStatus(result, "dry-run", "CEC repair Dry Run");
+                _repairCecAuthorization = new RepairCecDryRunAuthorization(
+                    Path.GetFullPath(CecSourceDirectory),
+                    Path.GetFullPath(CecCurrentPath),
+                    Path.GetFullPath(CecTargetPath),
+                    RequireReportSha256(result, "source_record_set_sha256"),
+                    RequireReportSha256(result, "current_set_sha256"),
+                    RequireReportSha256(result, "output_set_sha256"),
+                    RequireReportSha256(result, "preview_sha256"),
+                    DateTimeOffset.UtcNow);
+                Stage = WorkflowStage.DryRunAuthorized;
+                StatusText = Copy.DryRunAuthorized;
+                SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+                OnPropertyChanged(nameof(CanWriteCec));
+            }, AuthorizationDomain.Cec);
+            return;
+        }
 
         await RunOperationAsync("convert-cec --dry-run", async cancellationToken =>
         {
@@ -1397,6 +1743,46 @@ public sealed class MainViewModel : ObservableObject
         if (!IsCecAcknowledged)
         {
             Fail(Copy.CecAcknowledgementRequired);
+            return;
+        }
+        if (IsRepairMode)
+        {
+            var repairAuthorization = _repairCecAuthorization;
+            if (repairAuthorization is null || !MatchesRepairCecAuthorization(repairAuthorization))
+            {
+                _repairCecAuthorization = null;
+                OnPropertyChanged(nameof(CanWriteCec));
+                Fail(Copy.WriteUnavailable);
+                return;
+            }
+            await RunOperationAsync("repair-cec --write", async cancellationToken =>
+            {
+                var result = await ExecuteAsync(
+                    "repair-cec --write",
+                    new[]
+                    {
+                        "repair-cec", "--source-dir", CecSourceDirectory,
+                        "--current", CecCurrentPath,
+                        "--output", CecTargetPath,
+                        "--expected-source-record-set-sha256", repairAuthorization.SourceRecordSetSha256,
+                        "--expected-current-set-sha256", repairAuthorization.CurrentSetSha256,
+                        "--expected-output-set-sha256", repairAuthorization.OutputSetSha256,
+                        "--expected-preview-sha256", repairAuthorization.PreviewSha256,
+                        "--write", "--experimental",
+                    },
+                    cancellationToken);
+                RequireSuccess(result, "repair CEC");
+                if (result.Status is not ("written" or "no-changes"))
+                {
+                    throw new InvalidOperationException(Copy.FileChangedAfterDryRun);
+                }
+                CecRollbackManifestPath = result.TryGetString("manifest") ?? CecRollbackManifestPath;
+                _repairCecAuthorization = null;
+                Stage = WorkflowStage.Written;
+                StatusText = Copy.Written;
+                SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
+                OnPropertyChanged(nameof(CanWriteCec));
+            }, AuthorizationDomain.Cec);
             return;
         }
         var authorization = _cecAuthorization;
@@ -1464,6 +1850,7 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback CEC");
             RequireStatus(result, "rolled-back", "rollback CEC");
+            CecRollbackManifestPath = string.Empty;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
@@ -1531,6 +1918,18 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private static string RequireReportSha256(CliExecutionResult result, string property)
+    {
+        var value = result.TryGetString(property);
+        if (value is null
+            || value.Length != 64
+            || value.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new InvalidOperationException($"converter report is missing a valid {property}");
+        }
+        return value;
+    }
+
     private static string ComposeFailure(CliExecutionResult result)
     {
         var details = new[] { result.StandardError, result.JsonParseError, result.StandardOutput }
@@ -1592,7 +1991,7 @@ public sealed class MainViewModel : ObservableObject
             return true;
         }
 
-        Fail(Copy.SystemPathsRequired);
+        Fail(IsRepairMode ? Copy.RepairSystemPathsRequired : Copy.SystemPathsRequired);
         return false;
     }
 
@@ -1644,7 +2043,7 @@ public sealed class MainViewModel : ObservableObject
             return true;
         }
 
-        Fail(Copy.CecPathsRequired);
+        Fail(IsRepairMode ? Copy.RepairCecPathsRequired : Copy.CecPathsRequired);
         return false;
     }
 
@@ -1689,11 +2088,15 @@ public sealed class MainViewModel : ObservableObject
 
     private bool HasSystemPaths()
     {
-        return IsSystemEnabled
+        var common = IsSystemEnabled
             && !string.IsNullOrWhiteSpace(SystemSourcePath)
             && !string.IsNullOrWhiteSpace(SystemTargetPath)
             && string.Equals(Path.GetFileName(SystemSourcePath), "system", StringComparison.Ordinal)
             && string.Equals(Path.GetFileName(SystemTargetPath), "system", StringComparison.Ordinal);
+        return common
+            && (!IsRepairMode
+                || (!string.IsNullOrWhiteSpace(SystemCurrentPath)
+                    && string.Equals(Path.GetFileName(SystemCurrentPath), "system", StringComparison.Ordinal)));
     }
 
     private bool HasSelectedExtraGroups() => IncludeGuildCards || IncludeQuests;
@@ -1709,6 +2112,91 @@ public sealed class MainViewModel : ObservableObject
     {
         return HasExtrasStagePaths()
             && !string.IsNullOrWhiteSpace(ExtrasTargetDirectory);
+    }
+
+    private bool HasRepairExtrasPaths()
+    {
+        return TryResolveRepairExtrasPaths(out _);
+    }
+
+    private bool TryRequireRepairExtrasPaths(out RepairExtrasPaths paths)
+    {
+        if (TryResolveRepairExtrasPaths(out paths))
+        {
+            return true;
+        }
+        Fail(Copy.RepairExtrasPathsRequired);
+        paths = null!;
+        return false;
+    }
+
+    private bool TryResolveRepairExtrasPaths(out RepairExtrasPaths paths)
+    {
+        if (IsRepairMode
+            && HasSelectedExtraGroups()
+            && SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out var source, out _)
+            && Directory.Exists(ExtrasCurrentDirectory)
+            && Directory.Exists(ExtrasTargetDirectory))
+        {
+            paths = new RepairExtrasPaths(
+                Path.GetFullPath(source),
+                Path.GetFullPath(ExtrasCurrentDirectory),
+                Path.GetFullPath(ExtrasTargetDirectory));
+            return true;
+        }
+        paths = null!;
+        return false;
+    }
+
+    private bool IsRepairGroupSelected(string group) => group switch
+    {
+        "guild-cards" => IncludeGuildCards,
+        "quests" => IncludeQuests,
+        _ => false,
+    };
+
+    private RepairExtrasDryRunAuthorization? GetRepairExtrasAuthorization(string group) => group switch
+    {
+        "guild-cards" => _repairGuildCardsAuthorization,
+        "quests" => _repairQuestsAuthorization,
+        _ => null,
+    };
+
+    private void SetRepairExtrasAuthorization(string group, RepairExtrasDryRunAuthorization? authorization)
+    {
+        if (group == "guild-cards")
+        {
+            _repairGuildCardsAuthorization = authorization;
+        }
+        else if (group == "quests")
+        {
+            _repairQuestsAuthorization = authorization;
+        }
+    }
+
+    private static bool MatchesRepairExtrasAuthorization(
+        RepairExtrasDryRunAuthorization authorization,
+        RepairExtrasPaths paths)
+    {
+        return string.Equals(authorization.SourceDirectory, paths.Source, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.CurrentDirectory, paths.Current, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.OutputDirectory, paths.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesRepairSystemAuthorization(RepairSystemDryRunAuthorization authorization)
+    {
+        return HasSystemPaths()
+            && string.Equals(authorization.SourcePath, Path.GetFullPath(SystemSourcePath), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.CurrentPath, Path.GetFullPath(SystemCurrentPath), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.OutputPath, Path.GetFullPath(SystemTargetPath), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesRepairCecAuthorization(RepairCecDryRunAuthorization authorization)
+    {
+        return HasCecPaths()
+            && string.Equals(authorization.SourceDirectory, Path.GetFullPath(CecSourceDirectory), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.CurrentPath, Path.GetFullPath(CecCurrentPath), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(authorization.OutputPath, Path.GetFullPath(CecTargetPath), StringComparison.OrdinalIgnoreCase);
     }
 
     private string SelectedExtraGroups()
@@ -1785,7 +2273,8 @@ public sealed class MainViewModel : ObservableObject
     private bool HasCecPaths()
     {
         return !string.IsNullOrWhiteSpace(CecSourceDirectory)
-            && !string.IsNullOrWhiteSpace(CecTargetPath);
+            && !string.IsNullOrWhiteSpace(CecTargetPath)
+            && (!IsRepairMode || !string.IsNullOrWhiteSpace(CecCurrentPath));
     }
 
     private void InvalidateCoreAuthorization()
@@ -1815,6 +2304,7 @@ public sealed class MainViewModel : ObservableObject
     private void InvalidateSystemAuthorization()
     {
         _systemAuthorization = null;
+        _repairSystemAuthorization = null;
         _systemWriteCompleted = false;
         ClearOptionalGuidance();
         RaiseSystemActionAvailability();
@@ -1825,9 +2315,24 @@ public sealed class MainViewModel : ObservableObject
     {
         _extrasStageAuthorization = null;
         _extrasInstallAuthorization = null;
+        _repairGuildCardsAuthorization = null;
+        _repairQuestsAuthorization = null;
+        _repairGuildCardsWriteCompleted = false;
+        _repairQuestsWriteCompleted = false;
         ClearOptionalGuidance();
         RaiseExtrasActionAvailability();
         RaiseOptionalConfigurationAvailability();
+    }
+
+    private void InvalidateCecAuthorization()
+    {
+        _cecAuthorization = null;
+        _repairCecAuthorization = null;
+        ClearOptionalGuidance();
+        OnPropertyChanged(nameof(CanInspectCec));
+        OnPropertyChanged(nameof(CanRunCecDryRun));
+        OnPropertyChanged(nameof(CanWriteCec));
+        OnPropertyChanged(nameof(CanRollbackCec));
     }
 
     private void ClearWriteAuthorization(AuthorizationDomain domain)
@@ -1841,15 +2346,28 @@ public sealed class MainViewModel : ObservableObject
                 break;
             case AuthorizationDomain.System:
                 _systemAuthorization = null;
+                _repairSystemAuthorization = null;
                 RaiseSystemActionAvailability();
                 break;
             case AuthorizationDomain.Extras:
                 _extrasStageAuthorization = null;
                 _extrasInstallAuthorization = null;
+                _repairGuildCardsAuthorization = null;
+                _repairQuestsAuthorization = null;
                 RaiseExtrasActionAvailability();
+                RaiseRepairExtrasActionAvailability();
+                break;
+            case AuthorizationDomain.GuildCards:
+                _repairGuildCardsAuthorization = null;
+                RaiseRepairExtrasActionAvailability();
+                break;
+            case AuthorizationDomain.Quests:
+                _repairQuestsAuthorization = null;
+                RaiseRepairExtrasActionAvailability();
                 break;
             case AuthorizationDomain.Cec:
                 _cecAuthorization = null;
+                _repairCecAuthorization = null;
                 OnPropertyChanged(nameof(CanWriteCec));
                 break;
             default:
@@ -1917,6 +2435,17 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanRunExtrasInstallDryRun));
         OnPropertyChanged(nameof(CanInstallExtras));
         OnPropertyChanged(nameof(CanRollbackExtras));
+        RaiseRepairExtrasActionAvailability();
+    }
+
+    private void RaiseRepairExtrasActionAvailability()
+    {
+        OnPropertyChanged(nameof(CanRunRepairGuildCardsDryRun));
+        OnPropertyChanged(nameof(CanWriteRepairGuildCards));
+        OnPropertyChanged(nameof(CanRollbackRepairGuildCards));
+        OnPropertyChanged(nameof(CanRunRepairQuestsDryRun));
+        OnPropertyChanged(nameof(CanWriteRepairQuests));
+        OnPropertyChanged(nameof(CanRollbackRepairQuests));
     }
 
     private void Fail(string message, string? operation = null)

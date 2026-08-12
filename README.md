@@ -391,12 +391,12 @@ If a target existed, `--write` creates
 `.user2.mh3g-install-history-<sha256>.json`. Keep the manifest until manual
 Cemu validation succeeds.
 
-#### `repair-converted` — repair a played save created by an older converter
+#### `repair-converted` — independently repair the core slot
 
 ```text
 mh3g-save-convert repair-converted <original-3DS-user#> --current <current-Cemu-user#> \
   [--output <repaired-Cemu-user#>] \
-  [--source-extdata-dir <original-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  [--source-extdata-dir <legacy-coupled-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
     --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
     --expected-preview-sha256 <SHA256>]
@@ -419,25 +419,20 @@ paths. Omitting `--output` retains the CLI's legacy in-place behavior and uses
 `--current` as the destination; the native macOS and Windows workbenches never
 hide this coupling and always display/pass a separate output selection.
 
-The native macOS and Windows workbenches may accept a file or its direct parent
-directory, but they still resolve and pass one exact file to the CLI. To repair
-guild cards, `--source-extdata-dir` must be the complete 3DS
-`.../00000481/user` directory with all eight source files, and the current
-`user#` parent must contain all eight same-named Cemu files. A separate output
-directory must already be an initialized Cemu save directory containing
-`card1`, `card2`, `card3`, and `cardbox`; this keeps the multi-file transaction
-fail-closed. The current
-converter field-repairs `user#`, `card1`, `card2`, `card3`, and `cardbox`;
-`quest1` through `quest4` participate in set validation but remain
-byte-identical. `system`, `cec`, `phrase1` through `phrase3`, and unknown files
-are not read or written by this command.
+The native macOS and Windows workbenches may accept a core file or its direct
+parent directory, but they still resolve and pass one exact file to the CLI.
+They use `repair-converted` for the core slot only. The old
+`--source-extdata-dir` option remains available to existing scripts, but it is
+no longer used by either native UI; new repairs use the independent domain
+commands below. `system`, `cec`, `phrase1` through `phrase3`, and unknown files
+are not read or written by a core-only run.
 
 Start with a read-only preview:
 
 ```bash
 # SOURCE, CURRENT, and OUTPUT are three distinct same-slot user# paths.
 REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
-  --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
+  --dry-run)
 ```
 
 If the top-level `detection.confidence` is `ambiguous`, do not write. Confirm
@@ -455,7 +450,6 @@ OUTPUT_SET_SHA256=$(jq -er '.output_set_sha256' <<<"$REPAIR_JSON")
 PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
 "${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
-  --source-extdata-dir "$EXTRAS_SOURCE" \
   --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
   --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
   --expected-output-set-sha256 "$OUTPUT_SET_SHA256" \
@@ -465,16 +459,55 @@ PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
 If Dry Run used `--from-version`, pass the same value to the write. Any source,
 current reference, output state, or preview change between the two steps fails closed. A
-successful write returns a coordinator manifest named
-`.mh3g-compatibility-repair-<UUID>.json`, covering the core slot and optional
-guild-card subtransactions. Roll it back with:
+successful core write returns a coordinator manifest named
+`.mh3g-compatibility-repair-<UUID>.json`. Roll it back with:
 
 ```bash
 "${CLI[@]}" rollback-repair --manifest "$COMPATIBILITY_MANIFEST"
 ```
 
-Omit `--source-extdata-dir` for a core-only repair. A `no-changes` report means
-the selected scope needed no write, so no empty coordinator manifest is made.
+The deprecated `--source-extdata-dir` path is documented only for older
+automation. A `no-changes` report means the core needed no write, so no empty
+coordinator manifest is made.
+
+#### Independent repair domains
+
+Repair mode exposes five separate transactions. Original 3DS, current
+Wii U/Cemu, and output are distinct path roles; selecting one never fills or
+changes another. Every row has its own Dry Run, write authorization, manifest,
+and rollback:
+
+| Domain | Command | Required source/current/output |
+| --- | --- | --- |
+| Core | `repair-converted` | Three same-named `user#` paths |
+| Guild cards | `repair-extras --group guild-cards` | Three ExtData directories; output already contains `card1`, `card2`, `card3`, `cardbox` |
+| Quests | `repair-extras --group quests` | Three ExtData directories; output already contains `quest1` through `quest4` |
+| Gallery/movie `system` | `repair-system` | Exact 3DS `system`, exact current Cemu `system`, exact output `system` |
+| Experimental CEC | `repair-cec` | Exact 3DS CEC mailbox directory, exact current Cemu `cec`, exact output `cec` |
+
+Cards and quests physically share one ExtData directory picker triplet in the
+native UIs, but each group is still authorized and rolled back separately.
+Quest repair validates the original group and preserves the current Wii U
+bytes exactly. `system` unions only the verified gallery/movie flags into the
+current authority. CEC remains opt-in experimental. An incomplete optional
+domain never blocks core repair or another complete domain.
+
+```text
+mh3g-save-convert repair-extras --group <guild-cards|quests> \
+  --source-dir <3DS-ExtData-user> --current-dir <current-Cemu-dir> \
+  --output-dir <initialized-output-Cemu-dir> [--dry-run | --write ...]
+
+mh3g-save-convert repair-system <3DS-system> --current <current-Cemu-system> \
+  --output <output-Cemu-system> [--dry-run | --write ...]
+
+mh3g-save-convert repair-cec --source-dir <3DS-CEC-mailbox> \
+  --current <current-Cemu-cec> --output <output-Cemu-cec> \
+  [--dry-run | --write --experimental ...]
+```
+
+Use `rollback-extras`, `rollback`, and `rollback-cec` with the manifest returned
+by the matching domain. See the exact file contract for all expected hash
+arguments and fail-closed completeness rules.
 
 #### `convert-system` — safely merge shared gallery/movie flags
 
@@ -555,13 +588,10 @@ directory containing the selected named components. A write creates a
 manifest-bound recovery transaction and retains the previous target bytes; it
 never installs one `card#` or `quest#` file by itself.
 
-> **Windows limitation:** Windows supports `convert-extras` staging and
-> `install-extras --dry-run` review, but intentionally refuses
-> `install-extras --write` and `rollback-extras` before changing any ExtData
-> files. A safe multi-file install requires this converter's durable
-> directory-metadata protocol and a two-name atomic exchange; use a supported platform for that guarded
-> install/rollback step. Core-slot and shared-`system` conversion remain
-> available on Windows.
+On Windows, complete-group writes use `ReplaceFileW`, manifest-bound backups,
+and a durable recovery journal. The same complete-group, Dry Run hash, and
+rollback requirements apply; individual `card#` or `quest#` installation is
+still refused.
 
 Run the installation Dry Run immediately before writing, and bind both reported
 set hashes to the write:

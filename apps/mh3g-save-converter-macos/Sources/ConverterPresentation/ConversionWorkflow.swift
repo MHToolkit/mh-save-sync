@@ -16,13 +16,18 @@ public final class ConversionWorkflow {
     public private(set) var repairFromVersion: HistoricalConverterRevision?
     public private(set) var repairRevisionCandidates = [HistoricalConverterRevision]()
     public private(set) var repairRevisionSelectionRequired = false
+    public private(set) var repairExtraRevisionSelectionRequired = Set<ExtraGroup>()
     public private(set) var systemDryRunFingerprint: SystemDryRunFingerprint?
+    public private(set) var repairSystemDryRunFingerprint: RepairSystemDryRunFingerprint?
     public private(set) var extrasStageDryRunFingerprint: ExtrasStageDryRunFingerprint?
     public private(set) var extrasInstallDryRunFingerprint: ExtrasInstallDryRunFingerprint?
+    public private(set) var repairExtrasDryRunFingerprints = [ExtraGroup: RepairExtrasDryRunFingerprint]()
     public private(set) var cecDryRunFingerprint: CECDryRunFingerprint?
+    public private(set) var repairCECDryRunFingerprint: RepairCECDryRunFingerprint?
     public private(set) var coreWriteCompleted = false
     public private(set) var systemWriteCompleted = false
     public private(set) var extrasInstallCompleted = false
+    public private(set) var repairedExtraGroups = Set<ExtraGroup>()
     public private(set) var failure: WorkflowFailure?
     public private(set) var latestReport: ConverterReport?
     public private(set) var activeOperation: ConverterOperation?
@@ -39,7 +44,6 @@ public final class ConversionWorkflow {
     public var canStartDryRun: Bool {
         input != nil
             && coreInspectionComplete
-            && selectedOptionalDataIsConfigured
             && activeOperation == nil
     }
 
@@ -63,7 +67,15 @@ public final class ConversionWorkflow {
     /// argv construction.
     public var selectedOptionalDataIsConfigured: Bool {
         if mode == .repairConverted {
-            return !components.includeGuildCards || components.extraSourceDirectory != nil
+            let systemConfigured = !components.includeSystem
+                || (components.systemSource != nil
+                    && components.systemCurrent != nil
+                    && components.systemTarget != nil)
+            let extrasConfigured = components.selectedGroups.isEmpty
+                || (components.extraSourceDirectory != nil
+                    && components.extraCurrentDirectory != nil
+                    && components.extraTargetDirectory != nil)
+            return systemConfigured && extrasConfigured
         }
         let systemConfigured = !components.includeSystem
             || (components.systemSource != nil && components.systemTarget != nil)
@@ -80,7 +92,8 @@ public final class ConversionWorkflow {
     /// and does not block the normal conversion route.
     public var hasPendingSelectedOptionalWork: Bool {
         if mode == .repairConverted {
-            return false
+            return (components.includeSystem && !systemWriteCompleted)
+                || !components.selectedGroups.isSubset(of: repairedExtraGroups)
         }
         return (components.includeSystem && !systemWriteCompleted)
             || (!components.selectedGroups.isEmpty && !extrasInstallCompleted)
@@ -102,12 +115,11 @@ public final class ConversionWorkflow {
             return authorized.source == input.source.standardizedFileURL
                 && authorized.current == input.current?.standardizedFileURL
                 && authorized.output == input.target.standardizedFileURL
-                && authorized.extDataSource == components.extraSourceDirectory?.standardizedFileURL
+                && authorized.extDataSource == nil
                 && authorized.fromVersion == repairFromVersion
                 && !repairRevisionSelectionRequired
         }
         guard activeOperation == nil,
-              selectedOptionalDataIsConfigured,
               let authorized = dryRunFingerprint,
               let current = currentFingerprint()
         else { return false }
@@ -116,6 +128,16 @@ public final class ConversionWorkflow {
     }
 
     public var canWriteCEC: Bool {
+        if mode == .repairConverted {
+            guard activeOperation == nil,
+                  components.acknowledgeExperimentalCEC,
+                  let authorized = repairCECDryRunFingerprint,
+                  let paths = try? repairCECPaths()
+            else { return false }
+            return authorized.sourceDirectory == paths.source.standardizedFileURL
+                && authorized.current == paths.current.standardizedFileURL
+                && authorized.output == paths.output.standardizedFileURL
+        }
         guard activeOperation == nil,
               components.includesCEC,
               components.acknowledgeExperimentalCEC,
@@ -128,6 +150,15 @@ public final class ConversionWorkflow {
     }
 
     public var canWriteSystem: Bool {
+        if mode == .repairConverted {
+            guard activeOperation == nil,
+                  let authorized = repairSystemDryRunFingerprint,
+                  let paths = try? repairSystemPaths()
+            else { return false }
+            return authorized.source == paths.source.standardizedFileURL
+                && authorized.current == paths.current.standardizedFileURL
+                && authorized.output == paths.output.standardizedFileURL
+        }
         guard activeOperation == nil,
               components.includeSystem,
               let source = components.systemSource,
@@ -158,6 +189,20 @@ public final class ConversionWorkflow {
             && authorized.groups == components.selectedGroups
     }
 
+    public func canWriteRepairExtraGroup(_ group: ExtraGroup) -> Bool {
+        guard mode == .repairConverted,
+              activeOperation == nil,
+              components.selectedGroups.contains(group),
+              let authorized = repairExtrasDryRunFingerprints[group],
+              !repairExtraRevisionSelectionRequired.contains(group),
+              let paths = try? repairExtraPaths()
+        else { return false }
+        return authorized.sourceDirectory == paths.source.standardizedFileURL
+            && authorized.currentDirectory == paths.current.standardizedFileURL
+            && authorized.outputDirectory == paths.output.standardizedFileURL
+            && authorized.fromVersion == repairFromVersion
+    }
+
     public func configure(input: ConversionInput) {
         guard activeOperation == nil else { return }
         guard self.input != input else { return }
@@ -175,8 +220,11 @@ public final class ConversionWorkflow {
         repairFromVersion = nil
         repairRevisionCandidates = []
         repairRevisionSelectionRequired = false
-        components.includeSystem = false
-        components.includeQuests = false
+        repairExtraRevisionSelectionRequired = []
+        repairSystemDryRunFingerprint = nil
+        repairExtrasDryRunFingerprints = [:]
+        repairCECDryRunFingerprint = nil
+        repairedExtraGroups = []
         sourceInspection = nil
         currentInspection = nil
         targetInspection = nil
@@ -188,7 +236,9 @@ public final class ConversionWorkflow {
         guard activeOperation == nil, repairFromVersion != revision else { return }
         repairFromVersion = revision
         repairRevisionSelectionRequired = false
+        repairExtraRevisionSelectionRequired = []
         repairDryRunFingerprint = nil
+        repairExtrasDryRunFingerprints = [:]
         if state == .dryRun {
             state = .componentSelection
         }
@@ -212,27 +262,35 @@ public final class ConversionWorkflow {
         guard components != selection else { return }
         let systemChanged = components.includeSystem != selection.includeSystem
             || components.systemSource != selection.systemSource
+            || components.systemCurrent != selection.systemCurrent
             || components.systemTarget != selection.systemTarget
         let extrasChanged = components.includeGuildCards != selection.includeGuildCards
             || components.includeQuests != selection.includeQuests
             || components.extraSourceDirectory != selection.extraSourceDirectory
+            || components.extraCurrentDirectory != selection.extraCurrentDirectory
             || components.extraStagingDirectory != selection.extraStagingDirectory
             || components.extraTargetDirectory != selection.extraTargetDirectory
         let cecChanged = components.cecSourceDirectory != selection.cecSourceDirectory
+            || components.cecCurrent != selection.cecCurrent
             || components.cecTarget != selection.cecTarget
             || components.acknowledgeExperimentalCEC != selection.acknowledgeExperimentalCEC
         components = selection
         if systemChanged {
             systemDryRunFingerprint = nil
+            repairSystemDryRunFingerprint = nil
             systemWriteCompleted = false
         }
         if extrasChanged {
             extrasStageDryRunFingerprint = nil
             extrasInstallDryRunFingerprint = nil
+            repairExtrasDryRunFingerprints = [:]
+            repairExtraRevisionSelectionRequired = []
             extrasInstallCompleted = false
+            repairedExtraGroups = []
         }
         if cecChanged {
             cecDryRunFingerprint = nil
+            repairCECDryRunFingerprint = nil
         }
         failure = nil
         state = input == nil ? .input : .componentSelection
@@ -309,7 +367,6 @@ public final class ConversionWorkflow {
         try requireIdleForIndependentOperation()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         guard sourceInspection != nil else { throw ConversionWorkflowError.inputNotInspected }
-        try requireSelectedOptionalDataConfiguration()
         let operation: ConverterOperation = mode == .repairConverted ? .repairConverted : .convert
         try await withOperation(operation) { lease in
             self.dryRunFingerprint = nil
@@ -326,10 +383,6 @@ public final class ConversionWorkflow {
                     "--current", current.path,
                     "--output", input.target.path,
                 ]
-                if self.components.includeGuildCards,
-                   let extData = self.components.extraSourceDirectory {
-                    arguments += ["--source-extdata-dir", extData.path]
-                }
                 if let revision = self.repairFromVersion {
                     arguments += ["--from-version", revision.rawValue]
                 }
@@ -372,7 +425,7 @@ public final class ConversionWorkflow {
                     source: input.source,
                     current: current,
                     output: input.target,
-                    extDataSource: self.components.includeGuildCards ? self.components.extraSourceDirectory : nil,
+                    extDataSource: nil,
                     fromVersion: self.repairFromVersion,
                     sourceSetSHA256: sourceSetSHA256,
                     currentSetSHA256: currentSetSHA256,
@@ -458,7 +511,6 @@ public final class ConversionWorkflow {
 
     public func writeCore() async throws {
         try requireIdleForIndependentOperation()
-        try requireSelectedOptionalDataConfiguration()
         guard let input else { throw ConversionWorkflowError.inputNotInspected }
         if mode == .repairConverted {
             guard let fingerprint = repairDryRunFingerprint,
@@ -466,7 +518,7 @@ public final class ConversionWorkflow {
                   fingerprint.source == input.source.standardizedFileURL,
                   fingerprint.current == current.standardizedFileURL,
                   fingerprint.output == input.target.standardizedFileURL,
-                  fingerprint.extDataSource == components.extraSourceDirectory?.standardizedFileURL,
+                  fingerprint.extDataSource == nil,
                   fingerprint.fromVersion == repairFromVersion,
                   !repairRevisionSelectionRequired
             else { throw ConversionWorkflowError.dryRunRequired }
@@ -477,10 +529,6 @@ public final class ConversionWorkflow {
                     "--current", current.path,
                     "--output", input.target.path,
                 ]
-                if self.components.includeGuildCards,
-                   let extData = self.components.extraSourceDirectory {
-                    arguments += ["--source-extdata-dir", extData.path]
-                }
                 if let revision = fingerprint.fromVersion {
                     arguments += ["--from-version", revision.rawValue]
                 }
@@ -516,6 +564,55 @@ public final class ConversionWorkflow {
     /// subsequent write independently.
     public func runSystemDryRun() async throws {
         try requireIdleForIndependentOperation()
+        if mode == .repairConverted {
+            let paths = try repairSystemPaths()
+            try await withOperation(.repairSystem) { lease in
+                self.repairSystemDryRunFingerprint = nil
+                let report = try await self.execute(
+                    .repairSystem,
+                    arguments: [
+                        ConverterOperation.repairSystem.rawValue,
+                        paths.source.path,
+                        "--current", paths.current.path,
+                        "--output", paths.output.path,
+                        "--dry-run",
+                    ],
+                    lease: lease
+                )
+                guard report.status == "dry-run",
+                      report.operation == ConverterOperation.repairSystem.rawValue,
+                      ConverterEvidence.path(report.source, equals: paths.source),
+                      ConverterEvidence.path(report.current, equals: paths.current),
+                      ConverterEvidence.path(report.output, equals: paths.output),
+                      let sourceSetSHA256 = report.sourceSetSHA256,
+                      ConverterEvidence.isValidSHA256(sourceSetSHA256),
+                      let currentSetSHA256 = report.currentSetSHA256,
+                      ConverterEvidence.isValidSHA256(currentSetSHA256),
+                      let outputSetSHA256 = report.outputSetSHA256,
+                      ConverterEvidence.isValidSHA256(outputSetSHA256),
+                      let previewSHA256 = report.previewSHA256,
+                      ConverterEvidence.isValidSHA256(previewSHA256)
+                else {
+                    throw self.failureAndRethrow(
+                        .repairSystem,
+                        ConversionWorkflowError.invalidReport("repair-system Dry Run requires exact paths and set hashes"),
+                        stderr: report.stderr ?? ""
+                    )
+                }
+                self.repairSystemDryRunFingerprint = RepairSystemDryRunFingerprint(
+                    source: paths.source,
+                    current: paths.current,
+                    output: paths.output,
+                    sourceSetSHA256: sourceSetSHA256,
+                    currentSetSHA256: currentSetSHA256,
+                    outputSetSHA256: outputSetSHA256,
+                    previewSHA256: previewSHA256
+                )
+                self.latestReport = report
+                self.state = .dryRun
+            }
+            return
+        }
         guard components.includeSystem,
               let source = components.systemSource,
               let target = components.systemTarget
@@ -560,6 +657,56 @@ public final class ConversionWorkflow {
 
     public func writeSystem() async throws {
         try requireIdleForIndependentOperation()
+        if mode == .repairConverted {
+            let paths = try repairSystemPaths()
+            guard let fingerprint = repairSystemDryRunFingerprint,
+                  fingerprint.source == paths.source.standardizedFileURL,
+                  fingerprint.current == paths.current.standardizedFileURL,
+                  fingerprint.output == paths.output.standardizedFileURL
+            else { throw ConversionWorkflowError.dryRunRequired }
+            try await withOperation(.repairSystem) { lease in
+                let report = try await self.execute(
+                    .repairSystem,
+                    arguments: [
+                        ConverterOperation.repairSystem.rawValue,
+                        paths.source.path,
+                        "--current", paths.current.path,
+                        "--output", paths.output.path,
+                        "--write",
+                        "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                        "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                        "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                        "--expected-preview-sha256", fingerprint.previewSHA256,
+                    ],
+                    lease: lease
+                )
+                guard report.status == "written" || report.status == "no-changes",
+                      report.operation == ConverterOperation.repairSystem.rawValue,
+                      ConverterEvidence.path(report.source, equals: paths.source),
+                      ConverterEvidence.path(report.current, equals: paths.current),
+                      ConverterEvidence.path(report.output, equals: paths.output),
+                      report.sourceSetSHA256 == fingerprint.sourceSetSHA256,
+                      report.currentSetSHA256 == fingerprint.currentSetSHA256,
+                      report.outputSetSHA256 == fingerprint.outputSetSHA256,
+                      report.previewSHA256 == fingerprint.previewSHA256,
+                      (report.status == "written"
+                          ? ConverterEvidence.hasPath(report.manifest)
+                          : !ConverterEvidence.hasPath(report.manifest))
+                else {
+                    throw self.failureAndRethrow(
+                        .repairSystem,
+                        ConversionWorkflowError.invalidReport("repair-system write report does not match its Dry Run"),
+                        stderr: report.stderr ?? "",
+                        scope: .system
+                    )
+                }
+                self.latestReport = report
+                self.state = .success
+                self.systemWriteCompleted = true
+                self.repairSystemDryRunFingerprint = nil
+            }
+            return
+        }
         guard components.includeSystem,
               let source = components.systemSource,
               let target = components.systemTarget
@@ -579,6 +726,149 @@ public final class ConversionWorkflow {
                 lease: lease
             )
             try self.complete(with: report, expectedStatus: "written", operation: .convertSystem)
+        }
+    }
+
+    public func runRepairExtraDryRun(group: ExtraGroup) async throws {
+        try requireIdleForIndependentOperation()
+        guard mode == .repairConverted,
+              components.selectedGroups.contains(group)
+        else { throw ConversionWorkflowError.missingExtraDirectories }
+        let paths = try repairExtraPaths()
+        try await withOperation(.repairExtras) { lease in
+            self.repairExtrasDryRunFingerprints[group] = nil
+            self.repairExtraRevisionSelectionRequired.remove(group)
+            var arguments = [
+                ConverterOperation.repairExtras.rawValue,
+                "--source-dir", paths.source.path,
+                "--current-dir", paths.current.path,
+                "--output-dir", paths.output.path,
+                "--group", group.rawValue,
+            ]
+            if let revision = self.repairFromVersion {
+                arguments += ["--from-version", revision.rawValue]
+            }
+            arguments.append("--dry-run")
+            let report = try await self.execute(
+                .repairExtras,
+                arguments: arguments,
+                lease: lease
+            )
+            guard report.status == "dry-run",
+                  report.operation == ConverterOperation.repairExtras.rawValue,
+                  report.group == group,
+                  ConverterEvidence.path(report.sourceDirectory, equals: paths.source),
+                  ConverterEvidence.path(report.currentDirectory, equals: paths.current),
+                  ConverterEvidence.path(report.outputDirectory, equals: paths.output),
+                  let sourceSetSHA256 = report.sourceSetSHA256,
+                  ConverterEvidence.isValidSHA256(sourceSetSHA256),
+                  let currentSetSHA256 = report.currentSetSHA256,
+                  ConverterEvidence.isValidSHA256(currentSetSHA256),
+                  let outputSetSHA256 = report.outputSetSHA256,
+                  ConverterEvidence.isValidSHA256(outputSetSHA256),
+                  let previewSHA256 = report.previewSHA256,
+                  ConverterEvidence.isValidSHA256(previewSHA256),
+                  let detection = report.detection,
+                  let components = report.components,
+                  Set(components.map(\.component)) == Set(group.componentNames),
+                  components.allSatisfy({ $0.repairFingerprint() != nil })
+            else {
+                throw self.failureAndRethrow(
+                    .repairExtras,
+                    ConversionWorkflowError.invalidReport("repair-extras Dry Run requires one exact group, paths, hashes, and components"),
+                    stderr: report.stderr ?? ""
+                )
+            }
+            if detection.confidence == "ambiguous", self.repairFromVersion == nil {
+                self.repairExtraRevisionSelectionRequired.insert(group)
+                self.repairRevisionCandidates = detection.candidates
+                self.latestReport = report
+                self.state = .dryRun
+                return
+            }
+            self.repairExtrasDryRunFingerprints[group] = RepairExtrasDryRunFingerprint(
+                group: group,
+                sourceDirectory: paths.source,
+                currentDirectory: paths.current,
+                outputDirectory: paths.output,
+                fromVersion: self.repairFromVersion,
+                sourceSetSHA256: sourceSetSHA256,
+                currentSetSHA256: currentSetSHA256,
+                outputSetSHA256: outputSetSHA256,
+                previewSHA256: previewSHA256,
+                components: components.compactMap { $0.repairFingerprint() }
+            )
+            self.latestReport = report
+            self.state = .dryRun
+        }
+    }
+
+    public func writeRepairExtraGroup(_ group: ExtraGroup) async throws {
+        try requireIdleForIndependentOperation()
+        guard mode == .repairConverted,
+              components.selectedGroups.contains(group),
+              !repairExtraRevisionSelectionRequired.contains(group),
+              let fingerprint = repairExtrasDryRunFingerprints[group]
+        else { throw ConversionWorkflowError.dryRunRequired }
+        let paths = try repairExtraPaths()
+        guard fingerprint.sourceDirectory == paths.source.standardizedFileURL,
+              fingerprint.currentDirectory == paths.current.standardizedFileURL,
+              fingerprint.outputDirectory == paths.output.standardizedFileURL,
+              fingerprint.fromVersion == repairFromVersion
+        else { throw ConversionWorkflowError.staleDryRun }
+        // Consume only this group's authorization before invoking the CLI.
+        // A failed card repair must not leave a stale card write enabled, and
+        // must not revoke an independently authorized quest repair.
+        repairExtrasDryRunFingerprints[group] = nil
+        try await withOperation(.repairExtras) { lease in
+            var arguments = [
+                ConverterOperation.repairExtras.rawValue,
+                "--source-dir", paths.source.path,
+                "--current-dir", paths.current.path,
+                "--output-dir", paths.output.path,
+                "--group", group.rawValue,
+            ]
+            if let revision = fingerprint.fromVersion {
+                arguments += ["--from-version", revision.rawValue]
+            }
+            arguments += [
+                "--write",
+                "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                "--expected-preview-sha256", fingerprint.previewSHA256,
+            ]
+            let report = try await self.execute(
+                .repairExtras,
+                arguments: arguments,
+                lease: lease
+            )
+            guard report.status == "written" || report.status == "no-changes",
+                  report.operation == ConverterOperation.repairExtras.rawValue,
+                  report.group == group,
+                  ConverterEvidence.path(report.sourceDirectory, equals: paths.source),
+                  ConverterEvidence.path(report.currentDirectory, equals: paths.current),
+                  ConverterEvidence.path(report.outputDirectory, equals: paths.output),
+                  report.sourceSetSHA256 == fingerprint.sourceSetSHA256,
+                  report.currentSetSHA256 == fingerprint.currentSetSHA256,
+                  report.outputSetSHA256 == fingerprint.outputSetSHA256,
+                  report.previewSHA256 == fingerprint.previewSHA256,
+                  report.components?.compactMap({ $0.repairFingerprint() }) == fingerprint.components,
+                  (report.status == "written"
+                      ? ConverterEvidence.hasPath(report.manifest)
+                      : !ConverterEvidence.hasPath(report.manifest))
+            else {
+                throw self.failureAndRethrow(
+                    .repairExtras,
+                    ConversionWorkflowError.invalidReport("repair-extras write report does not match its Dry Run"),
+                    stderr: report.stderr ?? "",
+                    scope: .extras
+                )
+            }
+            self.latestReport = report
+            self.repairedExtraGroups.insert(group)
+            self.repairExtrasDryRunFingerprints[group] = nil
+            self.state = .success
         }
     }
 
@@ -707,6 +997,56 @@ public final class ConversionWorkflow {
         try requireIdleForIndependentOperation()
         guard components.includesCEC else { throw ConversionWorkflowError.missingCECDirectories }
         guard components.acknowledgeExperimentalCEC else { throw ConversionWorkflowError.experimentalCECAcknowledgementRequired }
+        if mode == .repairConverted {
+            let paths = try repairCECPaths()
+            guard let fingerprint = repairCECDryRunFingerprint,
+                  fingerprint.sourceDirectory == paths.source.standardizedFileURL,
+                  fingerprint.current == paths.current.standardizedFileURL,
+                  fingerprint.output == paths.output.standardizedFileURL
+            else { throw ConversionWorkflowError.dryRunRequired }
+            try await withOperation(.repairCEC) { lease in
+                let report = try await self.execute(
+                    .repairCEC,
+                    arguments: [
+                        ConverterOperation.repairCEC.rawValue,
+                        "--source-dir", paths.source.path,
+                        "--current", paths.current.path,
+                        "--output", paths.output.path,
+                        "--write",
+                        "--experimental",
+                        "--expected-source-record-set-sha256", fingerprint.sourceRecordSetSHA256,
+                        "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                        "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                        "--expected-preview-sha256", fingerprint.previewSHA256,
+                    ],
+                    lease: lease
+                )
+                guard report.status == "written" || report.status == "no-changes",
+                      report.operation == ConverterOperation.repairCEC.rawValue,
+                      ConverterEvidence.path(report.sourceDirectory, equals: paths.source),
+                      ConverterEvidence.path(report.current, equals: paths.current),
+                      ConverterEvidence.path(report.output, equals: paths.output),
+                      report.sourceRecordSetSHA256 == fingerprint.sourceRecordSetSHA256,
+                      report.currentSetSHA256 == fingerprint.currentSetSHA256,
+                      report.outputSetSHA256 == fingerprint.outputSetSHA256,
+                      report.previewSHA256 == fingerprint.previewSHA256,
+                      (report.status == "written"
+                          ? ConverterEvidence.hasPath(report.manifest)
+                          : !ConverterEvidence.hasPath(report.manifest))
+                else {
+                    throw self.failureAndRethrow(
+                        .repairCEC,
+                        ConversionWorkflowError.invalidReport("repair-cec write report does not match its Dry Run"),
+                        stderr: report.stderr ?? "",
+                        scope: .cec
+                    )
+                }
+                self.latestReport = report
+                self.repairCECDryRunFingerprint = nil
+                self.state = .success
+            }
+            return
+        }
         guard let source = components.cecSourceDirectory, let target = components.cecTarget else {
             throw ConversionWorkflowError.missingCECDirectories
         }
@@ -755,6 +1095,55 @@ public final class ConversionWorkflow {
 
     public func runCECDryRun() async throws {
         try requireIdleForIndependentOperation()
+        if mode == .repairConverted {
+            let paths = try repairCECPaths()
+            try await withOperation(.repairCEC) { lease in
+                self.repairCECDryRunFingerprint = nil
+                let report = try await self.execute(
+                    .repairCEC,
+                    arguments: [
+                        ConverterOperation.repairCEC.rawValue,
+                        "--source-dir", paths.source.path,
+                        "--current", paths.current.path,
+                        "--output", paths.output.path,
+                        "--dry-run",
+                    ],
+                    lease: lease
+                )
+                guard report.status == "dry-run",
+                      report.operation == ConverterOperation.repairCEC.rawValue,
+                      ConverterEvidence.path(report.sourceDirectory, equals: paths.source),
+                      ConverterEvidence.path(report.current, equals: paths.current),
+                      ConverterEvidence.path(report.output, equals: paths.output),
+                      let sourceRecordSetSHA256 = report.sourceRecordSetSHA256,
+                      ConverterEvidence.isValidSHA256(sourceRecordSetSHA256),
+                      let currentSetSHA256 = report.currentSetSHA256,
+                      ConverterEvidence.isValidSHA256(currentSetSHA256),
+                      let outputSetSHA256 = report.outputSetSHA256,
+                      ConverterEvidence.isValidSHA256(outputSetSHA256),
+                      let previewSHA256 = report.previewSHA256,
+                      ConverterEvidence.isValidSHA256(previewSHA256)
+                else {
+                    throw self.failureAndRethrow(
+                        .repairCEC,
+                        ConversionWorkflowError.invalidReport("repair-cec Dry Run requires exact paths and set hashes"),
+                        stderr: report.stderr ?? ""
+                    )
+                }
+                self.repairCECDryRunFingerprint = RepairCECDryRunFingerprint(
+                    sourceDirectory: paths.source,
+                    current: paths.current,
+                    output: paths.output,
+                    sourceRecordSetSHA256: sourceRecordSetSHA256,
+                    currentSetSHA256: currentSetSHA256,
+                    outputSetSHA256: outputSetSHA256,
+                    previewSHA256: previewSHA256
+                )
+                self.latestReport = report
+                self.state = .dryRun
+            }
+            return
+        }
         guard components.includesCEC,
               let source = components.cecSourceDirectory,
               let target = components.cecTarget
@@ -841,6 +1230,104 @@ public final class ConversionWorkflow {
     public func writePlan() throws -> [PlannedConverterCommand] {
         try requireIdleForIndependentOperation()
         var plan = [PlannedConverterCommand]()
+        if mode == .repairConverted {
+            if let input, let fingerprint = repairDryRunFingerprint {
+                guard let current = input.current,
+                      fingerprint.source == input.source.standardizedFileURL,
+                      fingerprint.current == current.standardizedFileURL,
+                      fingerprint.output == input.target.standardizedFileURL,
+                      fingerprint.fromVersion == repairFromVersion,
+                      !repairRevisionSelectionRequired
+                else { throw ConversionWorkflowError.staleDryRun }
+                var arguments = [
+                    ConverterOperation.repairConverted.rawValue,
+                    input.source.path,
+                    "--current", current.path,
+                    "--output", input.target.path,
+                ]
+                if let revision = fingerprint.fromVersion {
+                    arguments += ["--from-version", revision.rawValue]
+                }
+                arguments += [
+                    "--write",
+                    "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                    "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                    "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                    "--expected-preview-sha256", fingerprint.previewSHA256,
+                ]
+                plan.append(PlannedConverterCommand(operation: .repairConverted, arguments: arguments))
+            }
+            if components.includeSystem {
+                let paths = try repairSystemPaths()
+                guard let fingerprint = repairSystemDryRunFingerprint,
+                      canWriteSystem
+                else { throw ConversionWorkflowError.dryRunRequired }
+                plan.append(
+                    PlannedConverterCommand(
+                        operation: .repairSystem,
+                        arguments: [
+                            ConverterOperation.repairSystem.rawValue,
+                            paths.source.path,
+                            "--current", paths.current.path,
+                            "--output", paths.output.path,
+                            "--write",
+                            "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                            "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                            "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                            "--expected-preview-sha256", fingerprint.previewSHA256,
+                        ]
+                    )
+                )
+            }
+            for group in components.selectedGroups.sorted(by: { $0.rawValue < $1.rawValue }) {
+                guard canWriteRepairExtraGroup(group),
+                      let fingerprint = repairExtrasDryRunFingerprints[group]
+                else { throw ConversionWorkflowError.dryRunRequired }
+                var arguments = [
+                    ConverterOperation.repairExtras.rawValue,
+                    "--source-dir", fingerprint.sourceDirectory.path,
+                    "--current-dir", fingerprint.currentDirectory.path,
+                    "--output-dir", fingerprint.outputDirectory.path,
+                    "--group", group.rawValue,
+                ]
+                if let revision = fingerprint.fromVersion {
+                    arguments += ["--from-version", revision.rawValue]
+                }
+                arguments += [
+                    "--write",
+                    "--expected-source-set-sha256", fingerprint.sourceSetSHA256,
+                    "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                    "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                    "--expected-preview-sha256", fingerprint.previewSHA256,
+                ]
+                plan.append(PlannedConverterCommand(operation: .repairExtras, arguments: arguments))
+            }
+            if components.includesCEC {
+                guard components.acknowledgeExperimentalCEC,
+                      let fingerprint = repairCECDryRunFingerprint,
+                      canWriteCEC
+                else { throw ConversionWorkflowError.dryRunRequired }
+                plan.append(
+                    PlannedConverterCommand(
+                        operation: .repairCEC,
+                        arguments: [
+                            ConverterOperation.repairCEC.rawValue,
+                            "--source-dir", fingerprint.sourceDirectory.path,
+                            "--current", fingerprint.current.path,
+                            "--output", fingerprint.output.path,
+                            "--write",
+                            "--experimental",
+                            "--expected-source-record-set-sha256", fingerprint.sourceRecordSetSHA256,
+                            "--expected-current-set-sha256", fingerprint.currentSetSHA256,
+                            "--expected-output-set-sha256", fingerprint.outputSetSHA256,
+                            "--expected-preview-sha256", fingerprint.previewSHA256,
+                        ]
+                    )
+                )
+            }
+            guard !plan.isEmpty else { throw ConversionWorkflowError.dryRunRequired }
+            return plan
+        }
         if let input, dryRunFingerprint != nil {
             let fingerprint = try currentAuthorizedFingerprint()
             plan.append(
@@ -1028,13 +1515,44 @@ public final class ConversionWorkflow {
         return (source, staging, target)
     }
 
-    private func requireSelectedOptionalDataConfiguration() throws {
-        guard !components.includeSystem
-                || (components.systemSource != nil && components.systemTarget != nil)
+    private func repairExtraPaths() throws -> (source: URL, current: URL, output: URL) {
+        guard mode == .repairConverted,
+              let source = components.extraSourceDirectory,
+              let current = components.extraCurrentDirectory,
+              let output = components.extraTargetDirectory
+        else { throw ConversionWorkflowError.missingExtraDirectories }
+        return (
+            source.standardizedFileURL,
+            current.standardizedFileURL,
+            output.standardizedFileURL
+        )
+    }
+
+    private func repairSystemPaths() throws -> (source: URL, current: URL, output: URL) {
+        guard mode == .repairConverted,
+              components.includeSystem,
+              let source = components.systemSource,
+              let current = components.systemCurrent,
+              let output = components.systemTarget
         else { throw ConversionWorkflowError.missingSystemPaths }
-        guard selectedOptionalDataIsConfigured else {
-            throw ConversionWorkflowError.missingExtraDirectories
-        }
+        return (
+            source.standardizedFileURL,
+            current.standardizedFileURL,
+            output.standardizedFileURL
+        )
+    }
+
+    private func repairCECPaths() throws -> (source: URL, current: URL, output: URL) {
+        guard mode == .repairConverted,
+              let source = components.cecSourceDirectory,
+              let current = components.cecCurrent,
+              let output = components.cecTarget
+        else { throw ConversionWorkflowError.missingCECDirectories }
+        return (
+            source.standardizedFileURL,
+            current.standardizedFileURL,
+            output.standardizedFileURL
+        )
     }
 
     private func extrasStageArguments(
@@ -1302,7 +1820,7 @@ public final class ConversionWorkflow {
             try validateCECWrite(report)
         case .rollback, .rollbackRepair, .rollbackExtras, .rollbackCEC:
             try validateRollbackReport(report, operation: operation, manifest: rollbackManifest)
-        case .inspect, .repairConverted:
+        case .inspect, .repairConverted, .repairExtras, .repairSystem, .repairCEC:
             throw ConversionWorkflowError.invalidReport("unsupported completion operation")
         }
     }
@@ -1489,7 +2007,8 @@ public final class ConversionWorkflow {
             }
         case .rollback, .rollbackCEC:
             break
-        case .inspect, .convert, .repairConverted, .convertSystem, .convertExtras, .installExtras, .convertCEC:
+        case .inspect, .convert, .repairConverted, .repairExtras, .repairSystem, .repairCEC,
+             .convertSystem, .convertExtras, .installExtras, .convertCEC:
             throw ConversionWorkflowError.invalidReport("unsupported rollback operation")
         }
     }
@@ -1545,11 +2064,13 @@ public final class ConversionWorkflow {
             repairDryRunFingerprint = nil
         case .system:
             systemDryRunFingerprint = nil
+            repairSystemDryRunFingerprint = nil
         case .extras:
             extrasStageDryRunFingerprint = nil
             extrasInstallDryRunFingerprint = nil
         case .cec:
             cecDryRunFingerprint = nil
+            repairCECDryRunFingerprint = nil
         }
     }
 
@@ -1563,13 +2084,13 @@ public final class ConversionWorkflow {
             switch operation {
             case .convert, .repairConverted:
                 coreWriteCompleted = true
-            case .convertSystem:
+            case .convertSystem, .repairSystem:
                 systemWriteCompleted = true
             case .convertExtras:
                 break
-            case .installExtras:
+            case .installExtras, .repairExtras:
                 extrasInstallCompleted = true
-            case .convertCEC:
+            case .convertCEC, .repairCEC:
                 break
             case .inspect, .rollback, .rollbackRepair, .rollbackExtras, .rollbackCEC:
                 break
@@ -1594,11 +2115,11 @@ public final class ConversionWorkflow {
         switch operation {
         case .inspect, .convert, .repairConverted, .rollback, .rollbackRepair:
             .core
-        case .convertSystem:
+        case .convertSystem, .repairSystem:
             .system
-        case .convertExtras, .installExtras, .rollbackExtras:
+        case .convertExtras, .installExtras, .repairExtras, .rollbackExtras:
             .extras
-        case .convertCEC, .rollbackCEC:
+        case .convertCEC, .repairCEC, .rollbackCEC:
             .cec
         }
     }

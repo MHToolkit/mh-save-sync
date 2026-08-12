@@ -275,12 +275,12 @@ NEW_SOURCE_SHA256=$(jq -er '.hashes.source' <<<"$NEW_DRY_RUN_JSON")
 
 如果目标原本存在，`--write` 会在同目录创建 `.user2.mh3g-backup-<previous-sha256>` 和 `.user2.mh3g-install.json`；重复安装还可能生成 `.user2.mh3g-install-history-<sha256>.json`。在 Cemu 中手动验证成功前，请保留 manifest。
 
-#### `repair-converted`：修复旧版转换后继续游玩的存档
+#### `repair-converted`：独立修复核心槽位
 
 ```text
 mh3g-save-convert repair-converted <原始-3DS-user#> --current <当前-Cemu-user#> \
   [--output <修复后-Cemu-user#>] \
-  [--source-extdata-dir <原始-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
+  [--source-extdata-dir <旧式耦合-3DS-ExtData-user>] [--from-version <0.0.3|0.0.4|0.0.5|0.0.6>] \
   [--dry-run | --write --expected-source-set-sha256 <SHA256> \
     --expected-current-set-sha256 <SHA256> --expected-output-set-sha256 <SHA256> \
     --expected-preview-sha256 <SHA256>]
@@ -290,14 +290,14 @@ mh3g-save-convert repair-converted <原始-3DS-user#> --current <当前-Cemu-use
 
 三个路径的职责刻意分开：原始 3DS 槽位是只读转换源，`--current` 是保存玩家后续 Wii U/Cemu 进度的只读引用，`--output` 才是唯一允许写入的核心槽位。三者必须是编号和文件名相同的准确 `user1`、`user2` 或 `user3`。CLI 省略 `--output` 时仅为兼容旧脚本而继续原地写回 `--current`；原生 macOS/Windows 工作台不会隐藏这种复用，始终独立显示并传入“当前 Wii U 引用”和“修复后输出”。
 
-原生工作台可以让用户选择文件或其直接父目录，但最终仍只把解析出的准确文件传给 CLI。若启用公会名片修复，`--source-extdata-dir` 必须是含全部八个源文件的 3DS `.../00000481/user` 目录，并且当前 `user#` 的父目录必须含全部八个同名 Cemu 文件。若输出目录与当前引用目录不同，输出目录必须是已经初始化的 Cemu 存档目录，并至少含 `card1`、`card2`、`card3`、`cardbox`，否则多文件事务会失败关闭。当前转换器会字段级修复 `user#`、`card1`、`card2`、`card3`、`cardbox`；`quest1` 至 `quest4` 只参与集合校验并逐字节保留。`system`、`cec`、`phrase1` 至 `phrase3` 和未知文件不会被该命令读取或写入。
+原生工作台可以让用户选择核心文件或其直接父目录，但最终仍只把解析出的准确文件传给 CLI。macOS/Windows 原生界面只用 `repair-converted` 修复核心槽位。旧 `--source-extdata-dir` 参数继续兼容已有脚本，但原生界面不再使用；新的公会名片、任务、`system` 与 CEC 修复均走下文独立域命令。核心单独运行时不会读取或写入 `system`、`cec`、`phrase1` 至 `phrase3` 或未知文件。
 
 先运行只读预览：
 
 ```bash
 # SOURCE、CURRENT、OUTPUT 是三个独立但同槽位的 user# 路径。
 REPAIR_JSON=$("${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
-  --source-extdata-dir "$EXTRAS_SOURCE" --dry-run)
+  --dry-run)
 ```
 
 如果 JSON 顶层的 `detection.confidence` 为 `ambiguous`，不要直接写入；从其 `candidates` 中确认当时使用的版本，并用 `--from-version` 重新运行 Dry Run。所有选中组件始终共用这一份版本判断，不会把 `user#` 和 `card*` 分别按不同历史版本修复。自动检测不是读取存档内嵌版本号，因为旧版本没有写入可靠标记。写入必须复用同一次最终 Dry Run 的四个授权哈希：
@@ -309,7 +309,6 @@ OUTPUT_SET_SHA256=$(jq -er '.output_set_sha256' <<<"$REPAIR_JSON")
 PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
 
 "${CLI[@]}" repair-converted "$SOURCE" --current "$CURRENT" --output "$OUTPUT" \
-  --source-extdata-dir "$EXTRAS_SOURCE" \
   --expected-source-set-sha256 "$SOURCE_SET_SHA256" \
   --expected-current-set-sha256 "$CURRENT_SET_SHA256" \
   --expected-output-set-sha256 "$OUTPUT_SET_SHA256" \
@@ -317,13 +316,42 @@ PREVIEW_SHA256=$(jq -er '.preview_sha256' <<<"$REPAIR_JSON")
   --write
 ```
 
-若 Dry Run 使用了 `--from-version`，写入必须传入同一个值。任一原始源、当前 Wii U 引用、输出状态或预览在两步之间变化都会失败关闭。成功写入会返回总 manifest `.mh3g-compatibility-repair-<UUID>.json`；它协调核心槽位与可选公会名片子事务。完整回滚使用：
+若 Dry Run 使用了 `--from-version`，写入必须传入同一个值。任一原始源、当前 Wii U 引用、输出状态或预览在两步之间变化都会失败关闭。成功核心写入会返回 manifest `.mh3g-compatibility-repair-<UUID>.json`。回滚使用：
 
 ```bash
 "${CLI[@]}" rollback-repair --manifest "$COMPATIBILITY_MANIFEST"
 ```
 
-只修核心 `user#` 时省略 `--source-extdata-dir`。若报告状态为 `no-changes`，说明所选范围无需修改，不会生成无意义的总 manifest。
+旧 `--source-extdata-dir` 只为历史自动化保留。若报告状态为 `no-changes`，说明核心无需修改，不会生成无意义的 manifest。
+
+#### 独立修复域
+
+修复模式提供五条彼此独立的事务。原始 3DS、当前 Wii U/Cemu、输出是三种不同路径职责；选择其中一个绝不会自动填充或改变另一个。每个域都有自己的 Dry Run、写入授权、manifest 和回滚：
+
+| 修复域 | 命令 | 必需的原始/当前/输出 |
+| --- | --- | --- |
+| 核心槽位 | `repair-converted` | 三个同名 `user#` 路径 |
+| 公会名片 | `repair-extras --group guild-cards` | 三个 ExtData 目录；输出必须已有 `card1`、`card2`、`card3`、`cardbox` |
+| 任务 | `repair-extras --group quests` | 三个 ExtData 目录；输出必须已有 `quest1` 至 `quest4` |
+| 画廊/动画 `system` | `repair-system` | 准确 3DS `system`、准确当前 Cemu `system`、准确输出 `system` |
+| 实验性 CEC | `repair-cec` | 准确 3DS CEC 邮箱目录、准确当前 Cemu `cec`、准确输出 `cec` |
+
+公会名片和任务在物理上共用同一组 ExtData 目录选择器，但两个组件组仍分别授权、写入和回滚。任务修复会校验原始组，并逐字节保留当前 Wii U 数据；`system` 只把已确认的画廊/动画标记合并到当前权威数据；CEC 仍需单独启用实验确认。某个可选域配置不完整时，不会阻塞核心或其他已经完整的域。
+
+```text
+mh3g-save-convert repair-extras --group <guild-cards|quests> \
+  --source-dir <3DS-ExtData-user> --current-dir <当前-Cemu-目录> \
+  --output-dir <已初始化-输出-Cemu-目录> [--dry-run | --write ...]
+
+mh3g-save-convert repair-system <3DS-system> --current <当前-Cemu-system> \
+  --output <输出-Cemu-system> [--dry-run | --write ...]
+
+mh3g-save-convert repair-cec --source-dir <3DS-CEC-邮箱目录> \
+  --current <当前-Cemu-cec> --output <输出-Cemu-cec> \
+  [--dry-run | --write --experimental ...]
+```
+
+使用对应域返回的 manifest 调用 `rollback-extras`、`rollback` 或 `rollback-cec`。完整哈希参数和失败关闭规则见准确文件契约。
 
 #### `convert-system`：安全合并共享画廊/动画标记
 
@@ -384,11 +412,9 @@ mh3g-save-convert install-extras [--dry-run | --write] \
 同名组件。写入会创建绑定 manifest 的恢复事务并保留目标原始字节；不会单独安装某一个 `card#`
 或 `quest#` 文件。
 
-> **Windows 限制：**Windows 支持 `convert-extras` 生成暂存文件和
-> `install-extras --dry-run` 预览，但会在尚未改动任何 ExtData 文件前，主动拒绝
-> `install-extras --write` 与 `rollback-extras`。安全的多文件安装需要当前转换器完整的持久目录元数据协议和
-> 双名称原子交换；请在受支持的平台完成该受保护的安装/回滚步骤。核心 `user#` 与共享 `system`
-> 转换仍可在 Windows 使用。
+Windows 上的完整组件组写入使用 `ReplaceFileW`、manifest 绑定备份与持久恢复日志。
+同样要求完整组件组、Dry Run 哈希和可回滚事务；仍会拒绝单独安装某一个 `card#` 或
+`quest#`。
 
 安装前应紧接着执行 Dry Run，并把两组报告哈希绑定到写入：
 

@@ -26,8 +26,20 @@ struct ExperimentalCECView: View {
                             ) {
                                 chooseSource()
                             }
+                            if workflow.mode == .repairConverted {
+                                SelectedPathRow(
+                                    title: ConverterCopy.text("Input.Current", language: language),
+                                    value: workflow.components.cecCurrent,
+                                    chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                                ) {
+                                    chooseCurrent()
+                                }
+                            }
                             SelectedPathRow(
-                                title: ConverterCopy.text("CEC.Target", language: language),
+                                title: ConverterCopy.text(
+                                    workflow.mode == .repairConverted ? "Input.RepairOutput" : "CEC.Target",
+                                    language: language
+                                ),
                                 value: workflow.components.cecTarget,
                                 chooseTitle: ConverterCopy.text("Input.Select", language: language)
                             ) {
@@ -37,7 +49,7 @@ struct ExperimentalCECView: View {
                                 ConverterCopy.text("CEC.Acknowledge", language: language),
                                 isOn: acknowledgementBinding
                             )
-                            .disabled(workflow.components.cecSourceDirectory == nil || workflow.components.cecTarget == nil)
+                            .disabled(!hasPaths)
                             Label(ConverterCopy.text("CEC.Warning", language: language), systemImage: "exclamationmark.triangle")
                                 .foregroundStyle(.orange)
                                 .font(.caption)
@@ -56,10 +68,10 @@ struct ExperimentalCECView: View {
                     }
                     .disabled(!hasPaths || running)
 
-                    if workflow.canWriteCEC, let fingerprint = workflow.cecDryRunFingerprint {
+                    if workflow.canWriteCEC {
                         Label(ConverterCopy.text("CEC.Authorized", language: language), systemImage: "checkmark.shield.fill")
                             .foregroundStyle(.green)
-                        Text(fingerprint.targetSHA256Before)
+                        Text(authorizedCECBeforeHash ?? "—")
                             .font(.caption.monospaced())
                             .textSelection(.enabled)
                         Button(ConverterCopy.text("CEC.Write", language: language)) {
@@ -86,7 +98,10 @@ struct ExperimentalCECView: View {
                     .disabled(manifest == nil || running)
                 }
 
-                if let failure = workflow.failure, failure.operation == .convertCEC || failure.operation == .rollbackCEC {
+                if let failure = workflow.failure,
+                   failure.operation == .convertCEC
+                    || failure.operation == .repairCEC
+                    || failure.operation == .rollbackCEC {
                     Section {
                         FailureDetails(failure: failure, language: language)
                     }
@@ -111,7 +126,9 @@ struct ExperimentalCECView: View {
     }
 
     private var hasPaths: Bool {
-        workflow.components.cecSourceDirectory != nil && workflow.components.cecTarget != nil
+        workflow.components.cecSourceDirectory != nil
+            && workflow.components.cecTarget != nil
+            && (workflow.mode == .newConversion || workflow.components.cecCurrent != nil)
     }
 
     private var acknowledgementBinding: Binding<Bool> {
@@ -126,6 +143,18 @@ struct ExperimentalCECView: View {
     }
 
     private var cecConfirmationDetails: [TransactionConfirmationDetail] {
+        if let fingerprint = workflow.repairCECDryRunFingerprint {
+            return [
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("CEC.SourceRecordSetSHA256", language: language),
+                    value: fingerprint.sourceRecordSetSHA256
+                ),
+                TransactionConfirmationDetail(
+                    label: ConverterCopy.text("CEC.TargetSHA256", language: language),
+                    value: fingerprint.outputSetSHA256
+                ),
+            ]
+        }
         guard let fingerprint = workflow.cecDryRunFingerprint else { return [] }
         return [
             TransactionConfirmationDetail(
@@ -137,6 +166,11 @@ struct ExperimentalCECView: View {
                 value: fingerprint.targetSHA256Before
             ),
         ]
+    }
+
+    private var authorizedCECBeforeHash: String? {
+        workflow.repairCECDryRunFingerprint?.outputSetSHA256
+            ?? workflow.cecDryRunFingerprint?.targetSHA256Before
     }
 
     private func chooseSource() {
@@ -153,6 +187,14 @@ struct ExperimentalCECView: View {
             message: ConverterCopy.text("CEC.TargetMessage", language: language)
         ) else { return }
         update { $0.cecTarget = target }
+    }
+
+    private func chooseCurrent() {
+        guard let current = OpenPanel.selectFile(
+            title: ConverterCopy.text("Input.Current", language: language),
+            message: ConverterCopy.text("CEC.TargetMessage", language: language)
+        ) else { return }
+        update { $0.cecCurrent = current }
     }
 
     private func update(_ change: (inout ComponentSelection) -> Void) {

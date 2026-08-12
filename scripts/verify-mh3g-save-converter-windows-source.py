@@ -477,7 +477,6 @@ def main() -> int:
         '"repair-converted", paths.Source',
         '"--current", paths.Current!',
         '"--output", paths.Target',
-        'arguments.Add("--source-extdata-dir");',
         'arguments.Add("--from-version");',
         '"--expected-source-set-sha256"',
         '"--expected-current-set-sha256"',
@@ -489,6 +488,15 @@ def main() -> int:
         '"rollback-repair"',
     ):
         require(expected in workflow, f"Windows compatibility-repair workflow is missing {expected}")
+    repair_core = workflow.split("public async Task RunCoreDryRunAsync()", 1)[1].split(
+        "public async Task WriteCoreAsync()", 1
+    )[0] + workflow.split("public async Task WriteCoreAsync()", 1)[1].split(
+        "public async Task RollbackCoreAsync()", 1
+    )[0]
+    require(
+        "--source-extdata-dir" not in repair_core,
+        "core repair must not silently own an ExtData repair transaction",
+    )
 
     resolver = read("Models/SavePathResolution.cs")
     for expected in (
@@ -567,16 +575,19 @@ def main() -> int:
     ):
         require(expected in core_write, f"core write is missing dry-run hash binding {expected}")
 
-    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows core workflow must gate selected optional setup")
+    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows UI must report selected optional setup")
     require("public bool HasPendingSelectedOptionalWork" in workflow, "Windows core workflow must retain selected optional work")
-    require("!SelectedOptionalDataIsConfigured" in core_dry_run, "core Dry Run must not bypass incomplete optional setup")
     require(
-        "SelectedOptionalDataIsConfigured" in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
-        "core write availability must not bypass incomplete optional setup",
+        "!SelectedOptionalDataIsConfigured" not in core_dry_run,
+        "an incomplete optional domain must not block the independent core Dry Run",
     )
     require(
-        "!SelectedOptionalDataIsConfigured" in core_write,
-        "core write entry point must reject incomplete optional setup",
+        "SelectedOptionalDataIsConfigured" not in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
+        "core write availability must remain independent from optional-domain paths",
+    )
+    require(
+        "!SelectedOptionalDataIsConfigured" not in core_write,
+        "core write entry point must not reject an unrelated incomplete optional domain",
     )
     optional_availability = workflow.split("private void RaiseOptionalConfigurationAvailability()", 1)[1].split(
         "private void SetWorkflowGuidance", 1
@@ -587,6 +598,29 @@ def main() -> int:
     )
     system_write = public_method_body(workflow, "WriteSystemAsync")
     require("_systemWriteCompleted = true;" in system_write, "system completion must be tracked independently")
+    for expected in (
+        '"repair-system", SystemSourcePath',
+        '"--current", SystemCurrentPath',
+        '"--output", SystemTargetPath',
+        '"repair-extras"',
+        '"--source-dir", paths.Source',
+        '"--current-dir", paths.Current',
+        '"--output-dir", paths.Output',
+        '"--group", group',
+        '"repair-cec", "--source-dir", CecSourceDirectory',
+        '"--current", CecCurrentPath',
+        '"--output", CecTargetPath',
+    ):
+        require(expected in workflow, f"independent repair workflow is missing {expected}")
+    for expected in (
+        "public Task RunRepairGuildCardsDryRunAsync()",
+        "public Task WriteRepairGuildCardsAsync()",
+        "public Task RollbackRepairGuildCardsAsync()",
+        "public Task RunRepairQuestsDryRunAsync()",
+        "public Task WriteRepairQuestsAsync()",
+        "public Task RollbackRepairQuestsAsync()",
+    ):
+        require(expected in workflow, f"ExtData repair group is missing independent action {expected}")
     require(
         "_extrasInstallCompleted" not in workflow,
         "Windows must not track a completed ExtData install while that capability is unavailable",
@@ -616,6 +650,21 @@ def main() -> int:
         'Click="ChooseCurrentFolder_Click"',
     ):
         require(expected in window, f"repair mode must expose independent current/output controls: {expected}")
+    for expected in (
+        'x:Name="SystemCurrentBox"',
+        'x:Name="ExtrasCurrentBox"',
+        'x:Name="ExtrasRepairTargetBox"',
+        'x:Name="CecCurrentBox"',
+        'Click="RepairGuildCardsDryRun_Click"',
+        'Click="WriteRepairGuildCards_Click"',
+        'Click="RollbackRepairGuildCards_Click"',
+        'Click="RepairQuestsDryRun_Click"',
+        'Click="WriteRepairQuests_Click"',
+        'Click="RollbackRepairQuests_Click"',
+        'Visibility="{Binding RepairModeVisibility}"',
+        'Visibility="{Binding NewConversionVisibility}"',
+    ):
+        require(expected in window, f"domain-scoped repair UI is missing {expected}")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
     require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
     require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
@@ -731,6 +780,8 @@ def main() -> int:
         "AuthorizationDomain.Core",
         "AuthorizationDomain.System",
         "AuthorizationDomain.Extras",
+        "AuthorizationDomain.GuildCards",
+        "AuthorizationDomain.Quests",
         "AuthorizationDomain.Cec",
     ):
         require(expected in workflow, f"Windows workflow is missing isolated authorization handling {expected}")
@@ -810,6 +861,12 @@ def main() -> int:
         "case AuthorizationDomain.Extras:", 1
     )[0]
     extras_case = clear_authorization.split("case AuthorizationDomain.Extras:", 1)[1].split(
+        "case AuthorizationDomain.GuildCards:", 1
+    )[0]
+    guild_cards_case = clear_authorization.split("case AuthorizationDomain.GuildCards:", 1)[1].split(
+        "case AuthorizationDomain.Quests:", 1
+    )[0]
+    quests_case = clear_authorization.split("case AuthorizationDomain.Quests:", 1)[1].split(
         "case AuthorizationDomain.Cec:", 1
     )[0]
     cec_case = clear_authorization.split("case AuthorizationDomain.Cec:", 1)[1].split("default:", 1)[0]
@@ -817,6 +874,8 @@ def main() -> int:
         (core_case, "_coreAuthorization = null;", ("_systemAuthorization", "_extras", "_cecAuthorization")),
         (system_case, "_systemAuthorization = null;", ("_coreAuthorization", "_extras", "_cecAuthorization")),
         (extras_case, "_extrasStageAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_cecAuthorization")),
+        (guild_cards_case, "_repairGuildCardsAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_repairQuestsAuthorization", "_cecAuthorization")),
+        (quests_case, "_repairQuestsAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_repairGuildCardsAuthorization", "_cecAuthorization")),
         (cec_case, "_cecAuthorization = null;", ("_coreAuthorization", "_systemAuthorization", "_extras")),
     ):
         require(expected in case, f"authorization clearing case is missing {expected}")
@@ -845,7 +904,7 @@ def main() -> int:
     )
     require(
         "<InfoBar " not in window
-        and '<controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />' in window,
+        and '<controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}"' in window,
         "every WinUI InfoBar must use the Microsoft.UI.Xaml.Controls namespace prefix",
     )
 
@@ -854,9 +913,19 @@ def main() -> int:
         "ConversionModePicker_SelectionChanged",
         "RepairVersionPicker_SelectionChanged",
         "ChooseSystemSource_Click",
+        "ChooseSystemCurrent_Click",
         "ChooseExtrasSource_Click",
+        "ChooseExtrasCurrent_Click",
+        "ChooseRepairExtrasTarget_Click",
+        "ChooseCecCurrent_Click",
         "SystemDryRun_Click",
         "InstallExtras_Click",
+        "RepairGuildCardsDryRun_Click",
+        "WriteRepairGuildCards_Click",
+        "RollbackRepairGuildCards_Click",
+        "RepairQuestsDryRun_Click",
+        "WriteRepairQuests_Click",
+        "RollbackRepairQuests_Click",
     ):
         require(expected in code_behind, f"WinUI optional transaction handler is missing {expected}")
 
@@ -874,6 +943,10 @@ def main() -> int:
         "共享 system",
         "Optional ExtData",
         "可选 ExtData",
+        "Current Wii U / Cemu ExtData directory",
+        "当前 Wii U / Cemu ExtData 目录",
+        "Repaired ExtData output directory",
+        "修复后的 ExtData 输出目录",
         "ExtDataInstallUnavailable",
         "About & Updates",
         "关于与更新",

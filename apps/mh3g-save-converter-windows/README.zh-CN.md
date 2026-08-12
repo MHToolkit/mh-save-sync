@@ -14,13 +14,17 @@
 - 不扫描 SD 卡、MLC、ZIP、7z、RAR 或任意存档文件夹。所有输入都必须由用户
   选择准确文件或目录。
 - 全新转换流程固定为 `inspect` -> `convert --dry-run` -> 最终 SHA-256
-  复核 -> `convert --write`。修复模式明确提供三个独立控件：原始 3DS `user#`、
-  只读的当前同槽位 Cemu `user#`、修复结果输出文件/目录；三条路径都会传给
-  `repair-converted`。可选完整 3DS ExtData 用于修复公会名片；独立输出目录必须
-  已初始化相应卡片文件。自动检测结果为歧义时，界面会要求选择 0.0.3 至
-  0.0.6 后重新 Dry Run。
-- 写入前有确认对话框。普通转换记录单文件 manifest；兼容修复记录
-  `.mh3g-compatibility-repair-<UUID>.json`，并通过 `rollback-repair` 总体回滚。
+  复核 -> `convert --write`。修复模式把核心、公会名片、任务、共享 `system`、
+  实验性 CEC 分成独立事务。每个域分别选择原始 3DS、只读当前 Cemu、输出，并
+  各自执行 Dry Run、写入授权、记录 manifest 和回滚；路径不会在这些控件之间
+  自动级联。核心可选准确 `user#` 文件或其直接父目录，`system` 和 CEC 使用
+  准确文件。公会名片与任务在物理上共用一组 ExtData 目录选择器，但操作与
+  manifest 分开；输出必须已有完整四个初始化文件。任务修复逐字节保留当前
+  Wii U 数据。核心/名片/任务检测为歧义时，必须选择 0.0.3 至 0.0.6 并重新
+  运行该域 Dry Run。
+- 写入前有确认对话框。普通转换记录单文件 manifest；核心修复使用
+  `.mh3g-compatibility-repair-<UUID>.json`，名片/任务、`system`、CEC 分别保留
+  自己的 manifest 和回滚入口。一个域失败不会撤销另一个域已成功的 Dry Run。
 - C# 仅用 `ProcessStartInfo.ArgumentList` 逐个传递 argv，且
   `UseShellExecute = false`；它只解析 CLI 的 JSON stdout，不拼接 shell 命令，
   也不重复实现转换逻辑。
@@ -33,7 +37,8 @@
   其余目标字节和其他角色槽位共享数据全部保留。Windows 后端使用
   `ReplaceFileW`、manifest 绑定备份和持久恢复日志安装完整 ExtData 组件组；
   界面不会猜测 Cemu MLC 目录或静默安装。兼容修复模式只字段级更新仍保持旧版
-  转换结果的 `user#` 与公会名片字段，当前 `quest1` 至 `quest4` 保持原字节。
+  转换结果的核心/公会名片字段，当前 `quest1` 至 `quest4` 保持原字节。某个
+  可选域配置不完整时，不会阻塞核心或另一个已经完整的域。
 
 执行写入或回滚前，必须退出 Nemessix、Azahar 和 Cemu。准确源文件、目标范围
 及事务边界参见根目录的

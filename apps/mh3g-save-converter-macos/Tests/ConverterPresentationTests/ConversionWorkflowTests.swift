@@ -114,6 +114,118 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertNil(workflow.repairDryRunFingerprint)
     }
 
+    func testRepairSystemUsesItsOwnSourceCurrentAndOutputPaths() async throws {
+        let selection = ComponentSelection(
+            includeSystem: true,
+            systemSource: URL(fileURLWithPath: "/tmp/3ds-shared/system"),
+            systemCurrent: URL(fileURLWithPath: "/tmp/current-shared/system"),
+            systemTarget: URL(fileURLWithPath: "/tmp/output-shared/system")
+        )
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairSystemResult(selection: selection, status: "dry-run")),
+            .success(repairSystemResult(selection: selection, status: "no-changes")),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setComponents(selection)
+
+        try await workflow.runSystemDryRun()
+        XCTAssertTrue(workflow.canWriteSystem)
+        try await workflow.writeSystem()
+
+        let commands = await executor.recordedCommands()
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--current", selection.systemCurrent!.path))
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--output", selection.systemTarget!.path))
+        XCTAssertTrue(commands[1].arguments.contains("--expected-preview-sha256"))
+    }
+
+    func testRepairGuildCardsIsAnIndependentExtDataTransaction() async throws {
+        let selection = ComponentSelection(
+            includeGuildCards: true,
+            extraSourceDirectory: URL(fileURLWithPath: "/tmp/3ds-extdata/user"),
+            extraCurrentDirectory: URL(fileURLWithPath: "/tmp/current-cemu"),
+            extraTargetDirectory: URL(fileURLWithPath: "/tmp/output-cemu")
+        )
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairExtrasResult(selection: selection, status: "dry-run")),
+            .success(repairExtrasResult(selection: selection, status: "no-changes")),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.setComponents(selection)
+
+        try await workflow.runRepairExtraDryRun(group: .guildCards)
+        XCTAssertTrue(workflow.canWriteRepairExtraGroup(.guildCards))
+        try await workflow.writeRepairExtraGroup(.guildCards)
+
+        let commands = await executor.recordedCommands()
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--group", "guild-cards"))
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--current-dir", selection.extraCurrentDirectory!.path))
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--output-dir", selection.extraTargetDirectory!.path))
+        XCTAssertFalse(commands[0].arguments.contains("repair-converted"))
+    }
+
+    func testFailedGuildCardWriteDoesNotRevokeQuestRepairAuthorization() async throws {
+        let selection = ComponentSelection(
+            includeGuildCards: true,
+            includeQuests: true,
+            extraSourceDirectory: URL(fileURLWithPath: "/tmp/3ds-extdata/user"),
+            extraCurrentDirectory: URL(fileURLWithPath: "/tmp/current-cemu"),
+            extraTargetDirectory: URL(fileURLWithPath: "/tmp/output-cemu")
+        )
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairExtrasResult(selection: selection, status: "dry-run", group: .guildCards)),
+            .success(repairExtrasResult(selection: selection, status: "dry-run", group: .quests)),
+            .success(ConverterCommandResult(exitCode: 2, stdout: Data(), stderr: Data("card output changed".utf8))),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setRepairFromVersion(.v0_0_5)
+        workflow.setComponents(selection)
+
+        try await workflow.runRepairExtraDryRun(group: .guildCards)
+        try await workflow.runRepairExtraDryRun(group: .quests)
+        XCTAssertTrue(workflow.canWriteRepairExtraGroup(.guildCards))
+        XCTAssertTrue(workflow.canWriteRepairExtraGroup(.quests))
+
+        do {
+            try await workflow.writeRepairExtraGroup(.guildCards)
+            XCTFail("the failed card write must surface its CLI failure")
+        } catch {
+            XCTAssertTrue(error is ConversionWorkflowError)
+        }
+
+        XCTAssertFalse(workflow.canWriteRepairExtraGroup(.guildCards))
+        XCTAssertTrue(workflow.canWriteRepairExtraGroup(.quests))
+    }
+
+    func testRepairCECUsesSeparateCurrentAndOutputCaches() async throws {
+        let selection = ComponentSelection(
+            cecSourceDirectory: URL(fileURLWithPath: "/tmp/CEC/00048100"),
+            cecCurrent: URL(fileURLWithPath: "/tmp/current-cemu/cec"),
+            cecTarget: URL(fileURLWithPath: "/tmp/output-cemu/cec"),
+            acknowledgeExperimentalCEC: true
+        )
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(repairCECResult(selection: selection, status: "dry-run")),
+            .success(repairCECResult(selection: selection, status: "no-changes")),
+        ])
+        let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
+        workflow.setMode(.repairConverted)
+        workflow.setComponents(selection)
+
+        try await workflow.runCECDryRun()
+        XCTAssertTrue(workflow.canWriteCEC)
+        try await workflow.writeCEC()
+
+        let commands = await executor.recordedCommands()
+        XCTAssertEqual(commands[0].arguments.first, "repair-cec")
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--current", selection.cecCurrent!.path))
+        XCTAssertTrue(commands[0].arguments.containsAdjacent("--output", selection.cecTarget!.path))
+        XCTAssertTrue(commands[1].arguments.contains("--experimental"))
+    }
+
     func testCompatibilityManifestUsesRollbackRepair() async throws {
         let executor = FakeConverterCommandExecutor(results: [
             .success(rolledBackResult(operation: ConverterOperation.rollbackRepair.rawValue)),
@@ -185,7 +297,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.selectedOptionalDataIsConfigured)
     }
 
-    func testIncompleteSelectedOptionalDataBlocksCoreDryRunAcrossNavigation() async throws {
+    func testIncompleteSelectedOptionalDataDoesNotBlockIndependentCoreDryRun() async throws {
         let executor = FakeConverterCommandExecutor(results: [.success(dryRunResult())])
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.configure(input: fixtureInput)
@@ -193,18 +305,16 @@ final class ConversionWorkflowTests: XCTestCase {
         workflow.setComponents(ComponentSelection(includeGuildCards: true))
 
         XCTAssertFalse(workflow.selectedOptionalDataIsConfigured)
-        XCTAssertFalse(workflow.canStartDryRun)
-
-        do {
-            try await workflow.runCoreDryRun()
-            XCTFail("selected optional data must be configured before the core Dry Run")
-        } catch {
-            XCTAssertEqual(error as? ConversionWorkflowError, .missingExtraDirectories)
-        }
+        XCTAssertTrue(workflow.canStartDryRun)
+        try await workflow.runCoreDryRun()
+        XCTAssertTrue(workflow.canWrite)
     }
 
-    func testIncompleteSelectedOptionalDataBlocksAnExistingCoreWriteAuthorization() async throws {
-        let executor = FakeConverterCommandExecutor(results: [.success(dryRunResult())])
+    func testIncompleteSelectedOptionalDataDoesNotRevokeCoreWriteAuthorization() async throws {
+        let executor = FakeConverterCommandExecutor(results: [
+            .success(dryRunResult()),
+            .success(writtenResult(operation: ConverterOperation.convert.rawValue)),
+        ])
         let workflow = ConversionWorkflow(executable: fixtureExecutable, executor: executor)
         workflow.configure(input: fixtureInput)
         workflow.applyInspections(source: fixtureSourceInspection, target: fixtureTargetInspection)
@@ -213,14 +323,9 @@ final class ConversionWorkflowTests: XCTestCase {
 
         workflow.setComponents(ComponentSelection(includeGuildCards: true))
         XCTAssertFalse(workflow.selectedOptionalDataIsConfigured)
-        XCTAssertFalse(workflow.canWrite)
-
-        do {
-            try await workflow.writeCore()
-            XCTFail("an incomplete optional selection must block an existing core write authorization")
-        } catch {
-            XCTAssertEqual(error as? ConversionWorkflowError, .missingExtraDirectories)
-        }
+        XCTAssertTrue(workflow.canWrite)
+        try await workflow.writeCore()
+        XCTAssertTrue(workflow.coreWriteCompleted)
     }
 
     func testCoreWriteDoesNotMarkSelectedOptionalDataAsComplete() async throws {
@@ -1247,6 +1352,45 @@ private func repairWrittenResult(
 private func repairNoChangesResult() -> ConverterCommandResult {
     let json = """
     {"operation":"repair-converted","status":"no-changes","source":"\(fixtureRepairInput.source.path)","current":"\(fixtureRepairInput.current!.path)","output":"\(fixtureRepairInput.target.path)","source_set_sha256":"\(fixtureRepairSourceSetSHA256)","current_set_sha256":"\(fixtureRepairCurrentSetSHA256)","output_set_sha256":"\(fixtureRepairOutputSetSHA256)","preview_sha256":"\(fixtureRepairPreviewSHA256)","components":[{"component":"user2","target":"\(fixtureRepairInput.target.path)","modified":false,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"user2","source_sha256":"\(validSHA("4"))","current_sha256":"\(validSHA("5"))","merged_sha256":"\(validSHA("5"))"}}],"manifests":[],"compatibility_manifest":null}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairSystemResult(
+    selection: ComponentSelection,
+    status: String
+) -> ConverterCommandResult {
+    let manifest = status == "written" ? "\"/tmp/output-shared/.system.manifest.json\"" : "null"
+    let json = """
+    {"operation":"repair-system","status":"\(status)","source":"\(selection.systemSource!.path)","current":"\(selection.systemCurrent!.path)","output":"\(selection.systemTarget!.path)","source_set_sha256":"\(validSHA("1"))","current_set_sha256":"\(validSHA("2"))","output_set_sha256":"\(validSHA("3"))","preview_sha256":"\(validSHA("4"))","manifest":\(manifest)}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairExtrasResult(
+    selection: ComponentSelection,
+    status: String,
+    group: ExtraGroup = .guildCards
+) -> ConverterCommandResult {
+    let components = group.componentNames.map { component in
+        """
+        {"component":"\(component)","target":"\(selection.extraTargetDirectory!.path)/\(component)","modified":false,"detection":{"confidence":"selected","candidates":["0.0.5"]},"merge":{"component":"\(component)","source_sha256":"\(validSHA("5"))","current_sha256":"\(validSHA("6"))","merged_sha256":"\(validSHA("6"))"}}
+        """
+    }.joined(separator: ",")
+    let manifest = status == "written" ? "\"/tmp/output-cemu/.extras.manifest.json\"" : "null"
+    let json = """
+    {"operation":"repair-extras","status":"\(status)","group":"\(group.rawValue)","source_dir":"\(selection.extraSourceDirectory!.path)","current_dir":"\(selection.extraCurrentDirectory!.path)","output_dir":"\(selection.extraTargetDirectory!.path)","source_set_sha256":"\(validSHA("1"))","current_set_sha256":"\(validSHA("2"))","output_set_sha256":"\(validSHA("3"))","preview_sha256":"\(validSHA("4"))","detection":{"confidence":"selected","candidates":["0.0.5"]},"components":[\(components)],"manifest":\(manifest)}
+    """
+    return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
+}
+
+private func repairCECResult(
+    selection: ComponentSelection,
+    status: String
+) -> ConverterCommandResult {
+    let manifest = status == "written" ? "\"/tmp/output-cemu/.cec.manifest.json\"" : "null"
+    let json = """
+    {"operation":"repair-cec","status":"\(status)","source_dir":"\(selection.cecSourceDirectory!.path)","current":"\(selection.cecCurrent!.path)","output":"\(selection.cecTarget!.path)","source_record_set_sha256":"\(validSHA("a"))","current_set_sha256":"\(validSHA("b"))","output_set_sha256":"\(validSHA("c"))","preview_sha256":"\(validSHA("d"))","manifest":\(manifest)}
     """
     return ConverterCommandResult(exitCode: 0, stdout: Data(json.utf8), stderr: Data())
 }

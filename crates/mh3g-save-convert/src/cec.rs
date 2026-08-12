@@ -11,11 +11,15 @@ use crate::{
     ConversionError, io_at_path,
     process_probe::{PlatformProcessProbe, ProcessProbe},
     profile::build_jp_cemu_header,
+    revision::ConverterRevision,
     transaction::{
         atomic_replace, remove_if_regular_file, sha256_hex, sync_directory, unique_path,
         write_new_file,
     },
-    transforms::{GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections},
+    transforms::{
+        GUILD_CARD_SLOT_SIZE, apply_japanese_wiiu_guild_card_slot_corrections,
+        apply_japanese_wiiu_guild_card_slot_corrections_for_revision,
+    },
 };
 
 const BOX_INFO_SIZE: usize = 0x20;
@@ -551,6 +555,12 @@ fn validate_cemu_cec_bytes(bytes: &[u8]) -> Result<(), ConversionError> {
     Ok(())
 }
 
+/// Validate an in-memory Japanese MH3G Cemu `cec` container without reading
+/// or mutating emulator state.
+pub fn validate_cemu_cec(bytes: &[u8]) -> Result<(), ConversionError> {
+    validate_cemu_cec_bytes(bytes)
+}
+
 pub fn empty_cemu_cec() -> Result<Vec<u8>, ConversionError> {
     let header = build_jp_cemu_header("cec", CEMU_CEC_PAYLOAD_SIZE)?;
     let mut bytes = Vec::with_capacity(CEMU_HEADER_SIZE + CEMU_CEC_PAYLOAD_SIZE);
@@ -585,6 +595,138 @@ pub fn convert_cec_records(
     convert_collected_cec_records(records, target_bytes, requested_slot)
 }
 
+/// Repair a Cemu CEC cache without treating the independently selected output
+/// as the read authority.
+///
+/// Received records produced by one of the supported historical converter
+/// revisions are replaced in their existing slots with the current mapping.
+/// Already-current records and records unrelated to the supplied 3DS mailbox
+/// are preserved byte-for-byte. Missing source records are inserted into empty
+/// slots using the same deterministic assignment as a fresh conversion.
+pub fn repair_cec_records(
+    source_dir: &Path,
+    current_bytes: &[u8],
+    requested_slot: Option<usize>,
+) -> Result<CecConversion, ConversionError> {
+    validate_cemu_cec_bytes(current_bytes)?;
+    let mut records = collect_received_mh3g_records(source_dir)?;
+    if records.is_empty() {
+        return Err(ConversionError::InvalidSave(
+            "3DS CEC InBox___ contains no non-empty received MH3G records".to_owned(),
+        ));
+    }
+    records.sort_by(|left, right| left.sha256.cmp(&right.sha256));
+    let source_record_set_sha256 = source_record_set_sha256(&records);
+    let before_sha256 = sha256_hex(current_bytes);
+    let mut output = current_bytes.to_vec();
+    let mut changed_records = Vec::new();
+    let mut changed_slots = Vec::new();
+    let mut missing_records = Vec::new();
+
+    for mut record in records {
+        let source = record.record.clone();
+        let current = convert_cec_record(&source)?;
+        let already_current = (0..CEMU_RECORD_SLOT_COUNT).any(|slot| {
+            cemu_record_range(slot)
+                .ok()
+                .is_some_and(|range| output[range] == current)
+        });
+        if already_current {
+            continue;
+        }
+
+        let historical = ConverterRevision::ALL
+            .into_iter()
+            .map(|revision| convert_cec_record_for_revision(&source, revision))
+            .collect::<Result<Vec<_>, ConversionError>>()?;
+        let historical_slot = (0..CEMU_RECORD_SLOT_COUNT).find(|slot| {
+            cemu_record_range(*slot).ok().is_some_and(|range| {
+                historical
+                    .iter()
+                    .any(|candidate| candidate != &current && output[range.clone()] == *candidate)
+            })
+        });
+        record.record = current;
+        if let Some(slot) = historical_slot {
+            let range = cemu_record_range(slot)?;
+            output[range].copy_from_slice(&record.record);
+            changed_slots.push(slot);
+            changed_records.push(record);
+        } else {
+            missing_records.push(record);
+        }
+    }
+
+    let mut empty_slots = (0..CEMU_RECORD_SLOT_COUNT)
+        .filter(|slot| {
+            cemu_record_range(*slot)
+                .ok()
+                .is_some_and(|range| output[range].iter().all(|byte| *byte == 0))
+        })
+        .collect::<Vec<_>>();
+    if let Some(start) = requested_slot {
+        if start >= CEMU_RECORD_SLOT_COUNT {
+            return Err(ConversionError::InvalidSave(format!(
+                "Cemu cec slot is out of range: {start} (max {})",
+                CEMU_RECORD_SLOT_COUNT - 1
+            )));
+        }
+        empty_slots.retain(|slot| *slot >= start);
+    }
+    if missing_records.len() > empty_slots.len() {
+        return Err(ConversionError::UnsafeInstall(format!(
+            "Cemu cec has {} empty slots but {} MH3G records need import",
+            empty_slots.len(),
+            missing_records.len()
+        )));
+    }
+    for (record, slot) in missing_records.into_iter().zip(empty_slots) {
+        let range = cemu_record_range(slot)?;
+        output[range].copy_from_slice(&record.record);
+        changed_slots.push(slot);
+        changed_records.push(record);
+    }
+
+    Ok(CecConversion {
+        after_sha256: sha256_hex(&output),
+        bytes: output,
+        records: changed_records,
+        slots: changed_slots,
+        source_record_set_sha256,
+        before_sha256,
+    })
+}
+
+fn convert_cec_record(source: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    let mut converted = source.to_vec();
+    for slot in 0..CEC_GUILD_CARD_SLOT_COUNT {
+        let start = slot * GUILD_CARD_SLOT_SIZE;
+        let end = start + GUILD_CARD_SLOT_SIZE;
+        apply_japanese_wiiu_guild_card_slot_corrections(
+            &source[start..end],
+            &mut converted[start..end],
+        )?;
+    }
+    Ok(converted)
+}
+
+fn convert_cec_record_for_revision(
+    source: &[u8],
+    revision: ConverterRevision,
+) -> Result<Vec<u8>, ConversionError> {
+    let mut converted = source.to_vec();
+    for slot in 0..CEC_GUILD_CARD_SLOT_COUNT {
+        let start = slot * GUILD_CARD_SLOT_SIZE;
+        let end = start + GUILD_CARD_SLOT_SIZE;
+        apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
+            &source[start..end],
+            &mut converted[start..end],
+            revision,
+        )?;
+    }
+    Ok(converted)
+}
+
 fn convert_collected_cec_records(
     mut records: Vec<CecRecordSource>,
     target_bytes: &[u8],
@@ -609,16 +751,7 @@ fn convert_collected_cec_records(
         .into_iter()
         .map(|mut record| {
             let source = record.record.clone();
-            let mut converted = source.clone();
-            for slot in 0..CEC_GUILD_CARD_SLOT_COUNT {
-                let start = slot * GUILD_CARD_SLOT_SIZE;
-                let end = start + GUILD_CARD_SLOT_SIZE;
-                apply_japanese_wiiu_guild_card_slot_corrections(
-                    &source[start..end],
-                    &mut converted[start..end],
-                )?;
-            }
-            record.record = converted;
+            record.record = convert_cec_record(&source)?;
             Ok(record)
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
@@ -824,6 +957,39 @@ pub fn install_cec_with(
             "CEC target changed after the conversion plan was created".to_owned(),
         ));
     }
+    install_cec_transaction(source_dir, target, conversion, &context)
+}
+
+/// Install a conversion derived from an independent read-only Cemu baseline.
+///
+/// Unlike [`install_cec_with`], `conversion.before_sha256` identifies the
+/// separately selected current/reference cache rather than the output path.
+/// The output is therefore guarded by its own expected hash before the
+/// precomputed bytes are installed. A missing output uses the same canonical
+/// empty-container fingerprint as the existing CEC export flow.
+pub fn install_precomputed_cec_with_target_expectation(
+    source_dir: &Path,
+    target: &Path,
+    conversion: &CecConversion,
+    expected_target_sha256: &str,
+) -> Result<CecInstallResult, ConversionError> {
+    validate_cec_install_expectations(CecInstallExpectations {
+        source_record_set_sha256: None,
+        target_sha256: Some(expected_target_sha256),
+    })?;
+    validate_cemu_cec_bytes(&conversion.bytes)?;
+    if sha256_hex(&conversion.bytes) != conversion.after_sha256 {
+        return Err(ConversionError::UnsafeInstall(
+            "precomputed CEC conversion bytes do not match their planned hash".to_owned(),
+        ));
+    }
+    let context = prepare_cec_install(target, &PlatformProcessProbe::default())?;
+    let observed_target_sha256 = observed_cec_target_sha256(&context)?;
+    ensure_expected_cec_hash(
+        Some(expected_target_sha256),
+        &observed_target_sha256,
+        "output target",
+    )?;
     install_cec_transaction(source_dir, target, conversion, &context)
 }
 
@@ -1377,6 +1543,51 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(before.bytes, after.bytes);
+    }
+
+    #[test]
+    fn repair_replaces_a_historical_cec_record_in_place() {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("InBox___");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
+
+        let mut source_record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
+        // Arena record conversion was added after 0.0.3, which gives this
+        // fixture a stable historical signature without inventing a corrupt
+        // container.
+        let late_arena_record = 0x9B4 + 109 * 4;
+        source_record[late_arena_record..late_arena_record + 4]
+            .copy_from_slice(&[0x34, 0x12, 0x78, 0x56]);
+        fs::write(
+            inbox.join("_A"),
+            received_message_with_record(&source_record),
+        )
+        .unwrap();
+
+        let old =
+            convert_cec_record_for_revision(&source_record, ConverterRevision::V0_0_3).unwrap();
+        let latest = convert_cec_record(&source_record).unwrap();
+        assert_ne!(old, latest);
+
+        let mut current = empty_cemu_cec().unwrap();
+        let occupied_slot = 7;
+        let range = cemu_record_range(occupied_slot).unwrap();
+        current[range.clone()].copy_from_slice(&old);
+        // An unrelated current Cemu record must remain untouched.
+        let unrelated_slot = 2;
+        let unrelated_range = cemu_record_range(unrelated_slot).unwrap();
+        current[unrelated_range.clone()].fill(0xA5);
+
+        let repair = repair_cec_records(temp.path(), &current, None).unwrap();
+
+        assert_eq!(repair.slots, vec![occupied_slot]);
+        assert_eq!(&repair.bytes[range], latest.as_slice());
+        assert_eq!(
+            &repair.bytes[unrelated_range.clone()],
+            &current[unrelated_range]
+        );
+        assert_eq!(repair.records.len(), 1);
     }
 
     #[test]
