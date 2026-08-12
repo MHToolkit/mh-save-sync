@@ -69,6 +69,15 @@ final class LocalizationTests: XCTestCase {
             "Repair.Version.Hint",
             "Repair.Version.Required",
             "Repair.PreviewSHA256",
+            "Input.SelectFile",
+            "Input.SelectDirectory",
+            "Input.SelectFileOrDirectory",
+            "Input.SourceSelectionHint",
+            "Input.CurrentSelectionHint",
+            "Input.OutputSelectionHint",
+            "Input.PathGuideTitle",
+            "Input.PathGuideSummary",
+            "Input.PathGuideExample",
         ] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing \(key)")
             let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any])
@@ -117,6 +126,17 @@ final class LocalizationTests: XCTestCase {
         ] {
             XCTAssertNotEqual(ConverterCopy.text(key, language: .zhHans), key, "missing zh-Hans value for \(key)")
             XCTAssertNotEqual(ConverterCopy.text(key, language: .english), key, "missing English value for \(key)")
+        }
+    }
+
+    func testPathSelectionCopyExplainsFilesFoldersAndDirectChildren() {
+        for language in [ConverterLanguage.zhHans, .english] {
+            let guide = ConverterCopy.text("Input.PathGuideSummary", language: language)
+            let example = ConverterCopy.text("Input.PathGuideExample", language: language)
+            XCTAssertTrue(guide.localizedCaseInsensitiveContains("user#"))
+            XCTAssertTrue(example.contains("user2"))
+            XCTAssertTrue(example.contains("3DS"))
+            XCTAssertTrue(example.contains("Cemu"))
         }
     }
 

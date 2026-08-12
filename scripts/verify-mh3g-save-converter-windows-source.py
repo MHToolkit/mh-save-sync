@@ -614,6 +614,10 @@ def main() -> int:
         'PlaceholderText="{Binding CoreTargetPlaceholder}"',
         'Click="ChooseCurrentFile_Click"',
         'Click="ChooseCurrentFolder_Click"',
+        'Header="{Binding Copy.PathSelectionGuideTitle}"',
+        'Text="{Binding Copy.PathSelectionGuideSummary}"',
+        'Text="{Binding Copy.PathSelectionGuideExample}"',
+        'IsTextSelectionEnabled="True"',
     ):
         require(expected in window, f"repair mode must expose independent current/output controls: {expected}")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
@@ -880,6 +884,10 @@ def main() -> int:
         "Check for Updates",
         "检查更新",
         "UpdateNetworkNote",
+        "File or direct parent folder supported",
+        "支持单文件或直接父目录",
+        "ZIP, 7z, or RAR",
+        "ZIP、7z、RAR",
     ):
         require(expected in copy, f"localized copy is missing {expected}")
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")

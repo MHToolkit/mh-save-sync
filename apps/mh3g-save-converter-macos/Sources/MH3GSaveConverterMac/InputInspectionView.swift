@@ -53,10 +53,12 @@ struct InputInspectionView: View {
                     .onChange(of: slot) { _, _ in
                         resolveSelections()
                     }
+                    CorePathSelectionGuide(language: language)
                     SelectedPathRow(
                         title: ConverterCopy.text("Input.Source", language: language),
                         value: source,
-                        chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                        chooseTitle: ConverterCopy.text("Input.SelectFileOrDirectory", language: language),
+                        selectionHint: ConverterCopy.text("Input.SourceSelectionHint", language: language)
                     ) {
                         chooseSource()
                     }
@@ -64,7 +66,8 @@ struct InputInspectionView: View {
                         SelectedPathRow(
                             title: ConverterCopy.text("Input.Current", language: language),
                             value: current ?? workflow.input?.current,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            chooseTitle: ConverterCopy.text("Input.SelectFileOrDirectory", language: language),
+                            selectionHint: ConverterCopy.text("Input.CurrentSelectionHint", language: language)
                         ) {
                             chooseCurrent()
                         }
@@ -81,7 +84,8 @@ struct InputInspectionView: View {
                             language: language
                         ),
                         value: target ?? workflow.input?.target,
-                        chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                        chooseTitle: ConverterCopy.text("Input.SelectFileOrDirectory", language: language),
+                        selectionHint: ConverterCopy.text("Input.OutputSelectionHint", language: language)
                     ) {
                         chooseTarget()
                     }
@@ -328,36 +332,59 @@ struct SelectedPathRow: View {
     let title: String
     let value: URL?
     let chooseTitle: String
+    let selectionHint: String?
     let choose: () -> Void
 
+    init(
+        title: String,
+        value: URL?,
+        chooseTitle: String,
+        selectionHint: String? = nil,
+        choose: @escaping () -> Void
+    ) {
+        self.title = title
+        self.value = value
+        self.chooseTitle = chooseTitle
+        self.selectionHint = selectionHint
+        self.choose = choose
+    }
+
     var body: some View {
-        LabeledContent(title) {
-            HStack(alignment: .center, spacing: 8) {
-                if let value {
-                    Image(systemName: icon(for: value))
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(value.lastPathComponent)
-                            .lineLimit(1)
-                        Text(value.deletingLastPathComponent().path)
-                            .font(.caption.monospaced())
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent(title) {
+                HStack(alignment: .center, spacing: 8) {
+                    if let value {
+                        Image(systemName: icon(for: value))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .help(value.path)
-                } else {
-                    Text("—")
-                        .foregroundStyle(.secondary)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(value.lastPathComponent)
+                                .lineLimit(1)
+                            Text(value.deletingLastPathComponent().path)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .textSelection(.enabled)
+                        }
                         .frame(maxWidth: .infinity, alignment: .trailing)
+                        .help(value.path)
+                    } else {
+                        Text("—")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    Button(action: choose) {
+                        Label(chooseTitle, systemImage: "folder.badge.plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(chooseTitle)
+                    .accessibilityLabel(chooseTitle)
                 }
-                Button(action: choose) {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .buttonStyle(.borderless)
-                .help(chooseTitle)
-                .accessibilityLabel(chooseTitle)
+            }
+            if let selectionHint {
+                Label(selectionHint, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -366,6 +393,31 @@ struct SelectedPathRow: View {
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
         return isDirectory.boolValue ? "folder.fill" : "doc.fill"
+    }
+}
+
+private struct CorePathSelectionGuide: View {
+    let language: ConverterLanguage
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(ConverterCopy.text("Input.PathGuideSummary", language: language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(ConverterCopy.text("Input.PathGuideExample", language: language))
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 6)
+        } label: {
+            Label(
+                ConverterCopy.text("Input.PathGuideTitle", language: language),
+                systemImage: "folder.badge.questionmark"
+            )
+        }
     }
 }
 

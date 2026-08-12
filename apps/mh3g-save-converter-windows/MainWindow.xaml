@@ -199,6 +199,13 @@
                             <TextBlock Text="{Binding Copy.SaveSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
                         </StackPanel>
 
+                        <Expander Header="{Binding Copy.PathSelectionGuideTitle}">
+                            <StackPanel Spacing="10" Padding="0,8,0,2">
+                                <TextBlock Text="{Binding Copy.PathSelectionGuideSummary}" Style="{StaticResource SectionCaptionTextStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding Copy.PathSelectionGuideExample}" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                            </StackPanel>
+                        </Expander>
+
                         <StackPanel Spacing="7">
                             <TextBlock Text="{Binding Copy.SourceSlot}" FontWeight="SemiBold" />
                             <Grid ColumnSpacing="8">

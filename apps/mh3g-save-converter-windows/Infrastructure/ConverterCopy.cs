@@ -83,6 +83,9 @@ public sealed class ConverterCopy : ObservableObject
     public string CoreSectionDescription => Text(nameof(CoreSectionDescription));
     public string SaveSlot => Text(nameof(SaveSlot));
     public string SaveSlotHint => Text(nameof(SaveSlotHint));
+    public string PathSelectionGuideTitle => Text(nameof(PathSelectionGuideTitle));
+    public string PathSelectionGuideSummary => Text(nameof(PathSelectionGuideSummary));
+    public string PathSelectionGuideExample => Text(nameof(PathSelectionGuideExample));
     public string SourceSlot => Text(nameof(SourceSlot));
     public string SourceSlotHint => Text(nameof(SourceSlotHint));
     public string CurrentSlot => Text(nameof(CurrentSlot));
@@ -258,6 +261,9 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CoreSectionDescription)] = "Choose one user# slot. Each selected input folder resolves only its direct child; the output folder resolves to the same user# name.",
         [nameof(SaveSlot)] = "Save slot",
         [nameof(SaveSlotHint)] = "This selects the direct user# child used when you choose a folder. A directly selected source file must match it.",
+        [nameof(PathSelectionGuideTitle)] = "File or direct parent folder supported (show example)",
+        [nameof(PathSelectionGuideSummary)] = "Only the direct same-name user# is resolved. The app never recursively scans an SD card or MLC and never reads ZIP, 7z, or RAR archives.",
+        [nameof(PathSelectionGuideExample)] = "Example (user2 selected)\n\n3DS save parent/\n├── system        (not read by this control)\n└── user2         <- 3DS source\n\nCurrent Cemu save folder/\n├── user2         <- current reference (repair only, read-only)\n├── card1, card2, card3, cardbox   (read for guild-card repair)\n└── quest1 ... quest4             (validated and preserved for repair)\n\nOutput folder/\n├── user2         <- result (may be absent for a core-only operation)\n└── card1, card2, card3, cardbox   (must exist for separate guild-card output)",
         [nameof(SourceSlot)] = "3DS source",
         [nameof(SourceSlotHint)] = "Choose user1, user2, or user3, or a folder that directly contains the selected file. No archive or recursive SD-card search is used.",
         [nameof(CurrentSlot)] = "Current Wii U / Cemu reference save",
@@ -437,6 +443,9 @@ public sealed class ConverterCopy : ObservableObject
         [nameof(CoreSectionDescription)] = "选择一个 user# 槽位。每个输入目录只解析其直接子文件；输出目录会解析为同名 user#。",
         [nameof(SaveSlot)] = "存档槽位",
         [nameof(SaveSlotHint)] = "选择目录时会使用这个直接子文件。直接选择的源文件必须与这个槽位同名。",
+        [nameof(PathSelectionGuideTitle)] = "支持单文件或直接父目录（查看结构示例）",
+        [nameof(PathSelectionGuideSummary)] = "只解析所选目录的直接同名 user#；不会递归扫描 SD 卡或 MLC，也不会读取 ZIP、7z、RAR。",
+        [nameof(PathSelectionGuideExample)] = "示例（选择 user2）\n\n3DS 存档直接父目录/\n├── system        （本控件不读取）\n└── user2         <- 3DS 源\n\n当前 Cemu 存档目录/\n├── user2         <- 当前引用（仅修复，只读）\n├── card1、card2、card3、cardbox   （修复名片时读取）\n└── quest1 ... quest4             （修复名片时校验并保留）\n\n输出目录/\n├── user2         <- 转换结果（仅处理核心角色时可暂不存在）\n└── card1、card2、card3、cardbox   （修复名片并独立输出时必须已存在）",
         [nameof(SourceSlot)] = "3DS 源存档",
         [nameof(SourceSlotHint)] = "选择 user1、user2 或 user3，或直接包含所选文件的目录。不扫描压缩包，也不会递归扫描 SD 卡。",
         [nameof(CurrentSlot)] = "当前 Wii U / Cemu 引用存档",

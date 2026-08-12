@@ -22,14 +22,14 @@ struct ExperimentalCECView: View {
                             SelectedPathRow(
                                 title: ConverterCopy.text("CEC.Source", language: language),
                                 value: workflow.components.cecSourceDirectory,
-                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                                chooseTitle: ConverterCopy.text("Input.SelectDirectory", language: language)
                             ) {
                                 chooseSource()
                             }
                             SelectedPathRow(
                                 title: ConverterCopy.text("CEC.Target", language: language),
                                 value: workflow.components.cecTarget,
-                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                                chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
                             ) {
                                 chooseTarget()
                             }
@@ -73,7 +73,7 @@ struct ExperimentalCECView: View {
                     SelectedPathRow(
                         title: ConverterCopy.text("CEC.Manifest", language: language),
                         value: manifest,
-                        chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                        chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
                     ) {
                         manifest = OpenPanel.selectFile(
                             title: ConverterCopy.text("CEC.Manifest", language: language),
