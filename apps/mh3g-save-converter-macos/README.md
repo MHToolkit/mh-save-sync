@@ -28,6 +28,9 @@ The core picker accepts an exact `user1`, `user2`, or `user3` file or its
 direct parent. It does not recursively scan an SD card or MLC and does not open
 ZIP, 7z, or RAR archives. A directory resolves only to the directly contained
 same-named selected slot.
+The UI keeps the file-or-folder choice visible and provides an expandable
+`user2` directory-tree example, so the expected level is clear before opening
+the system picker.
 
 Every write is bound to the immediately preceding Dry Run's SHA-256 values.
 Normal conversion uses a single-file manifest; compatibility repair uses

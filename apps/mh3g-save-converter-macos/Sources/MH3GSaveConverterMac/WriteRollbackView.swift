@@ -121,7 +121,7 @@ struct WriteRollbackView: View {
             SelectedPathRow(
                 title: ConverterCopy.text("Write.Manifest", language: language),
                 value: coreManifest,
-                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
             ) {
                 coreManifest = selectManifest(
                     title: ConverterCopy.text("Write.SelectManifest", language: language)
@@ -155,7 +155,7 @@ struct WriteRollbackView: View {
             SelectedPathRow(
                 title: ConverterCopy.text("Write.Manifest", language: language),
                 value: systemManifest,
-                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
             ) {
                 systemManifest = selectManifest(
                     title: ConverterCopy.text("Write.SelectManifest", language: language)
@@ -205,7 +205,7 @@ struct WriteRollbackView: View {
             SelectedPathRow(
                 title: ConverterCopy.text("Write.ExtrasManifest", language: language),
                 value: extrasManifest,
-                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
             ) {
                 extrasManifest = selectManifest(
                     title: ConverterCopy.text("Write.ExtrasManifest", language: language)

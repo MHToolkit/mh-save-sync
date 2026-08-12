@@ -21,6 +21,8 @@ sidecar 并展示 JSON 报告，不在 Swift 中重复实现存档转换。
 
 核心选择器接受准确 `user1`、`user2`、`user3` 文件或其直接父目录。它不会递归
 扫描 SD 卡/MLC，不接受 ZIP、7z、RAR。目录只解析成当前选中槽位的同名直接子文件。
+界面会持续显示“文件或目录”选择类型，并提供可展开的 `user2` 目录树示例；无需
+先打开系统文件选择器才能知道应当选择哪一层。
 
 每次写入都绑定紧邻 Dry Run 的 SHA-256。普通转换使用单文件 manifest；兼容修复
 使用 `.mh3g-compatibility-repair-<UUID>.json` 并通过 `rollback-repair` 总体回滚。

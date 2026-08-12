@@ -21,6 +21,9 @@ code.
   `repair-converted`; optional complete 3DS ExtData enables guild-card repair.
   A separate card output must already be initialized. Ambiguous detection
   requires choosing 0.0.3 through 0.0.6 and repeating Dry Run.
+- Every core path exposes explicit `File` and `Folder` buttons. An expandable
+  `user2` tree shows the accepted directory level and states that resolution is
+  direct-only, non-recursive, and archive-free.
 - The UI opens a confirmation dialog before writing. Normal conversion records
   its single-file manifest; repair records
   `.mh3g-compatibility-repair-<UUID>.json` and uses `rollback-repair`.

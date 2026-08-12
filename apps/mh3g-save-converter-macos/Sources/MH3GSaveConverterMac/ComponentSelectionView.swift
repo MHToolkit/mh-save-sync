@@ -21,14 +21,14 @@ struct ComponentSelectionView: View {
                         SelectedPathRow(
                             title: ConverterCopy.text("Components.SystemSource", language: language),
                             value: workflow.components.systemSource,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
                         ) {
                             chooseSystemSource()
                         }
                         SelectedPathRow(
                             title: ConverterCopy.text("Components.SystemTarget", language: language),
                             value: workflow.components.systemTarget,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            chooseTitle: ConverterCopy.text("Input.SelectFile", language: language)
                         ) {
                             chooseSystemTarget()
                         }
@@ -77,7 +77,7 @@ struct ComponentSelectionView: View {
                         SelectedPathRow(
                             title: ConverterCopy.text("Components.ExtDataSource", language: language),
                             value: workflow.components.extraSourceDirectory,
-                            chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                            chooseTitle: ConverterCopy.text("Input.SelectDirectory", language: language)
                         ) {
                             chooseExtraSource()
                         }
@@ -85,14 +85,14 @@ struct ComponentSelectionView: View {
                             SelectedPathRow(
                                 title: ConverterCopy.text("Components.Staging", language: language),
                                 value: workflow.components.extraStagingDirectory,
-                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                                chooseTitle: ConverterCopy.text("Input.SelectDirectory", language: language)
                             ) {
                                 chooseExtraStaging()
                             }
                             SelectedPathRow(
                                 title: ConverterCopy.text("Components.Target", language: language),
                                 value: workflow.components.extraTargetDirectory,
-                                chooseTitle: ConverterCopy.text("Input.Select", language: language)
+                                chooseTitle: ConverterCopy.text("Input.SelectDirectory", language: language)
                             ) {
                                 chooseExtraTarget()
                             }
