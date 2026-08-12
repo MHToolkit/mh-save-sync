@@ -218,6 +218,16 @@ with such a tool can turn its pigment black even when the converted talisman is
 valid. These editor behaviors must not be "fixed" by clamping or rewriting
 otherwise valid converted equipment records.
 
+### Cha-Cha / Kayamba mask proficiency
+
+The companion mask/mastery area in `user#` is a packed byte block, not a table
+of uniformly endian-swapped `u16` values. Current conversion preserves the
+confirmed packed range exactly while converting only the numeric prefix. This
+keeps the mask screen, companion status screen, and post-quest serializer on
+the same representation. Compatibility repair can also recognize and repair
+the historical two-byte swap at relative companion offset `0xE4` without
+replacing unrelated Wii U progress.
+
 ### Before you write: paths, inspection, and dry-run
 
 The examples below run from this repository after Rust is installed. Define a

@@ -14,7 +14,7 @@ MH3G HD Wii U/Cemu saves, but each release added narrowly scoped corrections:
 | --- | --- |
 | 0.0.3 | Full personal/received-card arena tables and the complete numeric prefix of both Shakalaka records |
 | 0.0.4 | Packed Shakalaka mask-state preservation and the shared Hunter's Notes visibility rule for received cards and offline-hall partners |
-| 0.0.5 | The isolated Lamp Mask mastery `u16` at relative Shakalaka offset `0xE4` |
+| 0.0.5 | Historical 0.0.6 behavior that swapped relative Shakalaka offset `0xE4` as an isolated `u16` (retained only for exact old-output replay; later disproved by paired official transfers) |
 | 0.0.6 | Current conversion baseline |
 
 Some players converted with an older release and then continued playing on
@@ -27,6 +27,23 @@ Older converter output does not contain a trustworthy embedded converter
 version. A byte pattern can support a version hypothesis, but ordinary gameplay
 can modify the same fields and erase that evidence. Therefore exact automatic
 version detection cannot be guaranteed for every played save.
+
+### Shakalaka mask-state erratum
+
+Five paired 3DS -> Wii U transfers agree byte-for-byte on both Cha-Cha and
+Kayamba records through relative offset `0x140`. The confirmed schema is one
+big-endian-converted `u32` prefix, `u16` scalars from relative `0x04` through
+`0xDE`, and a platform-invariant packed mask/mastery block from `0xDE` through
+`0x140`. Relative offset `0xE4` belongs to that packed block; it is not an
+isolated `u16`.
+
+The historical 0.0.6 transform swapped the two bytes at `0xE4`. For common
+source values such as `18 00`, that produced `00 18`, making the companion
+status path observe a zero byte. A quest completion could then serialize the
+zero back into the mask state. Current conversion restores the whole packed
+block from the 3DS source unchanged. Compatibility repair still replays the
+old transform for version detection, then repairs only matching historical
+fields and preserves later Wii U conflicts.
 
 ## Decision
 

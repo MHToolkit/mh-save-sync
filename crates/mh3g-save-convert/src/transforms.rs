@@ -58,17 +58,25 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
-// Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Each
-// starts with three u32 header fields and endian-sensitive u16 scalars. The
-// six bytes at relative 0xDE are packed mask state and must retain their byte
-// order. The immediately following relative 0xE4 Lamp Mask mastery is still a
-// u16 scalar, then the byte-packed tail resumes at 0xE6.
+// Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Five
+// independently paired 3DS -> Wii U transfers agree on the field boundaries
+// through relative 0x140: one u32 prefix, u16 scalars through 0xDE, then a
+// byte-packed mask/mastery block which must retain its exact byte order.
+//
+// Releases through 0.0.18 inherited two narrower schema assumptions from the
+// recovered transfer table: offsets 0x04..0x0B were treated as two u32 values,
+// and relative 0xE4 was treated as an isolated u16. Both assumptions disagree
+// with every paired transfer. In particular, swapping the packed bytes at
+// 0xE4 puts zero in the field read by the companion status screen; a quest
+// completion can then serialize that zero back over the mask record.
 const SHAKALAKA_RECORD_START: usize = 0x6F44;
 const SHAKALAKA_RECORD_COUNT: usize = 2;
 const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
-const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const HISTORICAL_SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const SHAKALAKA_U32_PREFIX_SIZE: usize = 0x04;
 const SHAKALAKA_MASK_STATE_START: usize = 0xDE;
-const SHAKALAKA_LAMP_MASK_MASTERY_START: usize = 0xE4;
+const HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET: usize = 0xE4;
+const SHAKALAKA_MASK_STATE_END: usize = 0x140;
 const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
@@ -865,7 +873,7 @@ fn apply_confirmed_numeric_and_record_corrections(
     Ok(())
 }
 
-fn apply_shakalaka_companion_corrections(
+fn apply_historical_shakalaka_companion_corrections(
     source: &[u8],
     target: &mut [u8],
     revision: ConverterRevision,
@@ -873,25 +881,52 @@ fn apply_shakalaka_companion_corrections(
     for companion in 0..SHAKALAKA_RECORD_COUNT {
         let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
 
-        for relative in (0..SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
+        for relative in (0..HISTORICAL_SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
             copy_reversed(source, target, record_start + relative, 4)?;
         }
         let scalar_end = if revision == ConverterRevision::V0_0_4 {
-            SHAKALAKA_LAMP_MASK_MASTERY_START + 2
+            HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET + 2
         } else {
             SHAKALAKA_MASK_STATE_START
         };
-        for relative in (SHAKALAKA_U32_HEADER_SIZE..scalar_end).step_by(2) {
+        for relative in (HISTORICAL_SHAKALAKA_U32_HEADER_SIZE..scalar_end).step_by(2) {
             copy_reversed(source, target, record_start + relative, 2)?;
         }
         if revision >= ConverterRevision::V0_0_6 {
             copy_reversed(
                 source,
                 target,
-                record_start + SHAKALAKA_LAMP_MASK_MASTERY_START,
+                record_start + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET,
                 2,
             )?;
         }
+    }
+
+    Ok(())
+}
+
+/// Reassert the companion schema proven by paired official transfers.
+///
+/// This is intentionally layered after the historical converter replay. The
+/// historical function above must stay byte-reproducible so compatibility
+/// repair can still recognize 0.0.3-0.0.6 output, while current conversion
+/// must use the corrected field boundaries.
+fn apply_current_shakalaka_companion_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for companion in 0..SHAKALAKA_RECORD_COUNT {
+        let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
+
+        copy_reversed(source, target, record_start, SHAKALAKA_U32_PREFIX_SIZE)?;
+        for relative in (SHAKALAKA_U32_PREFIX_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
+            copy_reversed(source, target, record_start + relative, 2)?;
+        }
+        target[record_start + SHAKALAKA_MASK_STATE_START..record_start + SHAKALAKA_MASK_STATE_END]
+            .copy_from_slice(
+                &source[record_start + SHAKALAKA_MASK_STATE_START
+                    ..record_start + SHAKALAKA_MASK_STATE_END],
+            );
     }
 
     Ok(())
@@ -907,6 +942,8 @@ fn apply_current_official_transfer_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
+    apply_current_shakalaka_companion_corrections(source, target)?;
+
     for record in 0..MONSTER_GUIDE_RECORD_COUNT {
         copy_reversed(
             source,
@@ -1031,11 +1068,12 @@ pub(crate) fn apply_japanese_wiiu_corrections_for_revision(
         target[offset] = source[offset];
     }
 
-    // The compatibility operation list covers only a subset of the numeric
-    // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix and the
-    // isolated Lamp Mask mastery scalar while preserving the packed state.
+    // Replay the exact historical Cha-Cha/Kayamba behavior here. Current
+    // conversion corrects its field boundaries only in
+    // `apply_current_official_transfer_corrections`, after the historical
+    // result has been kept available for compatibility detection.
     if revision >= ConverterRevision::V0_0_4 {
-        apply_shakalaka_companion_corrections(source, target, revision)?;
+        apply_historical_shakalaka_companion_corrections(source, target, revision)?;
     }
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5
