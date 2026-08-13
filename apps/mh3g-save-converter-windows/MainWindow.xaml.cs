@@ -37,6 +37,7 @@ public sealed partial class MainWindow : Window
         RootGrid.DataContext = ViewModel;
         ConfigureWindowMaterial();
         SelectLanguage(ViewModel.LanguageOverride);
+        SelectSettingsLanguage(ViewModel.LanguageOverride);
         SelectConversionMode(ViewModel.SelectedConversionMode);
         SelectRepairVersion(null);
         AppNavigation.SelectedItem = ConvertNavigationItem;
@@ -56,6 +57,12 @@ public sealed partial class MainWindow : Window
         }
         _loadedOnce = true;
 
+        if (_fixtureId == "write.confirmation")
+        {
+            await ShowFixtureConfirmationAsync();
+            return;
+        }
+
         if (_fixtureId is not null || !_updateCheckStore.ShouldCheckToday())
         {
             return;
@@ -65,6 +72,24 @@ public sealed partial class MainWindow : Window
         // is not retried on every launch during the same local calendar day.
         _updateCheckStore.MarkAttempt();
         await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async Task ShowFixtureConfirmationAsync()
+    {
+        var dialog = new ContentDialog
+        {
+            Title = ViewModel.Copy.ConfirmWriteTitle,
+            Content = new TextBlock
+            {
+                Text = $"{ViewModel.Copy.SyntheticFixtureNotice}\n\n{ViewModel.Copy.ConfirmWriteBody}",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = ViewModel.Copy.Continue,
+            CloseButtonText = ViewModel.Copy.Cancel,
+            DefaultButton = ContentDialogButton.Close,
+            IsPrimaryButtonEnabled = false,
+        };
+        await ShowDialogAsync(dialog);
     }
 
     private async void About_Click(object sender, RoutedEventArgs e)
@@ -237,6 +262,18 @@ public sealed partial class MainWindow : Window
         _synchronizingLanguage = false;
     }
 
+    private void SelectSettingsLanguage(Models.AppLanguageOverride language)
+    {
+        _synchronizingLanguage = true;
+        SettingsLanguagePicker.SelectedIndex = language switch
+        {
+            Models.AppLanguageOverride.Chinese => 1,
+            Models.AppLanguageOverride.English => 2,
+            _ => 0,
+        };
+        _synchronizingLanguage = false;
+    }
+
     private void LanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_synchronizingLanguage || LanguagePicker.SelectedItem is not ComboBoxItem item)
@@ -249,11 +286,27 @@ public sealed partial class MainWindow : Window
 
     private void SettingsLanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox { SelectedItem: ComboBoxItem item })
+        if (!_synchronizingLanguage && sender is ComboBox { SelectedItem: ComboBoxItem item })
         {
             ViewModel.SetLanguage(item.Tag as string);
             SelectLanguage(ViewModel.LanguageOverride);
         }
+    }
+
+    private void FixInput_Click(object sender, RoutedEventArgs e)
+    {
+        ShowConvertStep(ConvertStep.Input);
+        SourcePathBox.Focus(FocusState.Programmatic);
+    }
+
+    private void FixOptional_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsSystemEnabled)
+        {
+            SystemSourceBox.Focus(FocusState.Programmatic);
+            return;
+        }
+        ExtrasSourceBox.Focus(FocusState.Programmatic);
     }
 
     private void SelectConversionMode(Models.ConversionMode mode)

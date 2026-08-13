@@ -61,10 +61,10 @@ require("920×600" in CONTRACT and "1,120×760" in CONTRACT,
         "default/minimum viewport contract is missing")
 require("StageArtwork" not in xaml and "HeroTitle" not in xaml, "legacy hero/artwork must be deleted")
 require("#FF" not in xaml and "#FFF" not in xaml, "work surfaces cannot hard-code light colors")
-require('x:Name="HistoryPage"' in xaml and "OptionalMissingReason" not in xaml,
-        "History must not host a conversion blocker")
-require('x:Name="SettingsPage"' in xaml and "OptionalMissingReason" not in xaml,
-        "Settings must not host a conversion blocker")
+history_surface = xaml.split('x:Name="HistoryPage"', 1)[1].split('<!-- Experimental CEC -->', 1)[0]
+settings_surface = xaml.split('x:Name="SettingsPage"', 1)[1].split('</controls:NavigationView>', 1)[0]
+require("OptionalMissingReason" not in history_surface, "History must not host a conversion blocker")
+require("OptionalMissingReason" not in settings_surface, "Settings must not host a conversion blocker")
 
 fixtures = {
     "first-run", "input.empty", "components.optional-missing", "components.optional-skipped",

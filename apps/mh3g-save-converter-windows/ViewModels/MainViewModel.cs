@@ -210,6 +210,12 @@ public sealed class MainViewModel : ObservableObject
     public bool HasHistory => History.Count > 0;
     public Visibility HistoryEmptyVisibility => HasHistory ? Visibility.Collapsed : Visibility.Visible;
     public Visibility HistoryListVisibility => HasHistory ? Visibility.Visible : Visibility.Collapsed;
+    public bool CanContinueOptional => SelectedOptionalDataIsConfigured;
+    public Visibility OptionalMissingVisibility => CanContinueOptional ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility OptionalSkippedVisibility => _syntheticFixtureId == "components.optional-skipped"
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+    public Visibility InputFixVisibility => CanInspectCore ? Visibility.Collapsed : Visibility.Visible;
 
     public AppLanguageOverride LanguageOverride
     {
@@ -2021,11 +2027,15 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(WriteUnavailableVisibility));
         OnPropertyChanged(nameof(DryRunReadyVisibility));
         OnPropertyChanged(nameof(DryRunBlockedVisibility));
+        OnPropertyChanged(nameof(InputFixVisibility));
     }
 
     private void RaiseOptionalConfigurationAvailability()
     {
         OnPropertyChanged(nameof(SelectedOptionalDataIsConfigured));
+        OnPropertyChanged(nameof(CanContinueOptional));
+        OnPropertyChanged(nameof(OptionalMissingVisibility));
+        OnPropertyChanged(nameof(OptionalSkippedVisibility));
         OnPropertyChanged(nameof(HasPendingSelectedOptionalWork));
         OnPropertyChanged(nameof(PostWriteGuidanceMessage));
         OnPropertyChanged(nameof(PostWriteGuidanceAction));
