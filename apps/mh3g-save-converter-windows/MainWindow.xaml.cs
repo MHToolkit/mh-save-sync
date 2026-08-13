@@ -247,6 +247,15 @@ public sealed partial class MainWindow : Window
         ViewModel.SetLanguage(item.Tag as string);
     }
 
+    private void SettingsLanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { SelectedItem: ComboBoxItem item })
+        {
+            ViewModel.SetLanguage(item.Tag as string);
+            SelectLanguage(ViewModel.LanguageOverride);
+        }
+    }
+
     private void SelectConversionMode(Models.ConversionMode mode)
     {
         _synchronizingConversionMode = true;
