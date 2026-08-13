@@ -35,5 +35,5 @@
     "negative_mutation_gates": "pass"
   },
   "human_task_verdict": "pending",
-  "candidate_commit": "aa117ee"
+  "candidate_commit": "aa117ee (implementation commit; this evidence record is a later metadata-only commit)"
 }
