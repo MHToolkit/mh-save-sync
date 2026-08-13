@@ -2,7 +2,7 @@
   "schema_version": "uios.evidence/v0.1",
   "project": {
     "id": "mh3g-save-converter",
-    "revision": "ae356bdb3a224eba219b6ba9fda6c6a0312793cb",
+    "revision": null,
     "dirty": false
   },
   "inputs": {
