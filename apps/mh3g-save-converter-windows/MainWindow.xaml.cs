@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -419,11 +420,30 @@ public sealed partial class MainWindow : Window
             _ => WriteResultPage,
         };
         surface.Visibility = Visibility.Visible;
-        if (_motionPreferences.AnimationsEnabled)
+        AnimateCausalReveal(surface, 0.96, 120);
+    }
+
+    private void AnimateCausalReveal(UIElement target, double from, int durationMilliseconds)
+    {
+        target.Opacity = 1;
+        if (!_motionPreferences.AnimationsEnabled)
         {
-            surface.Opacity = 0.98;
-            surface.Opacity = 1;
+            return;
         }
+
+        var animation = new DoubleAnimation
+        {
+            From = from,
+            To = 1,
+            Duration = new Duration(TimeSpan.FromMilliseconds(durationMilliseconds)),
+            EnableDependentAnimation = true,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(animation, target);
+        Storyboard.SetTargetProperty(animation, "Opacity");
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(animation);
+        storyboard.Begin();
     }
 
     private void SelectFixtureSurface(string fixtureId)
@@ -870,12 +890,20 @@ public sealed partial class MainWindow : Window
     {
         ViewModel.IsCecEnabled = CecToggle.IsOn;
         CecControls.Visibility = CecToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        if (CecToggle.IsOn)
+        {
+            AnimateCausalReveal(CecControls, 0, 140);
+        }
     }
 
     private void SystemToggle_Toggled(object sender, RoutedEventArgs e)
     {
         ViewModel.IsSystemEnabled = SystemToggle.IsOn;
         SystemControls.Visibility = SystemToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        if (SystemToggle.IsOn)
+        {
+            AnimateCausalReveal(SystemControls, 0, 140);
+        }
     }
 
     private async Task<string?> PickFileAsync(params string[] extensions)
