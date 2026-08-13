@@ -3,6 +3,8 @@
 .vscode/
 .superpowers/
 target/
+**/bin/
+**/obj/
 .env
 *.env
 !*.env.example

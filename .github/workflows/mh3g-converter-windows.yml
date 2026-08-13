@@ -16,6 +16,7 @@ on:
       - scripts/mh3g-windows-launcher.ps1
       - scripts/package-mh3g-save-converter-windows.ps1
       - scripts/verify-mh3g-save-converter-windows-source.py
+      - tests/mh3g-save-converter-windows-cli-bridge-smoke/**
       - scripts/verify-github-hosted-actions.py
       - .github/workflows/mh3g-converter-windows.yml
   push:
@@ -32,6 +33,7 @@ on:
       - scripts/mh3g-windows-launcher.ps1
       - scripts/package-mh3g-save-converter-windows.ps1
       - scripts/verify-mh3g-save-converter-windows-source.py
+      - tests/mh3g-save-converter-windows-cli-bridge-smoke/**
       - scripts/verify-github-hosted-actions.py
       - .github/workflows/mh3g-converter-windows.yml
 
@@ -64,6 +66,8 @@ jobs:
         run: |
           python scripts/verify-mh3g-save-converter-windows-source.py
           python scripts/verify-github-hosted-actions.py
+      - name: Verify UTF-8 CLI JSON bridge
+        run: dotnet run --configuration Release --project tests/mh3g-save-converter-windows-cli-bridge-smoke/MH3GSaveConverter.CliBridgeSmoke.csproj
       # PR/main validation compiles the same WinUI + Rust payload but stops
       # before creating distributable ZIP/portable/installer files. Real
       # release artifacts are produced only by mh3g-converter-release.yml on v*.

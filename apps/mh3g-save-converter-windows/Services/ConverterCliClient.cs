@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using MHToolkit.MH3GSaveConverter.Windows.Models;
 
@@ -11,6 +12,10 @@ namespace MHToolkit.MH3GSaveConverter.Windows.Services;
 /// </summary>
 public sealed class ConverterCliClient
 {
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
     private static readonly byte[] LegacyWrapperMarker =
         "mh3g-save-convert-core.exe"u8.ToArray();
 
@@ -62,6 +67,8 @@ public sealed class ConverterCliClient
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = StrictUtf8,
+            StandardErrorEncoding = StrictUtf8,
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory,
         };
