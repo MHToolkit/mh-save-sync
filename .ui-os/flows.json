@@ -1,0 +1,148 @@
+{
+  "schema_version": "uios.flows/v0.1",
+  "flows": [
+    {
+      "id": "conversion.new",
+      "entry": "User starts a new conversion with no local save modified",
+      "success": "The selected output slot is transactionally written and a backup plus manifest is available",
+      "actions": [
+        "conversion.select-source",
+        "conversion.select-output",
+        "conversion.inspect",
+        "conversion.configure-optionals",
+        "conversion.skip-optionals",
+        "conversion.run-dry-run",
+        "conversion.confirm-write",
+        "conversion.review-result",
+        "conversion.rollback"
+      ]
+    },
+    {
+      "id": "conversion.repair",
+      "entry": "User has an original 3DS slot, a read-only current Wii U reference, and an explicit separate output",
+      "success": "Eligible historical conversion fields are repaired while later Wii U progress is retained and transaction evidence is produced",
+      "actions": [
+        "conversion.select-source",
+        "conversion.select-current-reference",
+        "conversion.select-output",
+        "conversion.inspect",
+        "conversion.configure-optionals",
+        "conversion.skip-optionals",
+        "conversion.run-dry-run",
+        "conversion.choose-history-version",
+        "conversion.confirm-write",
+        "conversion.review-result",
+        "conversion.rollback"
+      ]
+    },
+    {
+      "id": "optional.standard",
+      "entry": "User explicitly enables system, guild-card, or quest migration",
+      "success": "Each selected optional transaction is independently previewed, authorized, written, and recoverable",
+      "actions": [
+        "conversion.configure-optionals",
+        "optional.fix-paths",
+        "conversion.skip-optionals",
+        "optional.run-dry-run",
+        "optional.confirm-write",
+        "conversion.review-result",
+        "conversion.rollback"
+      ]
+    },
+    {
+      "id": "utility.cec",
+      "entry": "Advanced user opens Experimental CEC and explicitly acknowledges its risk",
+      "success": "The exact CEC mailbox and cache are independently dry-run, written, and recoverable",
+      "actions": [
+        "cec.select-mailbox",
+        "cec.select-cache",
+        "cec.acknowledge",
+        "cec.run-dry-run",
+        "cec.confirm-write",
+        "conversion.rollback"
+      ]
+    }
+  ],
+  "states": [
+    {
+      "id": "input.missing",
+      "scope": "control",
+      "severity": "warning",
+      "blocks": ["conversion.inspect"],
+      "recovery": ["conversion.select-source", "conversion.select-output"],
+      "presentation": {"allowed_hosts": ["conversion.input"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "optional.missing-path",
+      "scope": "section",
+      "severity": "warning",
+      "blocks": ["optional.run-dry-run", "optional.confirm-write"],
+      "recovery": ["optional.fix-paths", "conversion.skip-optionals"],
+      "presentation": {"allowed_hosts": ["conversion.optionals", "conversion.write.optionals"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "optional.skipped",
+      "scope": "section",
+      "severity": "info",
+      "blocks": [],
+      "recovery": ["conversion.configure-optionals"],
+      "presentation": {"allowed_hosts": ["conversion.optionals", "conversion.review"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "dry-run.blocked",
+      "scope": "surface",
+      "severity": "warning",
+      "blocks": ["conversion.run-dry-run", "conversion.confirm-write"],
+      "recovery": ["conversion.inspect", "conversion.choose-history-version"],
+      "presentation": {"allowed_hosts": ["conversion.review"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "dry-run.ready",
+      "scope": "surface",
+      "severity": "success",
+      "blocks": [],
+      "recovery": ["conversion.run-dry-run"],
+      "presentation": {"allowed_hosts": ["conversion.review"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "write.authorized",
+      "scope": "surface",
+      "severity": "success",
+      "blocks": [],
+      "recovery": ["conversion.confirm-write"],
+      "presentation": {"allowed_hosts": ["conversion.write"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "conversion.running",
+      "scope": "surface",
+      "severity": "info",
+      "blocks": ["conversion.confirm-write"],
+      "recovery": [],
+      "presentation": {"allowed_hosts": ["conversion.input", "conversion.review", "conversion.write"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "conversion.failed",
+      "scope": "surface",
+      "severity": "error",
+      "blocks": ["conversion.confirm-write"],
+      "recovery": ["conversion.inspect", "conversion.run-dry-run", "conversion.rollback"],
+      "presentation": {"allowed_hosts": ["conversion.write", "conversion.result"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "conversion.success",
+      "scope": "surface",
+      "severity": "success",
+      "blocks": [],
+      "recovery": ["conversion.review-result", "conversion.rollback"],
+      "presentation": {"allowed_hosts": ["conversion.result", "history.session"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    },
+    {
+      "id": "history.empty",
+      "scope": "surface",
+      "severity": "info",
+      "blocks": [],
+      "recovery": ["conversion.select-source"],
+      "presentation": {"allowed_hosts": ["history.session"], "max_primary_instances": 1, "global_banner": "forbidden"}
+    }
+  ]
+}

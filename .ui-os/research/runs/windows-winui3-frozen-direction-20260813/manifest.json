@@ -1,0 +1,733 @@
+{
+  "schema_version": "uios.research/v0.2",
+  "run_id": "windows-winui3-frozen-direction-20260813",
+  "task": {
+    "id": "mh3g-save-converter-windows-frozen-direction-20260813",
+    "context_path": "task-context.json",
+    "context_sha256": "b17356e858916f66ce7ddc23a9da96a403c3bb739f7ec40de731477e70d3c807",
+    "product_id": "mh3g-save-converter",
+    "product_revision": "2bbd97ac793a70c0c91bf25f6a2c41bb247c03e2",
+    "git_status_sha256": "da5b3d914fd55b465ee57ecabf3ca5b3765cd7a30269269ff9ff91a862f52cc1",
+    "protected_snapshot_sha256": "669f89e937dd7bf4c7a6f7b6e628b495ce4d3bf2ec96f33865ae62942fb888f1"
+  },
+  "research_mode": "standard",
+  "research_kinds": [
+    "layout",
+    "interaction-pattern",
+    "component",
+    "motion",
+    "style",
+    "iconography"
+  ],
+  "started_at": "2026-08-13T02:05:40Z",
+  "completed_at": "2026-08-13T02:08:27Z",
+  "network_mode": "live",
+  "freshness_claim": "current",
+  "targets": [
+    {
+      "id": "windows-winui3-desktop",
+      "platform": "windows",
+      "framework": "winui3",
+      "form_factor": "desktop",
+      "input_modes": [
+        "pointer",
+        "keyboard",
+        "screen-reader"
+      ]
+    }
+  ],
+  "states": [
+    "input-empty",
+    "optional-missing",
+    "optional-skipped",
+    "dry-run-ready",
+    "dry-run-blocked",
+    "write-authorized",
+    "conversion-success",
+    "conversion-failure",
+    "history-empty"
+  ],
+  "accessibility_requirements": [
+    "keyboard-and-ui-automation",
+    "logical-focus-order",
+    "text-scaling",
+    "high-contrast",
+    "reduced-motion",
+    "non-color-cues"
+  ],
+  "queries": [
+    {
+      "id": "q-guided-fluent-navigation",
+      "text": "current WinUI 3 NavigationView guided desktop utility layout keyboard high contrast",
+      "research_kind": "layout",
+      "target_ids": [
+        "windows-winui3-desktop"
+      ],
+      "executed_at": "2026-08-13T02:06:00Z"
+    },
+    {
+      "id": "q-guided-fluent-pickers",
+      "text": "current Windows App SDK 1.8 file folder picker path selection implementation",
+      "research_kind": "component",
+      "target_ids": [
+        "windows-winui3-desktop"
+      ],
+      "executed_at": "2026-08-13T02:06:00Z"
+    },
+    {
+      "id": "q-guided-fluent-status-motion",
+      "text": "current WinUI progress feedback local state transition reduced animation preference",
+      "research_kind": "motion",
+      "target_ids": [
+        "windows-winui3-desktop"
+      ],
+      "executed_at": "2026-08-13T02:06:00Z"
+    },
+    {
+      "id": "q-guided-fluent-accessibility",
+      "text": "current Windows UI Automation keyboard text scaling high contrast accessibility",
+      "research_kind": "interaction-pattern",
+      "target_ids": [
+        "windows-winui3-desktop"
+      ],
+      "executed_at": "2026-08-13T02:06:00Z"
+    },
+    {
+      "id": "q-guided-fluent-shipped",
+      "text": "shipped desktop utility contextual next step guarded source target write recovery",
+      "research_kind": "interaction-pattern",
+      "target_ids": [
+        "windows-winui3-desktop"
+      ],
+      "executed_at": "2026-08-13T02:06:00Z"
+    }
+  ],
+  "sources": [
+    {
+      "id": "ms-nav-frozen",
+      "query_id": "q-guided-fluent-navigation",
+      "title": "NavigationView - Windows apps",
+      "canonical_url": "https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview",
+      "publisher_id": "microsoft",
+      "tier": "primary-authority",
+      "classification": "platform-convention",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:26Z",
+      "opened_full_page": true,
+      "content_sha256": "6d9beff44ebb1dd8e28a44a3cf4584f0b7cd325040cb140806268408c2777822",
+      "artifact_path": "objects/ms-nav-frozen-6d9beff44ebb.html",
+      "artifact_sha256": "6d9beff44ebb1dd8e28a44a3cf4584f0b7cd325040cb140806268408c2777822",
+      "artifact_bytes": 131063,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:26Z",
+        "etag": "\"wzjThNK/VdaQS/B92I6ZQNeggUY=\"",
+        "last_modified": "Wed, 05 Aug 2026 08:00:08 GMT"
+      },
+      "source_revision_date": null,
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "NavigationView remains the native top-level navigation container and includes keyboard and High Contrast guidance."
+      ]
+    },
+    {
+      "id": "ms-picker-frozen",
+      "query_id": "q-guided-fluent-pickers",
+      "title": "Open files and folders with Windows App SDK pickers",
+      "canonical_url": "https://learn.microsoft.com/en-us/windows/apps/develop/files/using-file-folder-pickers",
+      "publisher_id": "microsoft",
+      "tier": "implementation",
+      "classification": "recommendation",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:27Z",
+      "opened_full_page": true,
+      "content_sha256": "e528f24783d9367bf8c4aa4c4946fdf0f19f7a5ab754656d6b3bb27256599db4",
+      "artifact_path": "objects/ms-picker-frozen-e528f24783d9.html",
+      "artifact_sha256": "e528f24783d9367bf8c4aa4c4946fdf0f19f7a5ab754656d6b3bb27256599db4",
+      "artifact_bytes": 69280,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://learn.microsoft.com/en-us/windows/apps/develop/files/using-file-folder-pickers"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:27Z",
+        "etag": "\"Wl4vsxOQUaCXN1XcWUpZYYoQotg=\"",
+        "last_modified": "Wed, 05 Aug 2026 07:59:59 GMT"
+      },
+      "source_revision_date": null,
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "Windows App SDK 1.8 native pickers accept a WindowId and return selected paths."
+      ]
+    },
+    {
+      "id": "ms-progress-frozen",
+      "query_id": "q-guided-fluent-status-motion",
+      "title": "Progress controls - Windows apps",
+      "canonical_url": "https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/progress-controls",
+      "publisher_id": "microsoft",
+      "tier": "implementation",
+      "classification": "recommendation",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:29Z",
+      "opened_full_page": true,
+      "content_sha256": "46c7ddeaae3526fed92ba375219de33baeceb3bd6d77ac505a882130accfb311",
+      "artifact_path": "objects/ms-progress-frozen-46c7ddeaae35.html",
+      "artifact_sha256": "46c7ddeaae3526fed92ba375219de33baeceb3bd6d77ac505a882130accfb311",
+      "artifact_bytes": 62185,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/progress-controls"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:29Z",
+        "etag": "\"1u3eKpyYUBJWTO84BNAG85048zE=\"",
+        "last_modified": "Wed, 05 Aug 2026 08:00:01 GMT"
+      },
+      "source_revision_date": "2026-07-08",
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "Use ProgressBar for nonmodal work and ProgressRing only for genuine waits, with explanatory text when needed."
+      ]
+    },
+    {
+      "id": "ms-a11y-frozen",
+      "query_id": "q-guided-fluent-accessibility",
+      "title": "Accessibility overview - Windows apps",
+      "canonical_url": "https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility-overview",
+      "publisher_id": "microsoft",
+      "tier": "accessibility-authority",
+      "classification": "normative",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:30Z",
+      "opened_full_page": true,
+      "content_sha256": "16e36128ea2b0c2f0f488597ebd70bb37de3a2f07146e25b6fda934a0643424a",
+      "artifact_path": "objects/ms-a11y-frozen-16e36128ea2b.html",
+      "artifact_sha256": "16e36128ea2b0c2f0f488597ebd70bb37de3a2f07146e25b6fda934a0643424a",
+      "artifact_bytes": 66977,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility-overview"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:30Z",
+        "etag": "\"2Ma9MiHehZcgEO2HcxyvzVBVpRA=\"",
+        "last_modified": "Wed, 05 Aug 2026 08:00:03 GMT"
+      },
+      "source_revision_date": null,
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "WinUI accessibility depends on UI Automation, keyboard, semantic XAML order, scalable text, and High Contrast theme resources."
+      ]
+    },
+    {
+      "id": "ms-motion-pref-frozen",
+      "query_id": "q-guided-fluent-status-motion",
+      "title": "UISettings AnimationsEnabled",
+      "canonical_url": "https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.animationsenabled?view=winrt-26100",
+      "publisher_id": "microsoft",
+      "tier": "implementation",
+      "classification": "recommendation",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:39Z",
+      "opened_full_page": true,
+      "content_sha256": "5b2413221dc15d5cedf92a61c2d41f343b3e227300ee978f10287cb8668657fc",
+      "artifact_path": "objects/ms-motion-pref-frozen-5b2413221dc1.html",
+      "artifact_sha256": "5b2413221dc15d5cedf92a61c2d41f343b3e227300ee978f10287cb8668657fc",
+      "artifact_bytes": 50434,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings.animationsenabled?view=winrt-26100"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:39Z",
+        "etag": "\"p8uYS3UqVynwNjrVZAZQHo2G7w4=\"",
+        "last_modified": "Wed, 05 Aug 2026 07:38:14 GMT"
+      },
+      "source_revision_date": null,
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "UISettings.AnimationsEnabled exposes whether custom Windows UI animations are enabled."
+      ]
+    },
+    {
+      "id": "github-next-step-frozen",
+      "query_id": "q-guided-fluent-shipped",
+      "title": "GitHub Desktop contextual onboarding and next steps",
+      "canonical_url": "https://github.blog/news-insights/product-news/github-desktop-update/",
+      "publisher_id": "github.blog",
+      "tier": "shipped-product",
+      "classification": "recommendation",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:40Z",
+      "opened_full_page": true,
+      "content_sha256": "7567553258da3e158e0cea1d384ea5ce368c237993c047bf014fb340c4a119c6",
+      "artifact_path": "objects/github-next-step-frozen-7567553258da.html",
+      "artifact_sha256": "7567553258da3e158e0cea1d384ea5ce368c237993c047bf014fb340c4a119c6",
+      "artifact_bytes": 167844,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://github.blog/news-insights/product-news/github-desktop-update/"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:40Z",
+        "etag": null,
+        "last_modified": null
+      },
+      "source_revision_date": "2021-12-19",
+      "license_status": "linked-reference-only",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "A shipped desktop application gives contextual next steps in first-run and empty states."
+      ]
+    },
+    {
+      "id": "etcher-guarded-frozen",
+      "query_id": "q-guided-fluent-shipped",
+      "title": "balenaEtcher guarded source-target-write utility",
+      "canonical_url": "https://github.com/balena-io/etcher",
+      "publisher_id": "github.com",
+      "tier": "shipped-product",
+      "classification": "recommendation",
+      "retrieval_mode": "live",
+      "retrieved_at": "2026-08-13T02:06:42Z",
+      "opened_full_page": true,
+      "content_sha256": "be04c349df1fb04d89922331273ab967148cba9239296adaa7d1f8655248ba1f",
+      "artifact_path": "objects/etcher-guarded-frozen-be04c349df1f.html",
+      "artifact_sha256": "be04c349df1fb04d89922331273ab967148cba9239296adaa7d1f8655248ba1f",
+      "artifact_bytes": 346567,
+      "retriever": {
+        "mode": "bundled-http",
+        "tool": "pattern-intelligence-http",
+        "final_url": "https://github.com/balena-io/etcher"
+      },
+      "live_receipt": {
+        "status": 200,
+        "checked_at": "2026-08-13T02:06:42Z",
+        "etag": "W/\"13c8bc4104d8b5a0dded7ad4d4dccf1d\"",
+        "last_modified": null
+      },
+      "source_revision_date": null,
+      "license_status": "permitted-with-attribution",
+      "affected_targets": [
+        "windows-winui3-desktop"
+      ],
+      "claims": [
+        "A shipped desktop write utility prioritizes explicit source, target, safety, verification, and recovery."
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "id": "selected-guided-fluent-workspace",
+      "title": "Selected Guided Fluent workspace",
+      "user_problem": "A first-time or returning player needs one obvious safe next action without optional files, technical report data, or unrelated destinations becoming global blockers.",
+      "reusable_principle": "Map the shared conversion kernel into one native application navigator and one scoped task stage whose primary action, reason, progress, and recovery stay together.",
+      "source_ids": [
+        "ms-nav-frozen",
+        "ms-picker-frozen",
+        "ms-a11y-frozen",
+        "ms-motion-pref-frozen",
+        "github-next-step-frozen"
+      ],
+      "decision": "adapt",
+      "source_expression": "Windows supplies an adaptive native navigator and familiar pickers, while shipped desktop onboarding demonstrates contextual next-step guidance for otherwise ambiguous empty states.",
+      "product_expression": "Use NavigationView for Convert, History, Advanced, and Settings, then keep Input, Optional or Skip, Dry Run, guarded Write, Result, and Rollback as one ordered workspace with a stable local command footer.",
+      "target_adaptations": [
+        {
+          "target_id": "windows-winui3-desktop",
+          "native_components": "NavigationView, Windows App SDK 1.8 FileOpenPicker and FolderPicker, Button, ToggleSwitch, InfoBar, ProgressBar, ContentDialog, Expander, and native text controls.",
+          "navigation": "Use exactly one top-level NavigationView; the bounded conversion progress cue communicates state but is not a second navigator.",
+          "density": "Maintain Windows desktop density, reflow to one column before clipping, and keep optional and technical detail collapsed until relevant.",
+          "icons": "Use licensed WinUI SymbolIcon or existing project vectors paired with localized labels for primary, risky, and recovery commands.",
+          "motion": "Use native control feedback plus a short local opacity or visual-state transition for optional reveal and footer state changes only.",
+          "input_behavior": "Follow semantic XAML order for Tab, preserve visible focus and focus return after pickers/dialogs, activate with Enter or Space, and cancel confirmation with Escape."
+        }
+      ],
+      "accessibility": {
+        "reduced_motion": "When UISettings.AnimationsEnabled is false, replace custom transition with an immediate state swap and preserve all textual and semantic feedback.",
+        "non_motion_equivalence": "Blocked, ready, running, success, and failure always expose durable text, icon, enabled state, and recovery independent of animation.",
+        "contrast": "Resolve surfaces, foregrounds, borders, and focus visuals through theme resources with HighContrast overrides rather than fixed light colors.",
+        "non_color": "Pair semantic color with a localized status phrase, icon, control state, and labeled Fix action.",
+        "text_scaling": "Wrap labels and reason text, auto-size commands, stack responsive rows, and retain full selected paths in accessible values when visual ellipsis is necessary.",
+        "focus_input": "Keep one deterministic task order and move focus only after explicit route or dialog transitions, never on background status refresh.",
+        "assistive_tech": "Give route title, path picker, primary action, blocked reason, Fix, status, manifest, and rollback stable AutomationIds and use only a scoped polite live region."
+      },
+      "motion": {
+        "purpose": "state",
+        "frequency": "occasional",
+        "trigger": "Optional data is enabled or skipped, or a command changes from blocked to ready, running, or result.",
+        "timing_intent": "Update semantics immediately and use only a short native local transition; never move the primary command frame.",
+        "interruptible": true,
+        "looping": "none",
+        "stop_condition": "",
+        "reduced_motion_variant": "Instant content/state replacement with persistent text, icon, focus, and automation semantics.",
+        "performance_risk": "Do not animate ScrollViewer geometry, full pages, blur, shadows, path text, or navigation; prefer compositor-safe opacity where useful."
+      },
+      "contraindications": [
+        "Do not expose optional System, ExtData, or CEC fields until enabled.",
+        "Do not duplicate top-level navigation with a persistent stage rail.",
+        "Do not place hashes, manifest JSON, or report payloads in the primary hierarchy."
+      ],
+      "copied_assets": [],
+      "confidence": 0.94
+    },
+    {
+      "id": "nonselected-compact-operation-canvas",
+      "title": "Non-selected compact operation canvas",
+      "user_problem": "An expert may want source, current reference, output, authorization, and recovery visible together for repeated repair work.",
+      "reusable_principle": "Keep operation identity and its guarded command stable while disclosing technical detail at the exact affected row.",
+      "source_ids": [
+        "ms-nav-frozen",
+        "ms-progress-frozen",
+        "ms-a11y-frozen",
+        "ms-motion-pref-frozen",
+        "etcher-guarded-frozen"
+      ],
+      "decision": "adapt",
+      "source_expression": "A shipped guarded writer foregrounds explicit source and target identity, while Windows distinguishes nonmodal progress from a wait that truly blocks interaction.",
+      "product_expression": "A dense review canvas could align source, current reference, and output above a fixed write control while keeping inspection and rollback details expandable beside their owning operation.",
+      "target_adaptations": [
+        {
+          "target_id": "windows-winui3-desktop",
+          "native_components": "Use native picker-backed path rows, scoped InfoBar, ProgressBar for nonmodal work, ProgressRing only for a genuine local wait, ContentDialog for write, and Expander for technical evidence.",
+          "navigation": "Retain the same single NavigationView but present Convert as an expert review canvas rather than sequential staged content.",
+          "density": "Use compact aligned path rows at wide windows and stack the same rows at the minimum width without shrinking controls.",
+          "icons": "Use WinUI symbols with labels for inspect, write, warning, success, and undo; no external product assets.",
+          "motion": "Keep the command footer fixed and optionally crossfade only scoped status content; native progress owns running feedback.",
+          "input_behavior": "Tab through source, current, output, and the active command before technical disclosures; restore focus after picker and confirmation."
+        }
+      ],
+      "accessibility": {
+        "reduced_motion": "Disable custom crossfade when Windows animations are off and keep only essential native running semantics.",
+        "non_motion_equivalence": "Every operation state has explicit text, icon, enabled state, and actionable recovery.",
+        "contrast": "Use theme and HighContrast resources on every row, divider, status, and focus visual.",
+        "non_color": "Show the sole disabled reason and a labeled Fix command beside the primary action.",
+        "text_scaling": "Reflow the review grid to one column and keep full values available to UI Automation.",
+        "focus_input": "Preserve a deterministic source-current-output-command focus order and return focus to the invoker after dialog cancellation.",
+        "assistive_tech": "Expose selected path values, progress state, confirmation risk, manifest output, and rollback availability through native automation patterns."
+      },
+      "motion": {
+        "purpose": "feedback",
+        "frequency": "occasional",
+        "trigger": "Inspect, Dry Run, Write, or picker selection changes the scoped operation state.",
+        "timing_intent": "Acknowledge input immediately while the stable command and nearby text explain progress and resolution.",
+        "interruptible": true,
+        "looping": "bounded",
+        "stop_condition": "Stop the native progress state when the associated command succeeds, fails, or cancels.",
+        "reduced_motion_variant": "Immediate status replacement with text and icon; no custom spatial transition.",
+        "performance_risk": "Avoid custom progress animation and all layout-property animation."
+      },
+      "contraindications": [
+        "Do not copy balenaEtcher branding, copy, exact composition, or assets.",
+        "Do not make the expert canvas the default while first-run comprehension is the frozen priority.",
+        "Do not leak active conversion blockers into History or Settings."
+      ],
+      "copied_assets": [],
+      "confidence": 0.84
+    }
+  ],
+  "rejections": [
+    {
+      "id": "reject-compact-canvas-as-default",
+      "idea": "Replace the frozen Guided Fluent workspace with the compact expert operation canvas as the default Convert experience.",
+      "reason": "It remains technically viable but increases first-run simultaneous choices and weakens the frozen one-stage, one-primary-action contract; retain only its concise review-row ideas inside progressive disclosure.",
+      "source_ids": [
+        "ms-a11y-frozen",
+        "etcher-guarded-frozen"
+      ]
+    },
+    {
+      "id": "reject-dashboard-hero-and-global-status",
+      "idea": "Restore a decorative hero, repeated stage rail, global readiness badge, repeated next-step banners, and always-visible optional paths.",
+      "reason": "The structure duplicates hierarchy and makes optional or technical state appear globally blocking instead of keeping one scoped task action and recovery.",
+      "source_ids": [
+        "ms-nav-frozen",
+        "github-next-step-frozen"
+      ]
+    },
+    {
+      "id": "reject-ornamental-motion-frozen",
+      "idea": "Add full-page slides, staggered forms, hover lift, looping empty-state art, failure shake, or success confetti.",
+      "reason": "These patterns do not explain conversion state and add focus, motion-preference, and performance costs to an operational safety tool.",
+      "source_ids": [
+        "ms-motion-pref-frozen",
+        "ms-progress-frozen"
+      ]
+    }
+  ],
+  "contradictions": [
+    {
+      "source_ids": [
+        "ms-nav-frozen",
+        "github-next-step-frozen"
+      ],
+      "conflict": "Top-level NavigationView and contextual sequential guidance can become duplicate navigation if both are interactive route systems.",
+      "resolution": "NavigationView owns application destinations only; the conversion sequence is a non-navigational status/progress cue plus one local primary action."
+    },
+    {
+      "source_ids": [
+        "ms-progress-frozen",
+        "etcher-guarded-frozen"
+      ],
+      "conflict": "A risky write benefits from guarded, potentially blocking feedback, while Inspect and Dry Run should not freeze unrelated navigation.",
+      "resolution": "Scope progress and disabled controls to the active command, reserve ContentDialog and blocking wait behavior for the write boundary, and leave unrelated destinations usable."
+    }
+  ],
+  "protected_files": [
+    {
+      "scope": "plugin",
+      "path": ".codex-plugin/plugin.json",
+      "sha256": "6dab1143cf01d70c754f35a5b1e8e8d69a472ed1d5f795ce870b42f573117f24"
+    },
+    {
+      "scope": "plugin",
+      "path": "assets/project-template/flows.json",
+      "sha256": "d3304e6b6ac380c80d1eaa01bf2196aedeed42430cb02fad80813633a926c47d"
+    },
+    {
+      "scope": "plugin",
+      "path": "assets/project-template/project.json",
+      "sha256": "c0e5932228e44cfefaf8ca786f91cae21dd2dcfe3d6ccb06cfd23689faecfbbc"
+    },
+    {
+      "scope": "plugin",
+      "path": "assets/project-template/tokens.json",
+      "sha256": "f88a8f78819020dffd779494710042eac7f3eb5da21f29b533ba10b25d739236"
+    },
+    {
+      "scope": "plugin",
+      "path": "assets/research-task-template.json",
+      "sha256": "408d6acb8631d64cab6b63ecccd973d76f587c5a6d825c08bf6744c5a178525f"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/evidence-contract.md",
+      "sha256": "cca00e244fe0befbf7d761d0b5c731834cffd9d4b75be2915c6e27174d4b0bcd"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/kernel.md",
+      "sha256": "c7704f2bce4f05ec5a51e41a6a6c78fff892848a552b1580415ba920afea6e3d"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/motion-intelligence.md",
+      "sha256": "0d5cd07a56f0da7dfd2c55739578b226a9854a664bc4441b289d0f6eb379590f"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/pattern-intelligence.md",
+      "sha256": "44329e4a72ac11389891e46f25ff196cdda2adba3b92e782b9545b9fc6a433d1"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/profiles.md",
+      "sha256": "0d8a4d23e26462ef388ebcc9b49fde1268637ef1d89e717d1abbd5bfc3b67e71"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/role-prompts.md",
+      "sha256": "47013cb05ea96e26ed62b36ca0987952f5af7ba5592b31e1bd4ce9081cb0631f"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/source-registry.md",
+      "sha256": "c90d72ed88ebf82f995b856595eb7ab67cbc5424961e97aa2d082b2ff479b81e"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/standards-sources.md",
+      "sha256": "d38dab3e6a2c27ed0368ef601950dd77b4ea509eea1df9921ce40819ddb0f4c1"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/style-intelligence.md",
+      "sha256": "b1c6ccb79a2fcfd4152134afca27306d75452293788196154b326f7dd0751087"
+    },
+    {
+      "scope": "plugin",
+      "path": "references/workflow.md",
+      "sha256": "0f27704d443efac53685027aa04b429fae8c2ce6e4ccf8e116ef59ec701d2535"
+    },
+    {
+      "scope": "plugin",
+      "path": "schemas/evidence.schema.json",
+      "sha256": "dc7414d061fdaf4b6852ea721ab2308395fb3f6551431f8b2d4e8cf4701c4277"
+    },
+    {
+      "scope": "plugin",
+      "path": "schemas/flows.schema.json",
+      "sha256": "fc84e0d732ad86c51b256e06e7b5a41468aba0cdf887b02ff4eb7d84fa9b129e"
+    },
+    {
+      "scope": "plugin",
+      "path": "schemas/project.schema.json",
+      "sha256": "5683e56d98d5d0875975210d899b915f9f1ae1f5a12213e2067006a8440ef9eb"
+    },
+    {
+      "scope": "plugin",
+      "path": "schemas/research.schema.json",
+      "sha256": "6be02ad673eb814c46f85d2835a3a81865c99d8a3fa8c63f741726d5031774c1"
+    },
+    {
+      "scope": "plugin",
+      "path": "schemas/tokens.schema.json",
+      "sha256": "6ae4e1719ea73f078d6f56b5eab782cd9dcacbef258cd6baf36aa3029303d9d5"
+    },
+    {
+      "scope": "plugin",
+      "path": "scripts/pattern_intelligence.py",
+      "sha256": "491439a339eaf5e96d737a8125a263d746c7db878020e15466f6ecec38c3b2d4"
+    },
+    {
+      "scope": "plugin",
+      "path": "scripts/ui_os.py",
+      "sha256": "677b64a60c686bc84bdabb3316b85e8813fd79864a489d6f33fb99b861d91d86"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-design/SKILL.md",
+      "sha256": "0025a9f59dd9b9ebd7dd8ca13ff0fa0bdd9ef9cd2e084a2fa53517b339277f0a"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-design/agents/openai.yaml",
+      "sha256": "cca06cada07909a075be3431596ed9138d99225e1d0ed3c93d691984ff0a0660"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-implement/SKILL.md",
+      "sha256": "d2e2f32c0968ecc0be27e58344c245db9b020890d38357b2c0a86ddaf68073c3"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-implement/agents/openai.yaml",
+      "sha256": "5e84077fac23036aa6bdcd64a4a8ee26e7dc727b1011f5ce379f0f97d26709b3"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-orchestrate/SKILL.md",
+      "sha256": "991f493535dd75f490f1ed6d751e899c5488ee7935fe11295e0988632de4d544"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-orchestrate/agents/openai.yaml",
+      "sha256": "4d1a4f158ad8e8d6253d1210307fe76fd4d4261646c4899bcdb396b17ab95921"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-refresh/SKILL.md",
+      "sha256": "49980791aa415129d981dc13166746c343eda0f7d730a98c3dea73c2a49185af"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-refresh/agents/openai.yaml",
+      "sha256": "88ecfa0854787f4f290b8c3d404c19bacbda648515dad6e22ad4aae258b6a36b"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-research-review/SKILL.md",
+      "sha256": "617adf85ec9a707bcbf700ec2c248dee575985d1e50b78b357e5bd53b49b0764"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-research-review/agents/openai.yaml",
+      "sha256": "5e97fa9976131dd89404a197dfe05ff6cff547faf225aa43a1dcef6a7280666d"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-research/SKILL.md",
+      "sha256": "06a919fcf7aa727934e6ec21ba2f05b347dc7399df9b2dc5b81dc3f58a94fa6b"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-research/agents/openai.yaml",
+      "sha256": "d29fdf4fb538140777bcce36644ac2d491182b1160e23bb515daeabb3d0c46c2"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-verify/SKILL.md",
+      "sha256": "f9c7a6572a375e5f3806d85464d5f72345a2fa8ca794e052f40d2860df0ebe48"
+    },
+    {
+      "scope": "plugin",
+      "path": "skills/uios-verify/agents/openai.yaml",
+      "sha256": "dbde1eb673d550a8129093c33af45b2528bd0f84e6181fea746efff20a960553"
+    },
+    {
+      "scope": "plugin",
+      "path": "tests/test_pattern_intelligence.py",
+      "sha256": "226d4bb8bd6e8d6eb4f6b77c892dbb6aca89da914db3dcce5fd63d413e6345ba"
+    },
+    {
+      "scope": "plugin",
+      "path": "tests/test_ui_os.py",
+      "sha256": "7a3f68dc3622e5e17a6ee6c3af1908c15782d0983ab49a4d3272ff127aa229c3"
+    },
+    {
+      "scope": "product",
+      "path": ".ui-os/evidence/manifest.json",
+      "sha256": "f0d92faaad92f7cc55fcfa0532b2308c658414d59e5e8f1c86c1c3bddc5f0cbf"
+    },
+    {
+      "scope": "product",
+      "path": ".ui-os/flows.json",
+      "sha256": "549013ee5054b5725604503c23e71fae48196f4d552d862f3f83a59db438f2dc"
+    },
+    {
+      "scope": "product",
+      "path": ".ui-os/project.json",
+      "sha256": "09638a4326d67ff8d8fc1340ba11d2b8390c3a78710eb60c816de9b91a8d6567"
+    },
+    {
+      "scope": "product",
+      "path": ".ui-os/tokens.json",
+      "sha256": "37e36f1a4757ffa9b8a6861759fcce18baded0a54ef5dc6e4209182793a166c3"
+    }
+  ],
+  "limitations": [
+    "The shipped-product lane is public release and repository evidence, not a newly captured interactive Windows session or paid flow database.",
+    "GitHub Desktop onboarding evidence is historical and only supports contextual next-step behavior, not current Windows visual styling.",
+    "The balenaEtcher artifact supports the guarded source-target-write principle but does not contain a complete adjacent-state screenshot set.",
+    "This research revalidation does not prove runtime WinUI layout, keyboard focus, UI Automation, High Contrast, text scaling, or motion; those require capture and isolated verification on Windows."
+  ],
+  "brief": {
+    "path": "pattern-intelligence-brief.md",
+    "sha256": "ee4b59396ccf0e7b12d8edcaae2921c811966dec1552c7695956de113fadaa29",
+    "bytes": 6349
+  },
+  "verdict": "grounded_proposal"
+}

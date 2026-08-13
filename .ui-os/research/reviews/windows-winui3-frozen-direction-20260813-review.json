@@ -1,0 +1,13 @@
+{
+  "schema_version": "uios.research-review/v0.2",
+  "manifest_path": "/Volumes/GameHub/Development/Games/mh-save-sync-windows-ui-quality-os/.ui-os/research/runs/windows-winui3-frozen-direction-20260813/manifest.json",
+  "manifest_sha256": "393ddda4788b0cbb4121e01b90d095f436f7ea914ba6ba6e1107be9479ff3359",
+  "context_sha256": "b17356e858916f66ce7ddc23a9da96a403c3bb739f7ec40de731477e70d3c807",
+  "protected_snapshot_sha256": "669f89e937dd7bf4c7a6f7b6e628b495ce4d3bf2ec96f33865ae62942fb888f1",
+  "reviewed_at": "2026-08-13T02:09:54Z",
+  "verdict": "pass",
+  "reviewer": "isolated-uios-research-review",
+  "notes": [
+    "Grounded frozen-direction proposal: all seven artifacts and brief match declared hashes; each canonical URL independently reopened on its declared publisher with lane-relevant substance. The selected Guided Fluent candidate has independent publisher support, Windows-native WinUI mapping, keyboard/UIA, text scaling, High Contrast, non-color and AnimationsEnabled fallbacks, no copied assets, and explicit rejected alternatives. Public shipped-flow artifacts remain incomplete and historical, so runtime usability, visual fidelity, motion, and accessibility remain unverified."
+  ]
+}

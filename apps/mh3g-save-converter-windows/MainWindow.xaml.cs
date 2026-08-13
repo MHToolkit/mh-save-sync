@@ -3,6 +3,8 @@ using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -22,16 +24,28 @@ public sealed partial class MainWindow : Window
     private bool _synchronizingConversionMode;
     private bool _synchronizingRepairVersion;
     private bool _loadedOnce;
+    private readonly string? _fixtureId;
+    private readonly MotionPreferenceService _motionPreferences = new();
+    private ConvertStep _convertStep = ConvertStep.Input;
 
-    public MainWindow()
+    private enum ConvertStep { Input, Optional, DryRun, WriteResult }
+
+    public MainWindow(MainViewModel? viewModel = null, string? fixtureId = null)
     {
-        ViewModel = new MainViewModel();
+        ViewModel = viewModel ?? new MainViewModel();
+        _fixtureId = fixtureId;
         InitializeComponent();
         RootGrid.DataContext = ViewModel;
         ConfigureWindowMaterial();
         SelectLanguage(ViewModel.LanguageOverride);
+        SelectSettingsLanguage(ViewModel.LanguageOverride);
         SelectConversionMode(ViewModel.SelectedConversionMode);
         SelectRepairVersion(null);
+        AppNavigation.SelectedItem = ConvertNavigationItem;
+        if (_fixtureId is not null)
+        {
+            SelectFixtureSurface(_fixtureId);
+        }
     }
 
     public MainViewModel ViewModel { get; }
@@ -44,7 +58,13 @@ public sealed partial class MainWindow : Window
         }
         _loadedOnce = true;
 
-        if (!_updateCheckStore.ShouldCheckToday())
+        if (_fixtureId == "write.confirmation")
+        {
+            await ShowFixtureConfirmationAsync();
+            return;
+        }
+
+        if (_fixtureId is not null || !_updateCheckStore.ShouldCheckToday())
         {
             return;
         }
@@ -53,6 +73,24 @@ public sealed partial class MainWindow : Window
         // is not retried on every launch during the same local calendar day.
         _updateCheckStore.MarkAttempt();
         await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async Task ShowFixtureConfirmationAsync()
+    {
+        var dialog = new ContentDialog
+        {
+            Title = ViewModel.Copy.ConfirmWriteTitle,
+            Content = new TextBlock
+            {
+                Text = $"{ViewModel.Copy.SyntheticFixtureNotice}\n\n{ViewModel.Copy.ConfirmWriteBody}",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = ViewModel.Copy.Continue,
+            CloseButtonText = ViewModel.Copy.Cancel,
+            DefaultButton = ContentDialogButton.Close,
+            IsPrimaryButtonEnabled = false,
+        };
+        await ShowDialogAsync(dialog);
     }
 
     private async void About_Click(object sender, RoutedEventArgs e)
@@ -206,7 +244,7 @@ public sealed partial class MainWindow : Window
 
     private void ConfigureWindowMaterial()
     {
-        AppWindow.Resize(new SizeInt32(1240, 900));
+        AppWindow.Resize(new SizeInt32(1120, 760));
         if (MicaController.IsSupported())
         {
             SystemBackdrop = new MicaBackdrop();
@@ -225,6 +263,18 @@ public sealed partial class MainWindow : Window
         _synchronizingLanguage = false;
     }
 
+    private void SelectSettingsLanguage(Models.AppLanguageOverride language)
+    {
+        _synchronizingLanguage = true;
+        SettingsLanguagePicker.SelectedIndex = language switch
+        {
+            Models.AppLanguageOverride.Chinese => 1,
+            Models.AppLanguageOverride.English => 2,
+            _ => 0,
+        };
+        _synchronizingLanguage = false;
+    }
+
     private void LanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_synchronizingLanguage || LanguagePicker.SelectedItem is not ComboBoxItem item)
@@ -233,6 +283,50 @@ public sealed partial class MainWindow : Window
         }
 
         ViewModel.SetLanguage(item.Tag as string);
+        SelectSettingsLanguage(ViewModel.LanguageOverride);
+    }
+
+    private void SettingsLanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_synchronizingLanguage && sender is ComboBox { SelectedItem: ComboBoxItem item })
+        {
+            ViewModel.SetLanguage(item.Tag as string);
+            SelectLanguage(ViewModel.LanguageOverride);
+        }
+    }
+
+    private void FixInput_Click(object sender, RoutedEventArgs e)
+    {
+        ShowConvertStep(ConvertStep.Input);
+        SourcePathBox.Focus(FocusState.Programmatic);
+    }
+
+    private void FixOptional_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsSystemEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(ViewModel.SystemSourcePath))
+            {
+                SystemSourceBox.Focus(FocusState.Programmatic);
+            }
+            else
+            {
+                SystemTargetBox.Focus(FocusState.Programmatic);
+            }
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(ViewModel.ExtrasSourceDirectory))
+        {
+            ExtrasSourceBox.Focus(FocusState.Programmatic);
+        }
+        else if (string.IsNullOrWhiteSpace(ViewModel.ExtrasStagingDirectory))
+        {
+            ExtrasStagingBox.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            ExtrasTargetBox.Focus(FocusState.Programmatic);
+        }
     }
 
     private void SelectConversionMode(Models.ConversionMode mode)
@@ -277,6 +371,152 @@ public sealed partial class MainWindow : Window
         }
 
         ViewModel.SetRepairFromVersion(item.Tag as string);
+    }
+
+    private void AppNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItemContainer?.Tag is not string route)
+        {
+            return;
+        }
+        HideAllSurfaces();
+        switch (route)
+        {
+            case "convert":
+                ShowConvertStep(_convertStep);
+                break;
+            case "history":
+                HistoryPage.Visibility = Visibility.Visible;
+                break;
+            case "cec":
+                CecPage.Visibility = Visibility.Visible;
+                break;
+            case "settings":
+                SettingsPage.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
+    private void HideAllSurfaces()
+    {
+        InputPage.Visibility = Visibility.Collapsed;
+        OptionalPage.Visibility = Visibility.Collapsed;
+        DryRunPage.Visibility = Visibility.Collapsed;
+        WriteResultPage.Visibility = Visibility.Collapsed;
+        HistoryPage.Visibility = Visibility.Collapsed;
+        CecPage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowConvertStep(ConvertStep step)
+    {
+        _convertStep = step;
+        HideAllSurfaces();
+        var surface = step switch
+        {
+            ConvertStep.Input => InputPage,
+            ConvertStep.Optional => OptionalPage,
+            ConvertStep.DryRun => DryRunPage,
+            _ => WriteResultPage,
+        };
+        surface.Visibility = Visibility.Visible;
+        AnimateCausalReveal(surface, 0.96, 120);
+    }
+
+    private void AnimateCausalReveal(UIElement target, double from, int durationMilliseconds)
+    {
+        target.Opacity = 1;
+        if (!_motionPreferences.AnimationsEnabled)
+        {
+            return;
+        }
+
+        var animation = new DoubleAnimation
+        {
+            From = from,
+            To = 1,
+            Duration = new Duration(TimeSpan.FromMilliseconds(durationMilliseconds)),
+            EnableDependentAnimation = true,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(animation, target);
+        Storyboard.SetTargetProperty(animation, "Opacity");
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(animation);
+        storyboard.Begin();
+    }
+
+    private void SelectFixtureSurface(string fixtureId)
+    {
+        if (fixtureId.StartsWith("components.", StringComparison.Ordinal))
+        {
+            _convertStep = ConvertStep.Optional;
+        }
+        else if (fixtureId.StartsWith("dry-run.", StringComparison.Ordinal))
+        {
+            _convertStep = ConvertStep.DryRun;
+        }
+        else if (fixtureId.StartsWith("write.", StringComparison.Ordinal)
+                 || fixtureId.StartsWith("conversion.", StringComparison.Ordinal))
+        {
+            _convertStep = ConvertStep.WriteResult;
+        }
+        else if (fixtureId.StartsWith("history.", StringComparison.Ordinal))
+        {
+            AppNavigation.SelectedItem = HistoryNavigationItem;
+            HideAllSurfaces();
+            HistoryPage.Visibility = Visibility.Visible;
+            return;
+        }
+        ShowConvertStep(_convertStep);
+    }
+
+    private bool FixtureBlocksActions()
+    {
+        if (_fixtureId is null)
+        {
+            return false;
+        }
+        RaiseFixtureLiveRegion();
+        return true;
+    }
+
+    private async Task RunUserOperationAsync(Func<Task> operation)
+    {
+        if (FixtureBlocksActions())
+        {
+            return;
+        }
+        await RunSafelyAsync(operation);
+    }
+
+    private void RaiseFixtureLiveRegion()
+    {
+        var peer = FrameworkElementAutomationPeer.FromElement(RootGrid)
+            ?? FrameworkElementAutomationPeer.CreatePeerForElement(RootGrid);
+        peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+    }
+
+    private void SkipOptional_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.CommitRepairOptionalScope(skip: true))
+        {
+            ShowConvertStep(ConvertStep.DryRun);
+        }
+    }
+
+    private void ContinueToDryRun_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.CommitRepairOptionalScope(skip: false))
+        {
+            ShowConvertStep(ConvertStep.DryRun);
+        }
+    }
+
+    private void StartConversion_Click(object sender, RoutedEventArgs e)
+    {
+        AppNavigation.SelectedItem = ConvertNavigationItem;
+        ShowConvertStep(ConvertStep.Input);
     }
 
     private async void ChooseSourceFile_Click(object sender, RoutedEventArgs e)
@@ -474,30 +714,27 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void GoToCoreWorkflow_Click(object sender, RoutedEventArgs e)
-    {
-        CoreWorkflowAnchor.StartBringIntoView();
-    }
+    private void GoToCoreWorkflow_Click(object sender, RoutedEventArgs e) => ShowConvertStep(ConvertStep.Input);
 
     private void GoToOptionalConfiguration_Click(object sender, RoutedEventArgs e)
     {
-        OptionalConfigurationAnchor.StartBringIntoView();
+        ShowConvertStep(ConvertStep.Optional);
     }
 
     private void GoToPostWriteDestination_Click(object sender, RoutedEventArgs e)
     {
         if (ViewModel.HasPendingSelectedOptionalWork)
         {
-            OptionalConfigurationAnchor.StartBringIntoView();
+            ShowConvertStep(ConvertStep.Optional);
             return;
         }
 
-        ResultAnchor.StartBringIntoView();
+        ShowConvertStep(ConvertStep.WriteResult);
     }
 
     private void GoToResult_Click(object sender, RoutedEventArgs e)
     {
-        ResultAnchor.StartBringIntoView();
+        ShowConvertStep(ConvertStep.WriteResult);
     }
 
     private void ApplySourceSelection(string path)
@@ -552,18 +789,29 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void Inspect_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectCoreAsync);
-    private async void InspectProgress_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectProgressAsync);
-    private async void InspectEvents_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectEventsAsync);
-    private async void DryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunCoreDryRunAsync);
-    private async void SystemDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunSystemDryRunAsync);
-    private async void ExtrasStageDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasStageDryRunAsync);
-    private async void ExtrasInstallDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunExtrasInstallDryRunAsync);
-    private async void InspectCec_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.InspectCecAsync);
-    private async void CecDryRun_Click(object sender, RoutedEventArgs e) => await RunSafelyAsync(ViewModel.RunCecDryRunAsync);
+    private async void Inspect_Click(object sender, RoutedEventArgs e)
+    {
+        if (FixtureBlocksActions()) return;
+        await RunSafelyAsync(ViewModel.InspectCoreAsync);
+        if (ViewModel.Stage == WorkflowStage.Inspected) ShowConvertStep(ConvertStep.Optional);
+    }
+    private async void InspectProgress_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.InspectProgressAsync);
+    private async void InspectEvents_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.InspectEventsAsync);
+    private async void DryRun_Click(object sender, RoutedEventArgs e)
+    {
+        if (FixtureBlocksActions()) return;
+        await RunSafelyAsync(ViewModel.RunCoreDryRunAsync);
+        if (ViewModel.Stage == WorkflowStage.DryRunAuthorized) ShowConvertStep(ConvertStep.WriteResult);
+    }
+    private async void SystemDryRun_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.RunSystemDryRunAsync);
+    private async void ExtrasStageDryRun_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.RunExtrasStageDryRunAsync);
+    private async void ExtrasInstallDryRun_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.RunExtrasInstallDryRunAsync);
+    private async void InspectCec_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.InspectCecAsync);
+    private async void CecDryRun_Click(object sender, RoutedEventArgs e) => await RunUserOperationAsync(ViewModel.RunCecDryRunAsync);
 
     private async void WriteCore_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
         {
             await RunSafelyAsync(ViewModel.WriteCoreAsync);
@@ -572,6 +820,7 @@ public sealed partial class MainWindow : Window
 
     private async void RollbackCore_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackCoreAsync);
@@ -580,6 +829,7 @@ public sealed partial class MainWindow : Window
 
     private async void WriteSystem_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
         {
             await RunSafelyAsync(ViewModel.WriteSystemAsync);
@@ -588,6 +838,7 @@ public sealed partial class MainWindow : Window
 
     private async void RollbackSystem_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackSystemAsync);
@@ -596,11 +847,12 @@ public sealed partial class MainWindow : Window
 
     private async void StageExtras_Click(object sender, RoutedEventArgs e)
     {
-        await RunSafelyAsync(ViewModel.StageExtrasAsync);
+        await RunUserOperationAsync(ViewModel.StageExtrasAsync);
     }
 
     private async void InstallExtras_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmWriteTitle, ViewModel.Copy.ConfirmWriteBody))
         {
             await RunSafelyAsync(ViewModel.InstallExtrasAsync);
@@ -609,6 +861,7 @@ public sealed partial class MainWindow : Window
 
     private async void RollbackExtras_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackExtrasAsync);
@@ -617,6 +870,7 @@ public sealed partial class MainWindow : Window
 
     private async void WriteCec_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmCecTitle, ViewModel.Copy.ConfirmCecBody))
         {
             await RunSafelyAsync(ViewModel.WriteCecAsync);
@@ -625,6 +879,7 @@ public sealed partial class MainWindow : Window
 
     private async void RollbackCec_Click(object sender, RoutedEventArgs e)
     {
+        if (FixtureBlocksActions()) return;
         if (await ConfirmAsync(ViewModel.Copy.ConfirmRollbackTitle, ViewModel.Copy.ConfirmRollbackBody))
         {
             await RunSafelyAsync(ViewModel.RollbackCecAsync);
@@ -635,16 +890,29 @@ public sealed partial class MainWindow : Window
     {
         ViewModel.IsCecEnabled = CecToggle.IsOn;
         CecControls.Visibility = CecToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        if (CecToggle.IsOn)
+        {
+            AnimateCausalReveal(CecControls, 0, 140);
+        }
     }
 
     private void SystemToggle_Toggled(object sender, RoutedEventArgs e)
     {
         ViewModel.IsSystemEnabled = SystemToggle.IsOn;
         SystemControls.Visibility = SystemToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        if (SystemToggle.IsOn)
+        {
+            AnimateCausalReveal(SystemControls, 0, 140);
+        }
     }
 
     private async Task<string?> PickFileAsync(params string[] extensions)
     {
+        if (_fixtureId is not null)
+        {
+            RaiseFixtureLiveRegion();
+            return null;
+        }
         var picker = new FileOpenPicker();
         foreach (var extension in extensions)
         {
@@ -657,6 +925,11 @@ public sealed partial class MainWindow : Window
 
     private async Task<string?> PickFolderAsync()
     {
+        if (_fixtureId is not null)
+        {
+            RaiseFixtureLiveRegion();
+            return null;
+        }
         var picker = new FolderPicker();
         picker.FileTypeFilter.Add("*");
         InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));

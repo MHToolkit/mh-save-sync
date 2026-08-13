@@ -8,31 +8,70 @@
             <ResourceDictionary.MergedDictionaries>
                 <controls:XamlControlsResources />
             </ResourceDictionary.MergedDictionaries>
-            <Color x:Key="ConverterInk">#FF18212F</Color>
-            <Color x:Key="ConverterSlate">#FF526175</Color>
-            <Color x:Key="ConverterBlue">#FF0A7AFF</Color>
-            <Color x:Key="ConverterJade">#FF1B8A6B</Color>
-            <Color x:Key="ConverterCoral">#FFE86552</Color>
-            <Color x:Key="ConverterMist">#FFF1F5FA</Color>
-            <SolidColorBrush x:Key="ConverterInkBrush" Color="{StaticResource ConverterInk}" />
-            <SolidColorBrush x:Key="ConverterSlateBrush" Color="{StaticResource ConverterSlate}" />
-            <SolidColorBrush x:Key="ConverterBlueBrush" Color="{StaticResource ConverterBlue}" />
-            <SolidColorBrush x:Key="ConverterJadeBrush" Color="{StaticResource ConverterJade}" />
-            <SolidColorBrush x:Key="ConverterCoralBrush" Color="{StaticResource ConverterCoral}" />
-            <SolidColorBrush x:Key="ConverterMistBrush" Color="{StaticResource ConverterMist}" />
 
-            <Style x:Key="SectionTitleTextStyle" TargetType="TextBlock">
-                <Setter Property="FontSize" Value="20" />
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="ConverterInkBrush" Color="#FF17202E" />
+                    <SolidColorBrush x:Key="ConverterSlateBrush" Color="#FF536173" />
+                    <SolidColorBrush x:Key="ConverterAccentBrush" Color="#FF0F6CBD" />
+                    <SolidColorBrush x:Key="ConverterSuccessBrush" Color="#FF0F7B55" />
+                    <SolidColorBrush x:Key="ConverterDangerBrush" Color="#FFC42B1C" />
+                    <SolidColorBrush x:Key="ConverterSurfaceBrush" Color="#F7FFFFFF" />
+                    <SolidColorBrush x:Key="ConverterSubtleBrush" Color="#FFF5F7FA" />
+                    <SolidColorBrush x:Key="ConverterStrokeBrush" Color="#22000000" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="ConverterInkBrush" Color="#FFF3F3F3" />
+                    <SolidColorBrush x:Key="ConverterSlateBrush" Color="#FFC8C8C8" />
+                    <SolidColorBrush x:Key="ConverterAccentBrush" Color="#FF60AFFF" />
+                    <SolidColorBrush x:Key="ConverterSuccessBrush" Color="#FF54BFA1" />
+                    <SolidColorBrush x:Key="ConverterDangerBrush" Color="#FFFF8A7A" />
+                    <SolidColorBrush x:Key="ConverterSurfaceBrush" Color="#F21F1F1F" />
+                    <SolidColorBrush x:Key="ConverterSubtleBrush" Color="#FF292929" />
+                    <SolidColorBrush x:Key="ConverterStrokeBrush" Color="#33FFFFFF" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="ConverterInkBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ConverterSlateBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ConverterAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="ConverterSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ConverterDangerBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ConverterSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="ConverterSubtleBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="ConverterStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <Style x:Key="PageTitleTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="28" />
                 <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Foreground" Value="{StaticResource ConverterInkBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource ConverterInkBrush}" />
+            </Style>
+            <Style x:Key="SectionTitleTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="18" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource ConverterInkBrush}" />
             </Style>
             <Style x:Key="SectionCaptionTextStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="13" />
                 <Setter Property="TextWrapping" Value="Wrap" />
-                <Setter Property="Foreground" Value="{StaticResource ConverterSlateBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource ConverterSlateBrush}" />
+            </Style>
+            <Style x:Key="WorkSurfaceStyle" TargetType="Border">
+                <Setter Property="Padding" Value="20" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Background" Value="{ThemeResource ConverterSurfaceBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource ConverterStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
             </Style>
             <Style x:Key="QuietButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
                 <Setter Property="Padding" Value="12,8" />
+            </Style>
+            <Style x:Key="PathTextBoxStyle" TargetType="TextBox">
+                <Setter Property="MinHeight" Value="40" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

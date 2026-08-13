@@ -1,0 +1,3051 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>NavigationView - Windows apps | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="NavigationView is an adaptive control that implements top-level navigation patterns for your app." />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="NavigationView - Windows apps" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview" />
+			<meta property="og:description" content="NavigationView is an adaptive control that implements top-level navigation patterns for your app." />
+			<meta name="platform_id" content="b32c712c-c2e2-e7c0-17e2-bbff7f52cfd5" /> 
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-WinDevCenter" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="windows-app-sdk" />
+	
+		<meta name="recommendations" content="true" />
+	
+		<meta name="ROBOTS" content="INDEX, FOLLOW" />
+	
+		<meta name="author" content="GrantMeStrength" />
+	
+		<meta name="ms.author" content="jken" />
+	
+		<meta name="Search.Product" content="eADQiWindows 10XVcnh" />
+	
+		<meta name="breadcrumb_path" content="/windows/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_product_url" content="https://www.microsoft.com/en-us/windowsinsider/feedbackhub/fb" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="ms.subservice" content="apps" />
+	
+		<meta name="ms.update-cycle" content="365-days" />
+	
+		<meta name="template" content="detail.hbs" />
+	
+		<meta name="ms.date" content="2026-07-15T00:00:00Z" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="doc-status" content="Published" />
+	
+		<meta name="ms.localizationpriority" content="medium" />
+	
+		<meta name="ms.custom" content="RS5" />
+	
+		<meta name="document_id" content="31b8e9b8-e6b3-9146-4cbe-b3598b947d1e" />
+	
+		<meta name="document_version_independent_id" content="31b8e9b8-e6b3-9146-4cbe-b3598b947d1e" />
+	
+		<meta name="updated_at" content="2026-07-17T02:50:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/windows-dev-docs-pr/blob/live/hub/apps/develop/ui/controls/navigationview.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/windows-dev-docs-pr/blob/2031e48f47826aa01343fcc25586d44956be0b01/hub/apps/develop/ui/controls/navigationview.md" />
+	
+		<meta name="git_commit_id" content="2031e48f47826aa01343fcc25586d44956be0b01" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="MSDN.windows-uwp-hub" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/MSDN.windows-uwp-hub/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="search.mshattr.devlang" content="csharp cppwinrt" />
+	
+		<meta name="word_count" content="5919" />
+	
+		<meta name="asset_id" content="apps/develop/ui/controls/navigationview" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="hub/apps/develop/ui/controls/navigationview.md" />
+	
+		<meta name="previous_tlsh_hash" content="63F4F3A2848C4611EFC1AE2961259F6264F05069BB716FD028667050814AADFB3FD964E6E7B333593339026310B3270F52E5D77BC0AE93B3BB6118AF825C3191572D3BB7DA" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/windows-dev-docs/blob/docs/hub/apps/develop/ui/controls/navigationview.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/bcbcbad5-4208-4783-8035-8481272c98b8" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/43b2e5aa-8a6d-4de2-a252-692232e5edc8" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03510.8120-9976c201/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://www.microsoft.com/en-us/windowsinsider/feedbackhub/fb",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": true,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "contributors": [
+      {
+        "name": "GrantMeStrength",
+        "url": "https://github.com/GrantMeStrength"
+      },
+      {
+        "name": "qiutongMS",
+        "url": "https://github.com/qiutongMS"
+      },
+      {
+        "name": "jwmsft",
+        "url": "https://github.com/jwmsft"
+      },
+      {
+        "name": "niels9001",
+        "url": "https://github.com/niels9001"
+      }
+    ],
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/windows-dev-docs/issues/new?template=1-customer-feedback.yml",
+    "openSourceFeedbackIssueTitle": "",
+    "openSourceFeedbackIssueLabels": "needs-triage"
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03510.8120-9976c201/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div>
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+		<div class="language dropdown display-flex align-items-center">
+			<button
+				type="button"
+				class="dropdown-trigger button button-clear button-sm button-primary"
+				aria-expanded="false"
+				title="Language"
+				data-bi-name="language"
+			>
+				<span class="lang-title align-self-flex-start" dir="ltr">Language</span>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-chevron-down-light expanded-indicator"></span>
+				</span>
+			</button>
+			<div class="language-selector dropdown-menu padding-xxs">
+				<ul data-bi-name="language-links" dir="ltr">
+					
+			<li>
+				<button
+					type="button"
+					class="button button-clear button-sm button-block"
+					data-bi-name="lang-csharp"
+					aria-pressed="false"
+				>
+					csharp
+				</button>
+			</li>
+		
+			<li>
+				<button
+					type="button"
+					class="button button-clear button-sm button-block"
+					data-bi-name="lang-cppwinrt"
+					aria-pressed="false"
+				>
+					cppwinrt
+				</button>
+			</li>
+		
+				</ul>
+			</div>
+		</div>
+	
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			
+			href="https://github.com/MicrosoftDocs/windows-dev-docs/blob/docs/hub/apps/develop/ui/controls/navigationview.md"
+			data-original_content_git_url="https://github.com/MicrosoftDocs/windows-dev-docs-pr/blob/live/hub/apps/develop/ui/controls/navigationview.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/hub/apps/develop/ui/controls/navigationview.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="navigationview">NavigationView</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	
+					<div class="content"><p>The NavigationView control provides top-level navigation for your app. It adapts to a variety of screen sizes and supports both <em>top</em> and <em>left</em> navigation styles.</p>
+<p><span class="mx-imgBorder">
+<img src="images/navigation-view-top-style.png" alt="top navigation" data-linktype="relative-path">
+</span>
+<span class="mx-imgBorder">
+<img src="images/navigation-view-left-style.png" alt="left navigation" data-linktype="relative-path">
+</span>
+<br>
+<em>NavigationView supports both top and left navigation pane or menu</em></p>
+<h2 id="is-this-the-right-control">Is this the right control?</h2>
+<p>NavigationView is an adaptive navigation control that works well for:</p>
+<ul>
+<li>Providing a consistent navigational experience throughout your app.</li>
+<li>Preserving screen real estate on smaller windows.</li>
+<li>Organizing access to many navigation categories.</li>
+</ul>
+<p>For other navigation patterns, see <a href="../../../design/basics/navigation-basics" data-linktype="relative-path">Navigation design basics</a>.</p>
+<h2 id="create-a-navigation-view">Create a navigation view</h2>
+<div class="checklist">
+<ul>
+<li><strong>Important APIs:</strong> <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview" data-linktype="absolute-path">NavigationView class</a></li>
+</ul>
+</div>
+<div class="nextstepaction">
+<p><a href="winui3gallery://item/NavigationView" data-linktype="external">Open the WinUI 3 Gallery app and see the NavigationView in action</a></p>
+</div>
+<blockquote>
+<table>
+<tbody><tr>
+<td><img src="../../../../includes/images/winui-gallery-logo.png" width="76" alt="WinUI 3 Gallery icon" data-linktype="relative-path"></td>
+<td>The <strong>WinUI 3 Gallery</strong> app includes interactive examples of WinUI controls and features. Get the app from the <a href="https://apps.microsoft.com/detail/9P3JFPWWDZRC" data-linktype="external">Microsoft Store</a> or browse the source code on <a href="https://github.com/microsoft/WinUI-Gallery" data-linktype="external">GitHub</a>.</td>
+</tr>
+</tbody></table>
+</blockquote>
+<p>This example shows how to create a simple navigation view in XAML.</p>
+<pre><code class="lang-xaml">&lt;NavigationView&gt;
+    &lt;NavigationView.MenuItems&gt;
+        &lt;NavigationViewItem Content="Nav Item A"/&gt;
+        &lt;NavigationViewItem Content="Nav Item B"/&gt;
+        &lt;NavigationViewItem Content="Nav Item C"/&gt;
+    &lt;/NavigationView.MenuItems&gt;
+
+    &lt;Frame x:Name="ContentFrame"/&gt;
+&lt;/NavigationView&gt;
+</code></pre>
+<h2 id="display-modes">Display modes</h2>
+<p>You can use the PaneDisplayMode property to configure different navigation styles, or display modes, for the NavigationView.</p>
+<section class="row">
+<div class="column">
+<h3 id="top">Top</h3>
+<p>The pane is positioned above the content.<br>
+<code>PaneDisplayMode="Top"</code></p>
+</div>
+<div class="column span2">
+<p><img src="images/displaymode-top.png" alt="Example of top navigation" data-linktype="relative-path"></p>
+</div>
+</section>
+<p>We recommend <em>top</em> navigation when:</p>
+<ul>
+<li>You have 5 or fewer top-level navigation categories that are equally important, and any additional top-level navigation categories that end up in the dropdown overflow menu are considered less important.</li>
+<li>You need to show all navigation options on screen.</li>
+<li>You want more space for your app content.</li>
+<li>Icons cannot clearly describe your app's navigation categories.</li>
+</ul>
+<section class="row">
+<div class="column">
+<h3 id="left">Left</h3>
+<p>The pane is expanded and positioned to the left of the content.<br>
+<code>PaneDisplayMode="Left"</code></p>
+</div>
+<div class="column span2">
+<p><img src="images/displaymode-left.png" alt="Example of expanded left navigation pane" data-linktype="relative-path"></p>
+</div>
+</section>
+<p>We recommend <em>left</em> navigation when:</p>
+<ul>
+<li>You have 5-10 equally important top-level navigation categories.</li>
+<li>You want navigation categories to be very prominent, with less space for other app content.</li>
+</ul>
+<section class="row">
+<div class="column">
+<h3 id="leftcompact">LeftCompact</h3>
+<p>The pane shows only icons until opened and is positioned to the left of the content. When opened, the pane overlays the content.<br>
+<code>PaneDisplayMode="LeftCompact"</code></p>
+</div>
+<div class="column span2">
+<p><img src="images/displaymode-leftcompact.png" alt="Example of compact left navigation pane" data-linktype="relative-path"></p>
+</div>
+</section>
+<section class="row">
+<div class="column">
+<h3 id="leftminimal">LeftMinimal</h3>
+<p>Only the menu button is shown until the pane is opened. When opened, the pane overlays the left side of the content.<br>
+<code>PaneDisplayMode="LeftMinimal"</code></p>
+</div>
+<div class="column span2">
+<p><img src="images/displaymode-leftminimal.png" alt="Example of minimal left navigation pane" data-linktype="relative-path"></p>
+</div>
+</section>
+<h3 id="auto">Auto</h3>
+<p>By default, PaneDisplayMode is set to <code>Auto</code>. In <code>Auto</code> mode, the NavigationView adapts between <code>LeftMinimal</code> when the window is narrow, to <code>LeftCompact</code>, and then <code>Left</code> as the window gets wider. For more info, see the <a href="#adaptive-behavior" data-linktype="self-bookmark">adaptive behavior</a> section.</p>
+<p><img src="images/displaymode-auto.png" alt="Left navigation default adaptive behavior" data-linktype="relative-path"><br>
+<em>NavigationView default adaptive behavior</em></p>
+<h2 id="anatomy">Anatomy</h2>
+<p>These images show the layout of the pane, header, and content areas of the control when configured for <em>top</em> or <em>left</em> navigation.</p>
+<p><img src="images/topnav-anatomy.png" alt="Top NavigationView layout" data-linktype="relative-path"><br>
+<em>Top navigation layout</em></p>
+<p><img src="images/leftnav-anatomy.png" alt="Left NavigationView layout" data-linktype="relative-path"><br>
+<em>Left navigation layout</em></p>
+<h3 id="pane">Pane</h3>
+<p>You can use the PaneDisplayMode property to position the pane above the content or to the left of the content.</p>
+<p>The NavigationView pane can contain:</p>
+<ul>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitem" data-linktype="absolute-path">NavigationViewItem</a> objects. Navigation items for navigating to specific pages.</li>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitemseparator" data-linktype="absolute-path">NavigationViewItemSeparator</a> objects. Separators for grouping navigation items. Set the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.uielement.opacity" data-linktype="absolute-path">Opacity</a> property to 0 to render the separator as space.</li>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitemheader" data-linktype="absolute-path">NavigationViewItemHeader</a> objects. Headers for labeling groups of items.</li>
+<li>An optional <a href="auto-suggest-box" data-linktype="relative-path">AutoSuggestBox</a> control to allow for app-level search. Assign the control to the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.autosuggestbox" data-linktype="absolute-path">NavigationView.AutoSuggestBox</a> property.</li>
+<li>An optional entry point for <a href="../../../design/app-settings/guidelines-for-app-settings" data-linktype="relative-path">app settings</a>. To hide the settings item, set the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.issettingsvisible" data-linktype="absolute-path">IsSettingsVisible</a> property to <code>false</code>.</li>
+</ul>
+<p>The left pane also contains:</p>
+<ul>
+<li>A menu button to toggle the pane opened and closed. On larger app windows when the pane is open, you may choose to hide this button using the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.ispanetogglebuttonvisible" data-linktype="absolute-path">IsPaneToggleButtonVisible</a> property.</li>
+</ul>
+<p>The NavigationView has a back button that is placed in the top left-hand corner of the pane. However, it does not automatically handle backwards navigation and add content to the back stack. To enable backwards navigation, see the <a href="#backwards-navigation" data-linktype="self-bookmark">backwards navigation</a> section.</p>
+<p>Here is the detailed pane anatomy for the top and left pane positions.</p>
+<h4 id="top-navigation-pane">Top navigation pane</h4>
+<p><img src="images/navview-pane-anatomy-horizontal.png" alt="NavigationView top pane anatomy" data-linktype="relative-path"></p>
+<ol>
+<li>Headers</li>
+<li>Navigation items</li>
+<li>Separators</li>
+<li>AutoSuggestBox (optional)</li>
+<li>Settings button (optional)</li>
+</ol>
+<h4 id="left-navigation-pane">Left navigation pane</h4>
+<p><img src="images/navview-pane-anatomy-vertical.png" alt="NavigationView left pane anatomy" data-linktype="relative-path"></p>
+<ol>
+<li>Menu button</li>
+<li>Navigation items</li>
+<li>Separators</li>
+<li>Headers</li>
+<li>AutoSuggestBox (optional)</li>
+<li>Settings button (optional)</li>
+</ol>
+<h4 id="footer-menu-items">Footer menu items</h4>
+<p>You can use <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.footermenuitems" data-linktype="absolute-path">FooterMenuItems</a> to place navigation items at the end of the navigation pane, contrasted with the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.menuitems" data-linktype="absolute-path">MenuItems</a> property which places items at the start of the pane.</p>
+<p>FooterMenuItems will be displayed before the <code>Settings</code> item by default. The <code>Settings</code> item can still be toggled using the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.IsSettingsVisible" data-linktype="absolute-path"><code>IsSettingsVisible</code></a> property.</p>
+<p>Only Navigation items should be placed in FooterMenuItems - any other content that needs to align to the footer of the pane should be placed in <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.panefooter" data-linktype="absolute-path">PaneFooter</a>.</p>
+<p>For an example of how to add FooterMenuItems to your NavigationView, see the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.footermenuitems" data-linktype="absolute-path">FooterMenuItems class</a>.</p>
+<p>The image below shows a NavigationView with <strong>Account</strong>, <strong>Your Cart</strong>, and <strong>Help</strong> navigation items in the footer menu.</p>
+<p><img src="images/footermenu-leftmode.png" alt="A NavigationView with FooterMenuItems" data-linktype="relative-path"></p>
+<h4 id="pane-footer">Pane footer</h4>
+<p>You can place free-form content in the pane's footer by adding it to the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.panefooter" data-linktype="absolute-path">PaneFooter</a> property.</p>
+<section class="row">
+<div class="column">
+<p><img src="images/navview-freeform-footer-top.png" alt="Pane footer top nav" data-linktype="relative-path"><br>
+<em>Top pane footer</em><br></p>
+</div>
+<div class="column">
+<p><img src="images/navview-freeform-footer-left.png" alt="Pane footer left nav" data-linktype="relative-path"><br>
+<em>Left pane footer</em><br></p>
+</div>
+</section>
+<h4 id="pane-title-and-header">Pane title and header</h4>
+<p>You can place text content in the pane header area by setting the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.panetitle" data-linktype="absolute-path">PaneTitle</a> property. It takes a string and shows the text next to the menu button.</p>
+<p>To add non-text content, such as an image or logo, you can place any element in the pane's header by adding it to the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.paneheader" data-linktype="absolute-path">PaneHeader</a> property.</p>
+<p>If both PaneTitle and PaneHeader are set, the content is stacked horizontally next to the menu button, with the PaneTitle closest to the menu button.</p>
+<section class="row">
+<div class="column">
+<p><img src="images/navview-freeform-header-top.png" alt="Pane header top nav" data-linktype="relative-path"><br>
+<em>Top pane header</em><br></p>
+</div>
+<div class="column">
+<p><img src="images/navview-freeform-header-left.png" alt="Pane header left nav" data-linktype="relative-path"><br>
+<em>Left pane header</em><br></p>
+</div>
+</section>
+<h4 id="pane-content">Pane content</h4>
+<p>You can place free-form content in the pane by adding it to the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.panecustomcontent" data-linktype="absolute-path">PaneCustomContent</a> property.</p>
+<section class="row">
+<div class="column">
+<p><img src="images/navview-freeform-pane-top.png" alt="Pane custom content top nav" data-linktype="relative-path"><br>
+<em>Top pane custom content</em><br></p>
+</div>
+<div class="column">
+<p><img src="images/navview-freeform-pane-left.png" alt="Pane custom content left nav" data-linktype="relative-path"><br>
+<em>Left pane custom content</em><br></p>
+</div>
+</section>
+<h3 id="header">Header</h3>
+<p>You can add a page title by setting the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.header" data-linktype="absolute-path">Header</a> property.</p>
+<p><img src="images/nav-header.png" alt="Example of NavigationView header area" data-linktype="relative-path"><br>
+<em>NavigationView header</em></p>
+<p>The header area is vertically aligned with the navigation button in the left pane position, and lies below the pane in the top pane position. It has a fixed height of 52 px. Its purpose is to hold the page title of the selected navigation category. The header is docked to the top of the page and acts as a scroll clipping point for the content area.</p>
+<p>The header is visible any time the NavigationView is in <code>Minimal</code> display mode. You may choose to hide the header in other modes, which are used on larger window widths. To hide the header, set the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.AlwaysShowHeader" data-linktype="absolute-path">AlwaysShowHeader</a> property to <code>false</code>.</p>
+<h3 id="content">Content</h3>
+<p><img src="images/nav-content.png" alt="Example of NavigationView content area" data-linktype="relative-path"><br>
+<em>NavigationView content</em></p>
+<p>The content area is where most of the information for the selected navigation category is displayed.</p>
+<p>We recommend 12px margins for your content area when NavigationView is in <code>Minimal</code> mode and 24px margins otherwise.</p>
+<h2 id="adaptive-behavior">Adaptive behavior</h2>
+<p>By default, the NavigationView automatically changes its display mode based on the amount of screen space available to it. The <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.compactmodethresholdwidth" data-linktype="absolute-path">CompactModeThresholdWidth</a> and <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.expandedmodethresholdwidth" data-linktype="absolute-path">ExpandedModeThresholdWidth</a> properties specify the breakpoints at which the display mode changes. You can modify these values to customize the adaptive display mode behavior.</p>
+<h3 id="default">Default</h3>
+<p>When PaneDisplayMode is set to its default value of <code>Auto</code>, the adaptive behavior is to show:</p>
+<ul>
+<li>An expanded left pane on large window widths (1008px or greater).</li>
+<li>A left, icon-only, nav pane (<code>LeftCompact</code>) on medium window widths (641px to 1007px).</li>
+<li>Only a menu button (<code>LeftMinimal</code>) on small window widths (640px or less).</li>
+</ul>
+<p>For more information about window sizes for adaptive behavior, see <a href="../../../design/layout/screen-sizes-and-breakpoints-for-responsive-design" data-linktype="relative-path">Screen sizes and breakpoints</a>.</p>
+<p><img src="images/displaymode-auto.png" alt="Left navigation default adaptive behavior" data-linktype="relative-path"><br>
+<em>NavigationView default adaptive behavior</em></p>
+<h3 id="minimal">Minimal</h3>
+<p>A second common adaptive pattern is to use an expanded left pane on large window widths, and only a menu button on both medium and small window widths.</p>
+<p>We recommend this when:</p>
+<ul>
+<li>You want more space for app content on smaller window widths.</li>
+<li>Your navigation categories cannot be clearly represented with icons.</li>
+</ul>
+<p><img src="images/adaptive-behavior-minimal.png" alt="Left navigation minimal adaptive behavior" data-linktype="relative-path"><br>
+<em>NavigationView "minimal" adaptive behavior</em></p>
+<p>To configure this behavior, set CompactModeThresholdWidth to the width at which you want the pane to collapse. Here, it's changed from the default of 640 to 1007. You should also set ExpandedModeThresholdWidth to ensure the values don't conflict.</p>
+<pre><code class="lang-xaml">&lt;NavigationView CompactModeThresholdWidth="1007" ExpandedModeThresholdWidth="1007"/&gt;
+</code></pre>
+<h3 id="compact">Compact</h3>
+<p>A third common adaptive pattern is to use an expanded left pane on large window widths, and a LeftCompact, icon-only, nav pane on both medium and small window widths.</p>
+<p>We recommend this when:</p>
+<ul>
+<li>It is important to always show all navigation options on screen.</li>
+<li>Your navigation categories can be clearly represented with icons.</li>
+</ul>
+<p><img src="images/adaptive-behavior-compact.png" alt="Left navigation compact adaptive behavior" data-linktype="relative-path"><br>
+<em>NavigationView "compact" adaptive behavior</em></p>
+<p>To configure this behavior, set CompactModeThresholdWidth to 0.</p>
+<pre><code class="lang-xaml">&lt;NavigationView CompactModeThresholdWidth="0"/&gt;
+</code></pre>
+<h3 id="no-adaptive-behavior">No adaptive behavior</h3>
+<p>To disable the automatic adaptive behavior, set PaneDisplayMode to a value other than <code>Auto</code>. Here, it's set to LeftMinimal, so only the menu button is shown regardless of the window width.</p>
+<p><img src="images/adaptive-behavior-none.png" alt="Left navigation no adaptive behavior" data-linktype="relative-path"><br>
+<em>NavigationView with PaneDisplayMode set to LeftMinimal</em></p>
+<pre><code class="lang-xaml">&lt;NavigationView PaneDisplayMode="LeftMinimal" /&gt;
+</code></pre>
+<p>As described previously in the <em>Display modes</em> section, you can set the pane to be always on top, always expanded, always compact, or always minimal. You can also manage the display modes yourself in your app code. An example of this is shown in the next section.</p>
+<h3 id="top-to-left-navigation">Top to left navigation</h3>
+<p>When you use top navigation in your app, navigation items collapse into an overflow menu as the window width decreases. When your app window is narrow, it can provide a better user experience to switch the PaneDisplayMode from <code>Top</code> to <code>LeftMinimal</code> navigation, rather than letting all the items collapse into the overflow menu.</p>
+<p>We recommend using top navigation on large window sizes and left navigation on small window sizes when:</p>
+<ul>
+<li>You have a set of equally important top-level navigation categories to be displayed together, such that if one category in this set doesn't fit on screen, you collapse to left navigation to give them equal importance.</li>
+<li>You wish to preserve as much content space as possible in small window sizes.</li>
+</ul>
+<p>This example shows how to use a <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.UI.Xaml.VisualStateManager" data-linktype="absolute-path">VisualStateManager</a> and <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.adaptivetrigger.minwindowwidth" data-linktype="absolute-path">AdaptiveTrigger.MinWindowWidth</a> property to switch between <code>Top</code> and <code>LeftMinimal</code> navigation.</p>
+<p><img src="images/navigation-top-to-left.png" alt="Example of top or left adaptive behavior 1" data-linktype="relative-path"></p>
+<pre><code class="lang-xaml">&lt;Grid&gt;
+    &lt;NavigationView x:Name="NavigationViewControl" &gt;
+        &lt;NavigationView.MenuItems&gt;
+            &lt;NavigationViewItem Content="A" x:Name="A" /&gt;
+            &lt;NavigationViewItem Content="B" x:Name="B" /&gt;
+            &lt;NavigationViewItem Content="C" x:Name="C" /&gt;
+        &lt;/NavigationView.MenuItems&gt;
+    &lt;/NavigationView&gt;
+
+    &lt;VisualStateManager.VisualStateGroups&gt;
+        &lt;VisualStateGroup&gt;
+            &lt;VisualState&gt;
+                &lt;VisualState.StateTriggers&gt;
+                    &lt;AdaptiveTrigger
+                        MinWindowWidth="{x:Bind NavigationViewControl.CompactModeThresholdWidth}" /&gt;
+                &lt;/VisualState.StateTriggers&gt;
+
+                &lt;VisualState.Setters&gt;
+                    &lt;Setter Target="NavigationViewControl.PaneDisplayMode" Value="Top"/&gt;
+                &lt;/VisualState.Setters&gt;
+            &lt;/VisualState&gt;
+        &lt;/VisualStateGroup&gt;
+    &lt;/VisualStateManager.VisualStateGroups&gt;
+&lt;/Grid&gt;
+
+</code></pre>
+<div class="TIP">
+<p>Tip</p>
+<p>When you use AdaptiveTrigger.MinWindowWidth, the visual state is triggered when the window is wider than the specified minimum width. This means the default XAML defines the narrow window, and the VisualState defines the modifications that are applied when the window gets wider. The default PaneDisplayMode for the NavigationView is Auto, so when the window width is less than or equal to <code>CompactModeThresholdWidth</code>, <code>LeftMinimal</code> navigation is used. When the window gets wider, the VisualState overrides the default, and <code>Top</code> navigation is used.</p>
+</div>
+<h2 id="navigation">Navigation</h2>
+<p>The NavigationView doesn't perform any navigation tasks automatically. When the user taps on a navigation item, the NavigationView shows that item as selected and raises an <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.iteminvoked" data-linktype="absolute-path">ItemInvoked</a> event. If the tap results in a new item being selected, a <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.selectionchanged" data-linktype="absolute-path">SelectionChanged</a> event is also raised.</p>
+<p>You can handle either event to perform tasks related to the requested navigation. Which one you should handle depends on the behavior you want for your app. Typically, you navigate to the requested page and update the NavigationView header in response to these events.</p>
+<ul>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.iteminvoked" data-linktype="absolute-path">ItemInvoked</a> is raised any time the user taps a navigation item, even if it's already selected. (The item can also be invoked with an equivalent action using mouse, keyboard, or other input. For more info, see <a href="../../input/" data-linktype="relative-path">Input and interactions</a>.) If you navigate in the ItemInvoked handler, by default, the page will be reloaded, and a duplicate entry is added to the navigation stack. If you navigate when an item is invoked, you should disallow reloading the page, or ensure that a duplicate entry is not created in the navigation backstack when the page is reloaded. (See code examples.)</li>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.selectionchanged" data-linktype="absolute-path">SelectionChanged</a> can be raised by a user invoking an item that isn't currently selected, or by programmatically changing the selected item. If the selection change occurs because a user invoked an item, the ItemInvoked event occurs first. If the selection change is programmatic, ItemInvoked is not raised.</li>
+</ul>
+<p>All navigation items are part of the same selection model, whether they are a part of <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.menuitems" data-linktype="absolute-path">MenuItems</a> or <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.footermenuitems" data-linktype="absolute-path">FooterMenuItems</a>. Only one navigation item can be selected at a time.</p>
+<h3 id="backwards-navigation">Backwards navigation</h3>
+<p>NavigationView has a built-in back button; but, as with forward navigation, it doesn't perform backwards navigation automatically. When the user taps the back button, the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.backrequested" data-linktype="absolute-path">BackRequested</a> event is raised. You handle this event to perform backwards navigation. For more info and code examples, see <a href="../navigation/navigation-history-and-backwards-navigation" data-linktype="relative-path">Navigation history and backwards navigation</a>.</p>
+<p>In <code>Minimal</code> or <code>Compact</code> mode, the NavigationView <code>Pane</code> is open as a flyout. In this case, clicking the back button will close the <code>Pane</code> and raise the PaneClosing event instead.</p>
+<p>You can hide or disable the back button by setting these properties:</p>
+<ul>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.isbackbuttonvisible" data-linktype="absolute-path">IsBackButtonVisible</a>: use to show and hide the back button. This property takes a value of the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewbackbuttonvisible" data-linktype="absolute-path">NavigationViewBackButtonVisible</a> enumeration, and is set to <code>Auto</code> by default. When the button is collapsed, no space is reserved for it in the layout.</li>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.isbackenabled" data-linktype="absolute-path">IsBackEnabled</a>: use to enable or disable the back button. You can data bind this property to the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.frame.cangoback" data-linktype="absolute-path">CanGoBack</a> property of your navigation frame. <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.backrequested" data-linktype="absolute-path">BackRequested</a> is not raised if <code>IsBackEnabled</code> is <code>false</code>.</li>
+</ul>
+<section class="row">
+<div class="column">
+<p><img src="images/leftnav-back.png" alt="NavigationView back button in the left navigation pane" data-linktype="relative-path"><br>
+<em>The back button in the left navigation pane</em></p>
+</div>
+<div class="column">
+<p><img src="images/topnav-back.png" alt="NavigationView back button in the top navigation pane" data-linktype="relative-path"><br>
+<em>The back button in the top navigation pane</em></p>
+</div>
+</section>
+<h2 id="code-example">Code example</h2>
+<p>This example shows how you can use NavigationView with both a top navigation pane on large window sizes and a left navigation pane on small window sizes. It can be adapted to left-only navigation by removing the <em>top</em> navigation settings in the VisualStateManager.</p>
+<p>The example demonstrates a common way to set up navigation data that will work for many scenarios. In this example, you first store (in the tag of the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitem" data-linktype="absolute-path">NavigationViewItem</a>) the full type name of the page to which you want to navigate. In the event handler, you unbox that value, turn it into a <a href="/en-us/dotnet/api/system.type" data-linktype="absolute-path">Type</a>(C#) or <strong>Windows::UI::Xaml::Interop::TypeName</strong> (C++/WinRT) object, and use that to navigate to the destination page. This lets you create unit tests to confirm that the values inside your tags are of a valid type. (Also see <a href="/en-us/windows/apps/develop/cpp-winrt/boxing" data-linktype="absolute-path">Boxing and unboxing values to IInspectable with C++/WinRT</a>). It also demonstrates how to implement backwards navigation with NavigationView's back button.</p>
+<p>This code assumes that your app contains pages with the following names to navigate to: <em>HomePage</em>, <em>AppsPage</em>, <em>GamesPage</em>, <em>MusicPage</em>, <em>MyContentPage</em>, and <em>SettingsPage</em>. Code for these pages is not shown.</p>
+<pre><code class="lang-xaml">&lt;Page ... &gt;
+ &lt;Grid&gt;
+     &lt;NavigationView x:Name="NavView"
+                     Loaded="NavView_Loaded"
+                     ItemInvoked="NavView_ItemInvoked"
+                     BackRequested="NavView_BackRequested"&gt;
+         &lt;NavigationView.MenuItems&gt;
+             &lt;NavigationViewItem Tag="NavigationViewDemo.HomePage" Icon="Home" Content="Home"/&gt;
+             &lt;NavigationViewItemSeparator/&gt;
+             &lt;NavigationViewItemHeader x:Name="MainPagesHeader"
+                                       Content="Main pages"/&gt;
+             &lt;NavigationViewItem Tag="NavigationViewDemo.AppsPage" Content="Apps"&gt;
+                 &lt;NavigationViewItem.Icon&gt;
+                     &lt;FontIcon Glyph="&amp;#xEB3C;"/&gt;
+                 &lt;/NavigationViewItem.Icon&gt;
+             &lt;/NavigationViewItem&gt;
+             &lt;NavigationViewItem Tag="NavigationViewDemo.GamesPage" Content="Games"&gt;
+                 &lt;NavigationViewItem.Icon&gt;
+                     &lt;FontIcon Glyph="&amp;#xE7FC;"/&gt;
+                 &lt;/NavigationViewItem.Icon&gt;
+             &lt;/NavigationViewItem&gt;
+             &lt;NavigationViewItem Tag="NavigationViewDemo.MusicPage" Icon="Audio" Content="Music"/&gt;
+         &lt;/NavigationView.MenuItems&gt;
+
+         &lt;NavigationView.AutoSuggestBox&gt;
+             &lt;!-- See AutoSuggestBox documentation for
+              more info about how to implement search. --&gt;
+             &lt;AutoSuggestBox x:Name="NavViewSearchBox" QueryIcon="Find"/&gt;
+         &lt;/NavigationView.AutoSuggestBox&gt;
+
+         &lt;ScrollViewer&gt;
+             &lt;Frame x:Name="ContentFrame" IsTabStop="True"
+                NavigationFailed="ContentFrame_NavigationFailed"/&gt;
+         &lt;/ScrollViewer&gt;
+     &lt;/NavigationView&gt;
+
+     &lt;VisualStateManager.VisualStateGroups&gt;
+         &lt;VisualStateGroup&gt;
+             &lt;VisualState&gt;
+                 &lt;VisualState.StateTriggers&gt;
+                     &lt;AdaptiveTrigger
+                     MinWindowWidth="{x:Bind NavViewCompactModeThresholdWidth}"/&gt;
+                 &lt;/VisualState.StateTriggers&gt;
+                 &lt;VisualState.Setters&gt;
+                     &lt;!-- Remove the next 3 lines for left-only navigation. --&gt;
+                     &lt;Setter Target="NavView.PaneDisplayMode" Value="Top"/&gt;
+                     &lt;Setter Target="NavViewSearchBox.Width" Value="200"/&gt;
+                     &lt;Setter Target="MainPagesHeader.Visibility" Value="Collapsed"/&gt;
+                     &lt;!-- Leave the next line for left-only navigation. --&gt;
+                     &lt;Setter Target="ContentFrame.Padding" Value="24,0,24,24"/&gt;
+                 &lt;/VisualState.Setters&gt;
+             &lt;/VisualState&gt;
+         &lt;/VisualStateGroup&gt;
+     &lt;/VisualStateManager.VisualStateGroups&gt;
+ &lt;/Grid&gt;
+&lt;/Page&gt;
+</code></pre>
+<pre><code class="lang-csharp">private double NavViewCompactModeThresholdWidth { get { return NavView.CompactModeThresholdWidth; } }
+
+private void ContentFrame_NavigationFailed(object sender, NavigationFailedEventArgs e)
+{
+    throw new Exception("Failed to load Page " + e.SourcePageType.FullName);
+}
+
+private void NavView_Loaded(object sender, RoutedEventArgs e)
+{
+    // You can also add items in code.
+    NavView.MenuItems.Add(new NavigationViewItemSeparator());
+    NavView.MenuItems.Add(new NavigationViewItem
+    {
+        Content = "My content",
+        Icon = new SymbolIcon((Symbol)0xF1AD),
+        Tag = "NavigationViewDemo.MyContentPage"
+    });
+
+    // Add handler for ContentFrame navigation.
+    ContentFrame.Navigated += On_Navigated;
+
+    // NavView doesn't load any page by default, so load home page.
+    NavView.SelectedItem = NavView.MenuItems[0];
+    // If navigation occurs on SelectionChanged, this isn't needed.
+    // Because we use ItemInvoked to navigate, we need to call Navigate
+    // here to load the home page.
+    NavView_Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
+}
+
+private void NavView_ItemInvoked(NavigationView sender,
+                                 NavigationViewItemInvokedEventArgs args)
+{
+    if (args.IsSettingsInvoked == true)
+    {
+        NavView_Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
+    }
+    else if (args.InvokedItemContainer != null)
+    {
+        Type navPageType = Type.GetType(args.InvokedItemContainer.Tag.ToString());
+        NavView_Navigate(navPageType, args.RecommendedNavigationTransitionInfo);
+    }
+}
+
+// NavView_SelectionChanged is not used in this example, but is shown for completeness.
+// You will typically handle either ItemInvoked or SelectionChanged to perform navigation,
+// but not both.
+private void NavView_SelectionChanged(NavigationView sender,
+                                      NavigationViewSelectionChangedEventArgs args)
+{
+    if (args.IsSettingsSelected == true)
+    {
+        NavView_Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
+    }
+    else if (args.SelectedItemContainer != null)
+    {
+        Type navPageType = Type.GetType(args.SelectedItemContainer.Tag.ToString());
+        NavView_Navigate(navPageType, args.RecommendedNavigationTransitionInfo);
+    }
+}
+
+private void NavView_Navigate(
+    Type navPageType,
+    NavigationTransitionInfo transitionInfo)
+{
+    // Get the page type before navigation so you can prevent duplicate
+    // entries in the backstack.
+    Type preNavPageType = ContentFrame.CurrentSourcePageType;
+
+    // Only navigate if the selected page isn't currently loaded.
+    if (navPageType is not null &amp;&amp; !Type.Equals(preNavPageType, navPageType))
+    {
+        ContentFrame.Navigate(navPageType, null, transitionInfo);
+    }
+}
+
+private void NavView_BackRequested(NavigationView sender,
+                                   NavigationViewBackRequestedEventArgs args)
+{
+    TryGoBack();
+}
+
+private bool TryGoBack()
+{
+    if (!ContentFrame.CanGoBack)
+        return false;
+
+    // Don't go back if the nav pane is overlayed.
+    if (NavView.IsPaneOpen &amp;&amp;
+        (NavView.DisplayMode == NavigationViewDisplayMode.Compact ||
+         NavView.DisplayMode == NavigationViewDisplayMode.Minimal))
+        return false;
+
+    ContentFrame.GoBack();
+    return true;
+}
+
+private void On_Navigated(object sender, NavigationEventArgs e)
+{
+    NavView.IsBackEnabled = ContentFrame.CanGoBack;
+
+    if (ContentFrame.SourcePageType == typeof(SettingsPage))
+    {
+        // SettingsItem is not part of NavView.MenuItems, and doesn't have a Tag.
+        NavView.SelectedItem = (NavigationViewItem)NavView.SettingsItem;
+        NavView.Header = "Settings";
+    }
+    else if (ContentFrame.SourcePageType != null)
+    {
+        // Select the nav view item that corresponds to the page being navigated to.
+        NavView.SelectedItem = NavView.MenuItems
+                    .OfType&lt;NavigationViewItem&gt;()
+                    .First(i =&gt; i.Tag.Equals(ContentFrame.SourcePageType.FullName.ToString()));
+
+        NavView.Header =
+            ((NavigationViewItem)NavView.SelectedItem)?.Content?.ToString();
+
+    }
+}
+</code></pre>
+<pre><code class="lang-cppwinrt">// MainPage.idl
+runtimeclass MainPage : Microsoft.UI.Xaml.Controls.Page
+{
+    ...
+    Double NavViewCompactModeThresholdWidth{ get; };
+}
+
+// pch.h
+...
+#include &lt;winrt/Microsoft.UI.Xaml.Interop.h&gt;
+#include &lt;winrt/Microsoft.UI.Xaml.Media.Animation.h&gt;
+
+
+// MainPage.h
+#pragma once
+
+#include "MainPage.g.h"
+
+namespace muxc
+{
+    using namespace winrt::Microsoft::UI::Xaml::Controls;
+};
+
+namespace winrt::NavigationViewDemo::implementation
+{
+    struct MainPage : MainPageT&lt;MainPage&gt;
+    {
+        MainPage();
+
+        double NavViewCompactModeThresholdWidth();
+        void ContentFrame_NavigationFailed(
+            Windows::Foundation::IInspectable const&amp; /* sender */,
+            Microsoft::UI::Xaml::Navigation::NavigationFailedEventArgs const&amp; args);
+        void NavView_Loaded(
+            Windows::Foundation::IInspectable const&amp; /* sender */,
+            Microsoft::UI::Xaml::RoutedEventArgs const&amp; /* args */);
+        void NavView_ItemInvoked(
+            Windows::Foundation::IInspectable const&amp; /* sender */,
+            muxc::NavigationViewItemInvokedEventArgs const&amp; args);
+
+        // NavView_SelectionChanged is not used in this example, but is shown for completeness.
+        // You'll typically handle either ItemInvoked or SelectionChanged to perform navigation,
+        // but not both.
+        void NavView_SelectionChanged(
+            muxc::NavigationView const&amp; /* sender */,
+            muxc::NavigationViewSelectionChangedEventArgs const&amp; args);
+        void NavView_Navigate(
+            Windows::UI::Xaml::Interop::TypeName navPageType,
+            Microsoft::UI::Xaml::Media::Animation::NavigationTransitionInfo const&amp; transitionInfo);
+        void NavView_BackRequested(
+            muxc::NavigationView const&amp; /* sender */,
+            muxc::NavigationViewBackRequestedEventArgs const&amp; /* args */);
+        void On_Navigated(
+            Windows::Foundation::IInspectable const&amp; /* sender */,
+            Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&amp; args);
+        bool TryGoBack();
+
+    private:
+
+    };
+}
+
+namespace winrt::NavigationViewDemo::factory_implementation
+{
+    struct MainPage : MainPageT&lt;MainPage, implementation::MainPage&gt;
+    {
+    };
+}
+
+// MainPage.cpp
+#include "pch.h"
+#include "MainPage.xaml.h"
+#if __has_include("MainPage.g.cpp")
+#include "MainPage.g.cpp"
+#endif
+
+using namespace winrt;
+using namespace Microsoft::UI::Xaml;
+
+namespace winrt::NavigationViewDemo::implementation
+{
+    MainPage::MainPage()
+    {
+        InitializeComponent();
+    }
+
+    double MainPage::NavViewCompactModeThresholdWidth()
+    {
+        return NavView().CompactModeThresholdWidth();
+    }
+
+    void MainPage::ContentFrame_NavigationFailed(
+        Windows::Foundation::IInspectable const&amp; /* sender */,
+        Microsoft::UI::Xaml::Navigation::NavigationFailedEventArgs const&amp; args)
+    {
+        throw winrt::hresult_error(
+            E_FAIL, winrt::hstring(L"Failed to load Page ") + args.SourcePageType().Name);
+    }
+
+    void MainPage::NavView_Loaded(
+        Windows::Foundation::IInspectable const&amp; /* sender */,
+        Microsoft::UI::Xaml::RoutedEventArgs const&amp; /* args */)
+    {
+        // You can also add items in code.
+        NavView().MenuItems().Append(muxc::NavigationViewItemSeparator());
+        muxc::NavigationViewItem navigationViewItem;
+        navigationViewItem.Content(winrt::box_value(L"My content"));
+        navigationViewItem.Icon(muxc::SymbolIcon(static_cast&lt;muxc::Symbol&gt;(0xF1AD)));
+        navigationViewItem.Tag(winrt::box_value(L"NavigationViewDemo.MyContentPage"));
+        NavView().MenuItems().Append(navigationViewItem);
+
+        // Add handler for ContentFrame navigation.
+        ContentFrame().Navigated({ this, &amp;MainPage::On_Navigated });
+
+        // NavView doesn't load any page by default, so load home page.
+        NavView().SelectedItem(NavView().MenuItems().GetAt(0));
+        // If navigation occurs on SelectionChanged, then this isn't needed.
+        // Because we use ItemInvoked to navigate, we need to call Navigate
+        // here to load the home page.
+        NavView_Navigate(winrt::xaml_typename&lt;NavigationViewDemo::HomePage&gt;(),
+            Microsoft::UI::Xaml::Media::Animation::EntranceNavigationTransitionInfo());
+    }
+
+    void MainPage::NavView_ItemInvoked(
+        Windows::Foundation::IInspectable const&amp; /* sender */,
+        muxc::NavigationViewItemInvokedEventArgs const&amp; args)
+    {
+        if (args.IsSettingsInvoked())
+        {
+            NavView_Navigate(winrt::xaml_typename&lt;NavigationViewDemo::SettingsPage&gt;(),
+                args.RecommendedNavigationTransitionInfo());
+        }
+        else if (args.InvokedItemContainer())
+        {
+            Windows::UI::Xaml::Interop::TypeName pageTypeName;
+            pageTypeName.Name = unbox_value&lt;hstring&gt;(args.InvokedItemContainer().Tag());
+            pageTypeName.Kind = Windows::UI::Xaml::Interop::TypeKind::Primitive;
+            NavView_Navigate(pageTypeName, args.RecommendedNavigationTransitionInfo());
+        }
+    }
+
+    // NavView_SelectionChanged is not used in this example, but is shown for completeness.
+    // You will typically handle either ItemInvoked or SelectionChanged to perform navigation,
+    // but not both.
+    void MainPage::NavView_SelectionChanged(
+        muxc::NavigationView const&amp; /* sender */,
+        muxc::NavigationViewSelectionChangedEventArgs const&amp; args)
+    {
+        if (args.IsSettingsSelected())
+        {
+            NavView_Navigate(winrt::xaml_typename&lt;NavigationViewDemo::SettingsPage&gt;(),
+                args.RecommendedNavigationTransitionInfo());
+        }
+        else if (args.SelectedItemContainer())
+        {
+            Windows::UI::Xaml::Interop::TypeName pageTypeName;
+            pageTypeName.Name = unbox_value&lt;hstring&gt;(args.SelectedItemContainer().Tag());
+            pageTypeName.Kind = Windows::UI::Xaml::Interop::TypeKind::Primitive;
+            NavView_Navigate(pageTypeName, args.RecommendedNavigationTransitionInfo());
+        }
+    }
+
+    void MainPage::NavView_Navigate(
+        Windows::UI::Xaml::Interop::TypeName navPageType,
+        Microsoft::UI::Xaml::Media::Animation::NavigationTransitionInfo const&amp; transitionInfo)
+    {
+        // Get the page type before navigation so you can prevent duplicate
+        // entries in the backstack.
+        Windows::UI::Xaml::Interop::TypeName preNavPageType =
+            ContentFrame().CurrentSourcePageType();
+
+        // Navigate only if the selected page isn't currently loaded.
+        if (navPageType.Name != L"" &amp;&amp; preNavPageType.Name != navPageType.Name)
+        {
+            ContentFrame().Navigate(navPageType, nullptr, transitionInfo);
+        }
+    }
+
+    void MainPage::NavView_BackRequested(
+        muxc::NavigationView const&amp; /* sender */,
+        muxc::NavigationViewBackRequestedEventArgs const&amp; /* args */)
+    {
+        TryGoBack();
+    }
+
+    bool MainPage::TryGoBack()
+    {
+        if (!ContentFrame().CanGoBack())
+            return false;
+        // Don't go back if the nav pane is overlayed.
+        if (NavView().IsPaneOpen() &amp;&amp;
+            (NavView().DisplayMode() == muxc::NavigationViewDisplayMode::Compact ||
+                NavView().DisplayMode() == muxc::NavigationViewDisplayMode::Minimal))
+            return false;
+        ContentFrame().GoBack();
+        return true;
+    }
+
+    void MainPage::On_Navigated(
+        Windows::Foundation::IInspectable const&amp; /* sender */,
+        Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&amp; args)
+    {
+        NavView().IsBackEnabled(ContentFrame().CanGoBack());
+
+        if (ContentFrame().SourcePageType().Name ==
+            winrt::xaml_typename&lt;NavigationViewDemo::SettingsPage&gt;().Name)
+        {
+            // SettingsItem is not part of NavView.MenuItems, and doesn't have a Tag.
+            NavView().SelectedItem(NavView().SettingsItem().as&lt;muxc::NavigationViewItem&gt;());
+            NavView().Header(winrt::box_value(L"Settings"));
+        }
+        else if (ContentFrame().SourcePageType().Name != L"")
+        {
+            for (auto&amp;&amp; eachMenuItem : NavView().MenuItems())
+            {
+                auto navigationViewItem =
+                    eachMenuItem.try_as&lt;muxc::NavigationViewItem&gt;();
+                {
+                    if (navigationViewItem)
+                    {
+                        winrt::hstring hstringValue =
+                            winrt::unbox_value_or&lt;winrt::hstring&gt;(
+                                navigationViewItem.Tag(), L"");
+                        if (hstringValue == ContentFrame().SourcePageType().Name)
+                        {
+                            NavView().SelectedItem(navigationViewItem);
+                            NavView().Header(navigationViewItem.Content());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+</code></pre>
+<h2 id="hierarchical-navigation">Hierarchical navigation</h2>
+<p>Some apps may have a more complex hierarchical structure that requires more than just a flat list of navigation items. You may want to use top-level navigation items to display categories of pages, with children items displaying specific pages. It is also useful if you have hub-style pages that only link to other pages. For these kinds of cases, you should create a hierarchical NavigationView.</p>
+<p>To show a hierarchical list of nested navigation items in the pane, use either the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitem.menuitems" data-linktype="absolute-path">MenuItems</a> property or the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitem.menuitemssource" data-linktype="absolute-path">MenuItemsSource</a> property of <strong>NavigationViewItem</strong>. Each NavigationViewItem can contain other NavigationViewItems and organizing elements like item headers and separators. To show a hierarchical list when using <code>MenuItemsSource</code>, set the <code>ItemTemplate</code> to be a NavigationViewItem, and bind its <code>MenuItemsSource</code> property to the next level of the hierarchy.</p>
+<p>Although NavigationViewItem can contain any number of nested levels, we recommend keeping your app's navigation hierarchy shallow. We believe two levels is ideal for usability and comprehension.</p>
+<p>NavigationView shows hierarchy in <code>Top</code>, <code>Left</code>, and <code>LeftCompact</code> pane display modes. Here is what an expanded subtree looks like in each of the pane display modes:</p>
+<p><img src="images/navigation-view-hierarchy-labeled.png" alt="NavigationView with Hierarchy" data-linktype="relative-path"></p>
+<h3 id="adding-a-hierarchy-of-items-in-markup">Adding a hierarchy of items in markup</h3>
+<p>This example shows how to declare hierarchical app navigation in XAML markup.</p>
+<pre><code class="lang-xaml">&lt;NavigationView&gt;
+    &lt;NavigationView.MenuItems&gt;
+        &lt;NavigationViewItem Content="Home" Icon="Home" ToolTipService.ToolTip="Home"/&gt;
+        &lt;NavigationViewItem Content="Collections" Icon="Keyboard" ToolTipService.ToolTip="Collections"&gt;
+            &lt;NavigationViewItem.MenuItems&gt;
+                &lt;NavigationViewItem Content="Notes" Icon="Page" ToolTipService.ToolTip="Notes"/&gt;
+                &lt;NavigationViewItem Content="Mail" Icon="Mail" ToolTipService.ToolTip="Mail"/&gt;
+            &lt;/NavigationViewItem.MenuItems&gt;
+        &lt;/NavigationViewItem&gt;
+    &lt;/NavigationView.MenuItems&gt;
+&lt;/NavigationView&gt;
+</code></pre>
+<h3 id="adding-a-hierarchy-of-items-using-data-binding">Adding a hierarchy of items using data binding</h3>
+<p>Add a hierarchy of menu items to the NavigationView by</p>
+<ul>
+<li>binding the MenuItemsSource property to the hierarchical data</li>
+<li>defining the item template to be a NavigationViewMenuItem, with its Content set to be the label of the menu item, and its MenuItemsSource property bound to the next level of the hierarchy</li>
+</ul>
+<p>This example also demonstrates the <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.expanding" data-linktype="absolute-path">Expanding</a> and <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.collapsed" data-linktype="absolute-path">Collapsed</a> events. These events are raised for a menu item with children.</p>
+<pre><code class="lang-xaml">&lt;Page ... &gt;
+    &lt;Page.Resources&gt;
+        &lt;DataTemplate x:Key="NavigationViewMenuItem" x:DataType="local:Category"&gt;
+            &lt;NavigationViewItem Content="{x:Bind Name}" MenuItemsSource="{x:Bind Children}"/&gt;
+        &lt;/DataTemplate&gt;
+    &lt;/Page.Resources&gt;
+
+    &lt;Grid&gt;
+        &lt;NavigationView x:Name="navview"
+    MenuItemsSource="{x:Bind Categories, Mode=OneWay}"
+    MenuItemTemplate="{StaticResource NavigationViewMenuItem}"
+    ItemInvoked="{x:Bind OnItemInvoked}"
+    Expanding="OnItemExpanding"
+    Collapsed="OnItemCollapsed"
+    PaneDisplayMode="Left"&gt;
+            &lt;StackPanel Margin="10,10,0,0"&gt;
+                &lt;TextBlock Margin="0,10,0,0" x:Name="ExpandingItemLabel" Text="Last Expanding: N/A"/&gt;
+                &lt;TextBlock x:Name="CollapsedItemLabel" Text="Last Collapsed: N/A"/&gt;
+            &lt;/StackPanel&gt;
+        &lt;/NavigationView&gt;
+    &lt;/Grid&gt;
+&lt;/Page&gt;
+</code></pre>
+<pre><code class="lang-csharp">public class Category
+{
+    public String Name { get; set; }
+    public String CategoryIcon { get; set; }
+    public ObservableCollection&lt;Category&gt; Children { get; set; }
+}
+
+public sealed partial class HierarchicalNavigationViewDataBinding : Page
+{
+    public HierarchicalNavigationViewDataBinding()
+    {
+        this.InitializeComponent();
+    }
+
+    public ObservableCollection&lt;Category&gt; Categories = new ObservableCollection&lt;Category&gt;()
+    {
+        new Category(){
+            Name = "Menu item 1",
+            CategoryIcon = "Icon",
+            Children = new ObservableCollection&lt;Category&gt;() {
+                new Category(){
+                    Name = "Menu item 2",
+                    CategoryIcon = "Icon",
+                    Children = new ObservableCollection&lt;Category&gt;() {
+                        new Category() {
+                            Name  = "Menu item 3",
+                            CategoryIcon = "Icon",
+                            Children = new ObservableCollection&lt;Category&gt;() {
+                                new Category() { Name  = "Menu item 4", CategoryIcon = "Icon" },
+                                new Category() { Name  = "Menu item 5", CategoryIcon = "Icon" }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        new Category(){
+            Name = "Menu item 6",
+            CategoryIcon = "Icon",
+            Children = new ObservableCollection&lt;Category&gt;() {
+                new Category(){
+                    Name = "Menu item 7",
+                    CategoryIcon = "Icon",
+                    Children = new ObservableCollection&lt;Category&gt;() {
+                        new Category() { Name  = "Menu item 8", CategoryIcon = "Icon" },
+                        new Category() { Name  = "Menu item 9", CategoryIcon = "Icon" }
+                    }
+                }
+            }
+        },
+        new Category(){ Name = "Menu item 10", CategoryIcon = "Icon" }
+    };
+
+    private void OnItemInvoked(object sender, NavigationViewItemInvokedEventArgs e)
+    {
+        var clickedItem = e.InvokedItem;
+        var clickedItemContainer = e.InvokedItemContainer;
+    }
+    private void OnItemExpanding(object sender, NavigationViewItemExpandingEventArgs e)
+    {
+        var nvib = e.ExpandingItemContainer;
+        var name = "Last expanding: " + nvib.Content.ToString();
+        ExpandingItemLabel.Text = name;
+    }
+    private void OnItemCollapsed(object sender, NavigationViewItemCollapsedEventArgs e)
+    {
+        var nvib = e.CollapsedItemContainer;
+        var name = "Last collapsed: " + nvib.Content;
+        CollapsedItemLabel.Text = name;
+    }
+}
+</code></pre>
+<pre><code class="lang-cppwinrt">// Category.idl
+namespace HierarchicalNavigationViewDataBinding
+{
+    runtimeclass Category
+    {
+        String Name;
+        String CategoryIcon;
+        Windows.Foundation.Collections.IObservableVector&lt;Category&gt; Children;
+    }
+}
+
+// Category.h
+#pragma once
+#include "Category.g.h"
+
+namespace winrt::HierarchicalNavigationViewDataBinding::implementation
+{
+    struct Category : CategoryT&lt;Category&gt;
+    {
+        Category();
+        Category(winrt::hstring name,
+            winrt::hstring categoryIcon,
+            Windows::Foundation::Collections::
+                IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; children);
+
+        winrt::hstring Name();
+        void Name(winrt::hstring const&amp; value);
+        winrt::hstring CategoryIcon();
+        void CategoryIcon(winrt::hstring const&amp; value);
+        Windows::Foundation::Collections::
+            IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; Children();
+        void Children(Windows::Foundation::Collections:
+            IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; const&amp; value);
+
+    private:
+        winrt::hstring m_name;
+        winrt::hstring m_categoryIcon;
+        Windows::Foundation::Collections::
+            IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; m_children;
+    };
+}
+
+// Category.cpp
+#include "pch.h"
+#include "Category.h"
+#include "Category.g.cpp"
+
+namespace winrt::HierarchicalNavigationViewDataBinding::implementation
+{
+    Category::Category()
+    {
+        m_children = winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    }
+
+    Category::Category(
+        winrt::hstring name,
+        winrt::hstring categoryIcon,
+        Windows::Foundation::Collections::
+            IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; children)
+    {
+        m_name = name;
+        m_categoryIcon = categoryIcon;
+        m_children = children;
+    }
+
+    hstring Category::Name()
+    {
+        return m_name;
+    }
+
+    void Category::Name(hstring const&amp; value)
+    {
+        m_name = value;
+    }
+
+    hstring Category::CategoryIcon()
+    {
+        return m_categoryIcon;
+    }
+
+    void Category::CategoryIcon(hstring const&amp; value)
+    {
+        m_categoryIcon = value;
+    }
+
+    Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt;
+        Category::Children()
+    {
+        return m_children;
+    }
+
+    void Category::Children(
+        Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt;
+            const&amp; value)
+    {
+        m_children = value;
+    }
+}
+
+// MainPage.idl
+import "Category.idl";
+
+namespace HierarchicalNavigationViewDataBinding
+{
+    [default_interface]
+    runtimeclass MainPage : Microsoft.UI.Xaml.Controls.Page
+    {
+        MainPage();
+        Windows.Foundation.Collections.IObservableVector&lt;Category&gt; Categories{ get; };
+    }
+}
+
+// MainPage.h
+#pragma once
+
+#include "MainPage.g.h"
+
+namespace muxc
+{
+    using namespace winrt::Microsoft::UI::Xaml::Controls;
+};
+
+namespace winrt::HierarchicalNavigationViewDataBinding::implementation
+{
+    struct MainPage : MainPageT&lt;MainPage&gt;
+    {
+        MainPage();
+
+        Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt;
+            Categories();
+
+        void OnItemInvoked(muxc::NavigationView const&amp; sender, muxc::NavigationViewItemInvokedEventArgs const&amp; args);
+        void OnItemExpanding(
+            muxc::NavigationView const&amp; sender,
+            muxc::NavigationViewItemExpandingEventArgs const&amp; args);
+        void OnItemCollapsed(
+            muxc::NavigationView const&amp; sender,
+            muxc::NavigationViewItemCollapsedEventArgs const&amp; args);
+
+    private:
+        Windows::Foundation::Collections::
+            IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; m_categories;
+    };
+}
+
+namespace winrt::HierarchicalNavigationViewDataBinding::factory_implementation
+{
+    struct MainPage : MainPageT&lt;MainPage, implementation::MainPage&gt;
+    {
+    };
+}
+
+// MainPage.cpp
+#include "pch.h"
+#include "MainPage.h"
+#include "MainPage.g.cpp"
+
+#include "Category.h"
+
+namespace winrt::HierarchicalNavigationViewDataBinding::implementation
+{
+    MainPage::MainPage()
+    {
+        InitializeComponent();
+
+        m_categories =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+
+        auto menuItem10 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 10", L"Icon", nullptr);
+
+        auto menuItem9 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 9", L"Icon", nullptr);
+        auto menuItem8 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 8", L"Icon", nullptr);
+        auto menuItem7Children =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+        menuItem7Children.Append(*menuItem9);
+        menuItem7Children.Append(*menuItem8);
+
+        auto menuItem7 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 7", L"Icon", menuItem7Children);
+        auto menuItem6Children =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+        menuItem6Children.Append(*menuItem7);
+
+        auto menuItem6 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 6", L"Icon", menuItem6Children);
+
+        auto menuItem5 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 5", L"Icon", nullptr);
+        auto menuItem4 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 4", L"Icon", nullptr);
+        auto menuItem3Children =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+        menuItem3Children.Append(*menuItem5);
+        menuItem3Children.Append(*menuItem4);
+
+        auto menuItem3 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 3", L"Icon", menuItem3Children);
+        auto menuItem2Children =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+        menuItem2Children.Append(*menuItem3);
+
+        auto menuItem2 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 2", L"Icon", menuItem2Children);
+        auto menuItem1Children =
+            winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+        menuItem1Children.Append(*menuItem2);
+
+        auto menuItem1 = winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+            (L"Menu item 1", L"Icon", menuItem1Children);
+
+        m_categories.Append(*menuItem1);
+        m_categories.Append(*menuItem6);
+        m_categories.Append(*menuItem10);
+    }
+
+    Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt;
+        MainPage::Categories()
+    {
+        return m_categories;
+    }
+
+    void MainPage::OnItemInvoked(
+        muxc::NavigationView const&amp; /* sender */,
+        muxc::NavigationViewItemInvokedEventArgs const&amp; args)
+    {
+        auto clickedItem = args.InvokedItem();
+        auto clickedItemContainer = args.InvokedItemContainer();
+    }
+
+    void MainPage::OnItemExpanding(
+        muxc::NavigationView const&amp; /* sender */,
+        muxc::NavigationViewItemExpandingEventArgs const&amp; args)
+    {
+        auto nvib = args.ExpandingItemContainer();
+        auto name = L"Last expanding: " + winrt::unbox_value&lt;winrt::hstring&gt;(nvib.Content());
+        ExpandingItemLabel().Text(name);
+    }
+
+    void MainPage::OnItemCollapsed(
+        muxc::NavigationView const&amp; /* sender */,
+        muxc::NavigationViewItemCollapsedEventArgs const&amp; args)
+    {
+        auto nvib = args.CollapsedItemContainer();
+        auto name = L"Last collapsed: " + winrt::unbox_value&lt;winrt::hstring&gt;(nvib.Content());
+        CollapsedItemLabel().Text(name);
+    }
+}
+</code></pre>
+<h3 id="selection">Selection</h3>
+<p>By default, any item can contain children, be invoked, or be selected.</p>
+<p>When providing users with a hierarchical tree of navigation options, you may choose to make parent items non-selectable, for example when your app doesn't have a destination page associated with that parent item. If your parent items <em>are</em> selectable, it's recommend you use the Left-Expanded or Top pane display modes. LeftCompact mode will cause the user to navigate to the parent item in order to open the child subtree every time it's invoked.</p>
+<p>Selected items will draw their selection indicators along their left edge when in left mode or their bottom edge when in top mode. Shown below are NavigationViews in left and top mode where a parent item is selected.</p>
+<p><img src="images/navigation-view-selection.png" alt="NavigationView in left-mode with parent selected" data-linktype="relative-path"></p>
+<p><img src="images/navigation-view-selection-top.png" alt="NavigationView in top-mode with parent selected" data-linktype="relative-path"></p>
+<p>The selected item may not always remain visible. If a child in a collapsed/non-expanded subtree is selected, their first visible ancestor will show as selected. The selection indicator will move back to the selected item if/when the sub-tree is expanded.</p>
+<p>For example - in the above image, the Calendar item may be selected by the user, and then the user may collapse its subtree. In this case, the selection indicator would show up underneath the Account item as Account is Calendar's first visible ancestor. The selection indicator will move back to the Calendar item as the user expands the subtree again.</p>
+<p>The entire NavigationView will show no more than one selection indicator.</p>
+<p>In both Top and Left modes, clicking the arrows on NavigationViewItems will expand or collapse the subtree. Clicking or tapping
+<em>elsewhere</em> on the NavigationViewItem will trigger the <code>ItemInvoked</code> event, and it will also collapse or expand the subtree.</p>
+<p>To prevent an item from showing the selection indicator when invoked, set its <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationviewitem.selectsoninvoked" data-linktype="absolute-path">SelectsOnInvoked</a> property to False, as shown below:</p>
+<pre><code class="lang-xaml">&lt;Page ...&gt;
+    &lt;Page.Resources&gt;
+        &lt;DataTemplate x:Key="NavigationViewMenuItem" x:DataType="local:Category"&gt;
+            &lt;NavigationViewItem Content="{x:Bind Name}"
+            MenuItemsSource="{x:Bind Children}"
+            SelectsOnInvoked="{x:Bind IsLeaf}"/&gt;
+        &lt;/DataTemplate&gt;
+    &lt;/Page.Resources&gt;
+
+    &lt;Grid&gt;
+        &lt;NavigationView x:Name="navview"
+    MenuItemsSource="{x:Bind Categories, Mode=OneWay}"
+    MenuItemTemplate="{StaticResource NavigationViewMenuItem}"&gt;
+        &lt;/NavigationView&gt;
+    &lt;/Grid&gt;
+&lt;/Page&gt;
+</code></pre>
+<pre><code class="lang-csharp">public class Category
+{
+    public String Name { get; set; }
+    public String CategoryIcon { get; set; }
+    public ObservableCollection&lt;Category&gt; Children { get; set; }
+    public bool IsLeaf { get; set; }
+}
+
+public sealed partial class HierarchicalNavigationViewDataBinding : Page
+{
+    public HierarchicalNavigationViewDataBinding()
+    {
+        this.InitializeComponent();
+    }
+
+    public ObservableCollection&lt;Category&gt; Categories = new ObservableCollection&lt;Category&gt;()
+    {
+        new Category(){
+            Name = "Menu item 1",
+            CategoryIcon = "Icon",
+            Children = new ObservableCollection&lt;Category&gt;() {
+                new Category(){
+                    Name = "Menu item 2",
+                    CategoryIcon = "Icon",
+                    Children = new ObservableCollection&lt;Category&gt;() {
+                        new Category() {
+                            Name  = "Menu item 3",
+                            CategoryIcon = "Icon",
+                            Children = new ObservableCollection&lt;Category&gt;() {
+                                new Category() { Name  = "Menu item 4", CategoryIcon = "Icon", IsLeaf = true },
+                                new Category() { Name  = "Menu item 5", CategoryIcon = "Icon", IsLeaf = true }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        new Category(){
+            Name = "Menu item 6",
+            CategoryIcon = "Icon",
+            Children = new ObservableCollection&lt;Category&gt;() {
+                new Category(){
+                    Name = "Menu item 7",
+                    CategoryIcon = "Icon",
+                    Children = new ObservableCollection&lt;Category&gt;() {
+                        new Category() { Name  = "Menu item 8", CategoryIcon = "Icon", IsLeaf = true },
+                        new Category() { Name  = "Menu item 9", CategoryIcon = "Icon", IsLeaf = true }
+                    }
+                }
+            }
+        },
+        new Category(){ Name = "Menu item 10", CategoryIcon = "Icon", IsLeaf = true }
+    };
+}
+</code></pre>
+<pre><code class="lang-cppwinrt">// Category.idl
+namespace HierarchicalNavigationViewDataBinding
+{
+    runtimeclass Category
+    {
+        ...
+        Boolean IsLeaf;
+    }
+}
+
+// Category.h
+...
+struct Category : CategoryT&lt;Category&gt;
+{
+    ...
+    Category(winrt::hstring name,
+        winrt::hstring categoryIcon,
+        Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; children,
+        bool isleaf = false);
+    ...
+    bool IsLeaf();
+    void IsLeaf(bool value);
+
+private:
+    ...
+    bool m_isleaf;
+};
+
+// Category.cpp
+...
+Category::Category(winrt::hstring name,
+    winrt::hstring categoryIcon,
+    Windows::Foundation::Collections::IObservableVector&lt;HierarchicalNavigationViewDataBinding::Category&gt; children,
+    bool isleaf) : m_name(name), m_categoryIcon(categoryIcon), m_children(children), m_isleaf(isleaf) {}
+...
+bool Category::IsLeaf()
+{
+    return m_isleaf;
+}
+
+void Category::IsLeaf(bool value)
+{
+    m_isleaf = value;
+}
+
+// MainPage.h and MainPage.cpp
+// Delete OnItemInvoked, OnItemExpanding, and OnItemCollapsed.
+
+// MainPage.cpp
+...
+MainPage::MainPage()
+{
+    InitializeComponent();
+
+    m_categories = winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+
+    auto menuItem10 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 10", L"Icon", nullptr, true);
+
+    auto menuItem9 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 9", L"Icon", nullptr, true);
+    auto menuItem8 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 8", L"Icon", nullptr, true);
+    auto menuItem7Children =
+        winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    menuItem7Children.Append(*menuItem9);
+    menuItem7Children.Append(*menuItem8);
+
+    auto menuItem7 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 7", L"Icon", menuItem7Children);
+    auto menuItem6Children =
+        winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    menuItem6Children.Append(*menuItem7);
+
+    auto menuItem6 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 6", L"Icon", menuItem6Children);
+
+    auto menuItem5 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 5", L"Icon", nullptr, true);
+    auto menuItem4 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 4", L"Icon", nullptr, true);
+    auto menuItem3Children =
+        winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    menuItem3Children.Append(*menuItem5);
+    menuItem3Children.Append(*menuItem4);
+
+    auto menuItem3 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 3", L"Icon", menuItem3Children);
+    auto menuItem2Children =
+        winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    menuItem2Children.Append(*menuItem3);
+
+    auto menuItem2 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 2", L"Icon", menuItem2Children);
+    auto menuItem1Children =
+        winrt::single_threaded_observable_vector&lt;HierarchicalNavigationViewDataBinding::Category&gt;();
+    menuItem1Children.Append(*menuItem2);
+
+    auto menuItem1 =
+        winrt::make_self&lt;HierarchicalNavigationViewDataBinding::implementation::Category&gt;
+        (L"Menu item 1", L"Icon", menuItem1Children);
+
+    m_categories.Append(*menuItem1);
+    m_categories.Append(*menuItem6);
+    m_categories.Append(*menuItem10);
+}
+...
+</code></pre>
+<h3 id="keyboarding-within-hierarchical-navigationview">Keyboarding within hierarchical NavigationView</h3>
+<p>Users can move focus around the NavigationView using their <a href="../../input/keyboard-interactions" data-linktype="relative-path">keyboard</a>.
+The arrow keys expose "inner navigation" within the pane and follow the interactions provided in <a href="tree-view" data-linktype="relative-path">tree view</a>. The key actions change when navigating through the NavigationView or its flyout menu, which is displayed in Top and Left-compact modes of HierarchicalNavigationView. Below are the specific actions that each key can take in a hierarchical NavigationView:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>In Left Mode</th>
+<th>In Top Mode</th>
+<th>In Flyout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Up</td>
+<td>Moves focus to the item directly above the item currently in focus.</td>
+<td>Does nothing.</td>
+<td>Moves focus to the item directly above the item currently in focus.</td>
+</tr>
+<tr>
+<td>Down</td>
+<td>Moves focus directly below the item currently in focus.*</td>
+<td>Does nothing.</td>
+<td>Moves focus directly below the item currently in focus.*</td>
+</tr>
+<tr>
+<td>Right</td>
+<td>Does nothing.</td>
+<td>Moves focus to the item directly to the right of the item currently in focus.</td>
+<td>Does nothing.</td>
+</tr>
+<tr>
+<td>Left</td>
+<td>Does nothing.</td>
+<td>Moves focus to the item directly to the left the item currently in focus.</td>
+<td>Does nothing.</td>
+</tr>
+<tr>
+<td>Space/Enter</td>
+<td>If item has children, expands/collapses item and does not change focus.</td>
+<td>If item has children, expands children into a flyout and places focus on first item in flyout.</td>
+<td>Invokes/selects item and closes flyout.</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>Does nothing.</td>
+<td>Does nothing.</td>
+<td>Closes flyout.</td>
+</tr>
+</tbody>
+</table>
+<p>The space or enter key always invokes/selects an item.</p>
+<p>*Note that the items do not need to be visually adjacent, focus will move from the last item in the pane's list to the settings item.</p>
+<h2 id="navigationview-customization">NavigationView customization</h2>
+<h3 id="pane-backgrounds">Pane Backgrounds</h3>
+<p>By default, the NavigationView pane uses a different background depending on the display mode:</p>
+<ul>
+<li>the pane is a solid grey color when expanded on the left, side-by-side with the content (in Left mode).</li>
+<li>the pane uses in-app acrylic when open as an overlay on top of content (in Top, Minimal, or Compact mode).</li>
+</ul>
+<p>To modify the pane background, you can override the XAML theme resources used to render the background in each mode. (This technique is used rather than a single PaneBackground property in order to support different backgrounds for different display modes.)</p>
+<p>This table shows which theme resource is used in each display mode.</p>
+<table>
+<thead>
+<tr>
+<th>Display mode</th>
+<th>Theme resource</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Left</td>
+<td>NavigationViewExpandedPaneBackground</td>
+</tr>
+<tr>
+<td>LeftCompact<br>LeftMinimal</td>
+<td>NavigationViewDefaultPaneBackground</td>
+</tr>
+<tr>
+<td>Top</td>
+<td>NavigationViewTopPaneBackground</td>
+</tr>
+</tbody>
+</table>
+<p>This example shows how to override the theme resources in App.xaml. When you override theme resources, you should always provide "Default" and "HighContrast" resource dictionaries at a minimum, and dictionaries for "Light" or "Dark" resources as needed. For more info, see <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.resourcedictionary.themedictionaries" data-linktype="absolute-path">ResourceDictionary.ThemeDictionaries</a>.</p>
+<h3 id="top-whitespace">Top whitespace</h3>
+<p>Apps that <a href="../../title-bar" data-linktype="relative-path">customize their window's title bar</a> often extend content into the title bar area. When NavigationView is used alongside a custom title bar, you need to ensure its interactive elements (back button, pane toggle) don't overlap with the title bar's drag region.</p>
+<h4 id="using-the-titlebar-control-recommended">Using the TitleBar control (recommended)</h4>
+<p>The recommended approach is to place a <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.titlebar" data-linktype="absolute-path">TitleBar</a> control above the NavigationView, and let the TitleBar handle the back button and pane toggle. This is the pattern used by the <a href="https://github.com/Microsoft/WinUI-Gallery" data-linktype="external">WinUI 3 Gallery</a> app.</p>
+<p>Because the TitleBar control owns the back button and pane toggle button, you should hide NavigationView's built-in versions by setting <code>IsBackButtonVisible="Collapsed"</code> and <code>IsPaneToggleButtonVisible="False"</code>. The TitleBar then forwards those interactions to the NavigationView through event handlers:</p>
+<pre><code class="lang-xaml">&lt;Grid&gt;
+    &lt;Grid.RowDefinitions&gt;
+        &lt;RowDefinition Height="Auto" /&gt;
+        &lt;RowDefinition Height="*" /&gt;
+    &lt;/Grid.RowDefinitions&gt;
+
+    &lt;TitleBar x:Name="titleBar"
+              Title="My App"
+              IsPaneToggleButtonVisible="True"
+              PaneToggleRequested="TitleBar_PaneToggleRequested"
+              IsBackButtonVisible="{x:Bind contentFrame.CanGoBack, Mode=OneWay}"
+              BackRequested="TitleBar_BackRequested" /&gt;
+
+    &lt;NavigationView x:Name="NavView"
+                    Grid.Row="1"
+                    IsBackButtonVisible="Collapsed"
+                    IsPaneToggleButtonVisible="False"
+                    DisplayModeChanged="NavView_DisplayModeChanged"&gt;
+        &lt;Frame x:Name="contentFrame" /&gt;
+    &lt;/NavigationView&gt;
+&lt;/Grid&gt;
+</code></pre>
+<p>In your code-behind, extend the content into the title bar, assign the TitleBar control, and wire up the event handlers that connect the TitleBar buttons to the NavigationView:</p>
+<pre><code class="lang-csharp">this.ExtendsContentIntoTitleBar = true;
+this.SetTitleBar(titleBar);
+</code></pre>
+<pre><code class="lang-csharp">// Toggle the NavigationView pane open or closed when the TitleBar button is clicked.
+private void TitleBar_PaneToggleRequested(TitleBar sender, object args)
+{
+    NavView.IsPaneOpen = !NavView.IsPaneOpen;
+}
+
+// Navigate back when the TitleBar back button is clicked.
+private void TitleBar_BackRequested(TitleBar sender, object args)
+{
+    if (contentFrame.CanGoBack)
+    {
+        contentFrame.GoBack();
+    }
+}
+
+// Hide the pane toggle button in the TitleBar when NavigationView switches to Top mode,
+// since the pane isn't applicable in that layout.
+private void NavView_DisplayModeChanged(NavigationView sender,
+    NavigationViewDisplayModeChangedEventArgs args)
+{
+    titleBar.IsPaneToggleButtonVisible =
+        sender.PaneDisplayMode != NavigationViewPaneDisplayMode.Top;
+}
+</code></pre>
+<p>With this pattern, the TitleBar control manages the drag region and interactive buttons, so NavigationView doesn't need auto-padding.</p>
+<h4 id="using-a-custom-title-bar-element">Using a custom title bar element</h4>
+<p>If you define a custom drag region using <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.window.settitlebar" data-linktype="absolute-path">Window.SetTitleBar</a> with your own UIElement instead of the TitleBar control, NavigationView automatically adds padding to prevent its interactive elements from overlapping the title bar area.</p>
+<p><img src="images/navigation-view-with-titlebar-padding.png" alt="An app extending into the title bar" data-linktype="relative-path"></p>
+<p>If you prefer the back and menu buttons to draw closer to the top of your app window, set <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.istitlebarautopaddingenabled" data-linktype="absolute-path">IsTitleBarAutoPaddingEnabled</a> to <code>false</code>:</p>
+<p><img src="images/navigation-view-no-titlebar-padding.png" alt="App extending into the title bar without extra padding" data-linktype="relative-path"></p>
+<pre><code class="lang-xaml">&lt;NavigationView x:Name="NavView" IsTitleBarAutoPaddingEnabled="False"&gt;
+</code></pre>
+<h4 id="adjusting-the-header-margin">Adjusting the header margin</h4>
+<p>To further adjust the position of NavigationView's header area, override the <em>NavigationViewHeaderMargin</em> XAML theme resource in your Page resources:</p>
+<pre><code class="lang-xaml">&lt;Page.Resources&gt;
+    &lt;Thickness x:Key="NavigationViewHeaderMargin"&gt;12,0&lt;/Thickness&gt;
+&lt;/Page.Resources&gt;
+</code></pre>
+<p>This theme resource modifies the margin around <a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview.header" data-linktype="absolute-path">NavigationView.Header</a>.</p>
+<h2 id="related-topics">Related topics</h2>
+<ul>
+<li><a href="/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.navigationview" data-linktype="absolute-path">NavigationView class</a></li>
+<li><a href="breadcrumbbar" data-linktype="relative-path">BreadcrumbBar</a></li>
+<li><a href="tab-view" data-linktype="relative-path">TabView</a></li>
+<li><a href="split-view" data-linktype="relative-path">SplitView</a></li>
+<li><a href="list-details" data-linktype="relative-path">List/details</a></li>
+<li><a href="../../../design/basics/navigation-basics" data-linktype="relative-path">Navigation basics</a></li>
+<li><a href="../../../design/" data-linktype="relative-path">Fluent Design overview</a></li>
+<li><a href="https://github.com/microsoft/WinUI-Gallery" data-linktype="external">WinUI 3 Gallery app - source code and samples</a></li>
+</ul>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/how-to-write-quick-edits">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+					<div class="media-left">
+						<div class="image image-36x36" hidden data-open-source-image-container>
+							<img
+								class="theme-display is-light"
+								src="https://learn.microsoft.com/windows/images/windows11.svg"
+								aria-hidden="true"
+								data-open-source-image-light
+							/>
+							<img
+								class="theme-display is-dark is-high-contrast"
+								src="https://learn.microsoft.com/windows/images/windows11.svg"
+								aria-hidden="true"
+								data-open-source-image-dark
+							/>
+						</div>
+					</div>
+			  
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								Windows developer
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://www.microsoft.com/en-us/windowsinsider/feedbackhub/fb"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2026-07-15T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2026-07-15
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+			
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

@@ -358,7 +358,7 @@ def main() -> int:
     verify_release_workflow()
     verify_local_packaging_script()
 
-    for relative in ("App.xaml", "MainWindow.xaml", "Controls/StageArtwork.xaml", "app.manifest"):
+    for relative in ("App.xaml", "MainWindow.xaml", "app.manifest"):
         element_tree.parse(APP / relative)
     app_xaml = read("App.xaml")
     require(
@@ -390,19 +390,9 @@ def main() -> int:
         require(expected in project, f"project is missing {expected}")
     require(
         "assets\\" not in project
-        and '<Content Update="Assets\\Artwork\\*.png">' in project
-        and '<Content Update="Assets\\MH3GSaveConverter.ico">' in project
-        and '<None Update="Assets\\Artwork\\*.png">' not in project,
+        and '<Content Update="Assets\\MH3GSaveConverter.ico">' in project,
         "WinUI package assets must use one canonical Windows-relative casing",
     )
-    for artwork in (
-        "input-route.png",
-        "components-workshop.png",
-        "dry-run-flow.png",
-        "rollback-harbor.png",
-        "cec-mailbox.png",
-    ):
-        require((APP / "Assets" / "Artwork" / artwork).is_file(), f"missing packaged artwork {artwork}")
 
     bridge = read("Services/ConverterCliClient.cs")
     for expected in (
@@ -567,58 +557,61 @@ def main() -> int:
     ):
         require(expected in core_write, f"core write is missing dry-run hash binding {expected}")
 
-    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows core workflow must gate selected optional setup")
+    require("public bool SelectedOptionalDataIsConfigured" in workflow, "Windows must describe selected optional setup locally")
     require("public bool HasPendingSelectedOptionalWork" in workflow, "Windows core workflow must retain selected optional work")
-    require("!SelectedOptionalDataIsConfigured" in core_dry_run, "core Dry Run must not bypass incomplete optional setup")
+    require("SelectedOptionalDataIsConfigured" not in core_dry_run, "optional setup must not block core Dry Run")
     require(
-        "SelectedOptionalDataIsConfigured" in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
-        "core write availability must not bypass incomplete optional setup",
+        "SelectedOptionalDataIsConfigured" not in workflow.split("public bool CanWriteCore", 1)[1].split("public bool CanRollbackCore", 1)[0],
+        "optional setup must not block core write availability",
     )
     require(
-        "!SelectedOptionalDataIsConfigured" in core_write,
-        "core write entry point must reject incomplete optional setup",
+        "SelectedOptionalDataIsConfigured" not in core_write,
+        "optional setup must not block the core write entry point",
     )
     optional_availability = workflow.split("private void RaiseOptionalConfigurationAvailability()", 1)[1].split(
         "private void SetWorkflowGuidance", 1
     )[0]
     require(
-        "OnPropertyChanged(nameof(CanWriteCore));" in optional_availability,
-        "changing optional setup must refresh core write availability",
+        "OnPropertyChanged(nameof(CanWriteCore));" not in optional_availability,
+        "changing optional setup must not change core write availability",
     )
     system_write = public_method_body(workflow, "WriteSystemAsync")
     require("_systemWriteCompleted = true;" in system_write, "system completion must be tracked independently")
     require(
-        "_extrasInstallCompleted" not in workflow,
-        "Windows must not track a completed ExtData install while that capability is unavailable",
+        "_extrasInstallCompleted" in workflow,
+        "Windows must track completed safe ExtData installs independently",
     )
+    extras_write = public_method_body(workflow, "InstallExtrasAsync")
+    extras_rollback = public_method_body(workflow, "RollbackExtrasAsync")
+    require("_extrasInstallCompleted = true;" in extras_write, "written ExtData install must record completion")
+    require("_extrasInstallCompleted = false;" in extras_rollback, "ExtData rollback must clear completion")
+    require("CommitRepairOptionalScope" in workflow and "_repairGuildCardSource" in workflow,
+            "repair optional scope must be explicitly committed and authorization-bound")
 
     window = read("MainWindow.xaml")
     require(
-        'Symbol="ProtectedDocument"' in window
-        and 'ScrollViewer.VerticalScrollBarVisibility="Auto"' in window,
-        "WinUI XAML must use valid Symbol and TextBox scrollbar members",
+        '<controls:NavigationView' in window
+        and 'PaneDisplayMode="LeftCompact"' in window,
+        "WinUI XAML must use the frozen native navigation shell",
     )
     app_xaml = read("App.xaml")
     require(
-        "BooleanNegationConverter" not in app_xaml
-        and 'Visibility="{Binding WriteUnavailableVisibility}"' in window
-        and 'Visibility="{Binding LatestReportEmptyVisibility}"' in window,
+        "BooleanNegationConverter" not in app_xaml,
         "WinUI must avoid an App-resource converter that dotnet publish cannot resolve",
     )
-    require('Click="GoToOptionalConfiguration_Click"' in window, "post-Inspect guidance must lead to optional setup")
+    require('Click="ContinueToDryRun_Click"' in window, "optional setup must provide an explicit next-step action")
     for expected in (
         'x:Name="CurrentPathBox"',
         'Visibility="{Binding RepairCurrentVisibility}"',
         'Text="{Binding CoreTargetTitle}"',
-        'Text="{Binding CoreTargetHint}"',
         'PlaceholderText="{Binding CoreTargetPlaceholder}"',
         'Click="ChooseCurrentFile_Click"',
         'Click="ChooseCurrentFolder_Click"',
     ):
         require(expected in window, f"repair mode must expose independent current/output controls: {expected}")
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
-    require('Message="{Binding PostWriteGuidanceMessage}"' in window, "post-write guidance must account for selected optional data")
-    require('Click="GoToPostWriteDestination_Click"' in window, "post-write CTA must choose its actual next destination")
+    require('AutomationProperties.AutomationId="mh3g.converter.windows.action.confirmWrite"' in window,
+            "write surface must expose a stable primary action id")
     code_behind = read("MainWindow.xaml.cs")
     require(
         "RootGrid.DataContext = ViewModel;" in code_behind
@@ -649,7 +642,7 @@ def main() -> int:
         "repair write arguments must not shadow the normal conversion arguments",
     )
     require("private void GoToOptionalConfiguration_Click" in code_behind, "optional configuration CTA handler is missing")
-    require("OptionalConfigurationAnchor.StartBringIntoView();" in code_behind, "optional configuration CTA must scroll to its controls")
+    require("ShowConvertStep(ConvertStep.Optional);" in code_behind, "optional configuration CTA must navigate to its scoped surface")
     require("private void GoToPostWriteDestination_Click" in code_behind, "post-write destination handler is missing")
     for expected in (
         "RootGrid_Loaded",
@@ -840,14 +833,10 @@ def main() -> int:
     ):
         require(expected in window, f"WinUI optional transaction controls are missing {expected}")
     require(
-        "Copy.ExtDataInstallUnavailable" in window,
-        "Windows ExtData controls must explain why automatic install is unavailable",
+        'x:Name="ExtrasTargetBox"' in window and 'Click="InstallExtras_Click"' in window,
+        "Windows ExtData controls must preserve the safe install transaction",
     )
-    require(
-        "<InfoBar " not in window
-        and '<controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />' in window,
-        "every WinUI InfoBar must use the Microsoft.UI.Xaml.Controls namespace prefix",
-    )
+    require("<InfoBar" in window, "scoped WinUI InfoBar feedback is required")
 
     code_behind = read("MainWindow.xaml.cs")
     for expected in (
@@ -885,17 +874,13 @@ def main() -> int:
     require((APP / "README.zh-CN.md").is_file(), "Windows shell must include Chinese usage guidance")
 
     window = read("MainWindow.xaml")
-    for expected in ("StageArtwork", "DryRun_Click", "CecToggle", "RollbackCore_Click"):
+    for expected in ("NavigationView", "DryRun_Click", "CecToggle", "RollbackCore_Click"):
         require(expected in window, f"main surface is missing {expected}")
     for expected in (
-        "ShowPostInspectGuidance",
-        "ShowPostDryRunGuidance",
-        "ShowPostWriteGuidance",
-        "ShowPostOptionalGuidance",
-        "ShowPostRollbackGuidance",
-        "GoToPostWriteDestination_Click",
-        "GoToCoreWorkflow_Click",
-        "GoToOptionalConfiguration_Click",
+        "AppNavigation_SelectionChanged",
+        "ContinueToDryRun_Click",
+        "SkipOptional_Click",
+        "StartConversion_Click",
     ):
         require(expected in window, f"main surface is missing guided continuation {expected}")
     for expected in (
@@ -906,8 +891,7 @@ def main() -> int:
         "WorkflowGuidance.RolledBack",
     ):
         require(expected in workflow, f"workflow is missing guided continuation {expected}")
-    stage_artwork = read("Controls/StageArtwork.xaml.cs")
-    require("SceneImage.Source" in stage_artwork, "stage artwork must change with workflow state")
+    require("StageArtwork" not in window, "legacy raster stage artwork must not occupy the task surface")
 
     print("Windows WinUI source contract checks passed.")
     return 0

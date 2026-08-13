@@ -66,6 +66,9 @@ public sealed class MainViewModel : ObservableObject
     private ExtrasInstallDryRunAuthorization? _extrasInstallAuthorization;
     private CecDryRunAuthorization? _cecAuthorization;
     private bool _systemWriteCompleted;
+    private bool _extrasInstallCompleted;
+    private string? _repairGuildCardSource;
+    private string? _syntheticFixtureId;
     private WorkflowGuidance _workflowGuidance;
 
     private enum AuthorizationDomain
@@ -102,9 +105,117 @@ public sealed class MainViewModel : ObservableObject
         _statusText = Copy.Ready;
     }
 
+    /// <summary>
+    /// Applies presentation-only, deterministic state used by the Windows UI
+    /// evidence harness. No fixture calls the CLI or fingerprints the host.
+    /// </summary>
+    public void ApplySyntheticFixture(string fixtureId)
+    {
+        var supported = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "first-run",
+            "input.empty",
+            "components.optional-missing",
+            "components.optional-skipped",
+            "dry-run.ready",
+            "dry-run.blocked",
+            "write.authorized",
+            "write.confirmation",
+            "conversion.success",
+            "conversion.failure",
+            "history.empty",
+            "history.result",
+        };
+        if (!supported.Contains(fixtureId))
+        {
+            throw new ArgumentException($"Unknown UI fixture: {fixtureId}", nameof(fixtureId));
+        }
+
+        _syntheticFixtureId = fixtureId;
+        SelectedSlot = "user2";
+        if (fixtureId is not ("first-run" or "input.empty" or "history.empty"))
+        {
+            _sourcePath = @"C:\UIFixture\3ds\user2";
+            _targetPath = @"C:\UIFixture\cemu\user2";
+            _sourceInspected = true;
+            _targetInspected = true;
+            Stage = WorkflowStage.Inspected;
+            StatusText = Copy.Inspected;
+        }
+
+        switch (fixtureId)
+        {
+            case "components.optional-missing":
+                _isSystemEnabled = true;
+                break;
+            case "components.optional-skipped":
+                StatusText = Copy.Ready;
+                break;
+            case "dry-run.ready":
+                StatusText = Copy.Inspected;
+                break;
+            case "dry-run.blocked":
+                _sourceInspected = false;
+                StatusText = Copy.Ready;
+                break;
+            case "write.authorized":
+            case "write.confirmation":
+                Stage = WorkflowStage.DryRunAuthorized;
+                StatusText = Copy.DryRunAuthorized;
+                break;
+            case "conversion.success":
+                Stage = WorkflowStage.Written;
+                StatusText = Copy.Written;
+                LatestReport = "{\"fixture\":true,\"status\":\"written\",\"manifest\":\"C:\\\\UIFixture\\\\manifest.json\"}";
+                History.Insert(0, new OperationHistoryItem(
+                    DateTimeOffset.Parse("2026-08-13T08:00:00+08:00"),
+                    "convert --write", "written", true, "Synthetic transaction evidence"));
+                break;
+            case "conversion.failure":
+                Stage = WorkflowStage.Failed;
+                StatusText = Copy.Failed;
+                LatestError = "Synthetic fixture: output fingerprint changed after Dry Run.";
+                break;
+            case "history.result":
+                History.Insert(0, new OperationHistoryItem(
+                    DateTimeOffset.Parse("2026-08-13T08:00:00+08:00"),
+                    "convert --dry-run", "dry-run", true, "Synthetic preview only"));
+                break;
+        }
+
+        OnPropertyChanged(nameof(IsSyntheticFixture));
+        OnPropertyChanged(nameof(SyntheticFixtureId));
+        OnPropertyChanged(nameof(SourcePath));
+        OnPropertyChanged(nameof(TargetPath));
+        OnPropertyChanged(nameof(IsSystemEnabled));
+        RaiseHistoryAvailability();
+        RaiseCoreActionAvailability();
+        RaiseOptionalConfigurationAvailability();
+    }
+
+    private bool SyntheticFixtureCanInspect() => _syntheticFixtureId is not ("first-run" or "input.empty");
+
+    private bool SyntheticFixtureCanDryRun() => _syntheticFixtureId is
+        "dry-run.ready" or "write.authorized" or "write.confirmation" or "conversion.success";
+
+    private bool SyntheticFixtureCanWrite() => _syntheticFixtureId is
+        "write.authorized" or "write.confirmation" or "conversion.success";
+
     public ConverterCopy Copy { get; }
     public ObservableCollection<OperationHistoryItem> History { get; } = new();
     public IReadOnlyList<string> SaveSlots => SavePathResolver.AvailableSlots;
+    public bool IsSyntheticFixture => _syntheticFixtureId is not null;
+    public string SyntheticFixtureId => _syntheticFixtureId ?? string.Empty;
+    public bool HasCommittedRepairGuildCards => IsRepairMode && _repairGuildCardSource is not null;
+    public bool HasHistory => History.Count > 0;
+    public Visibility HistoryEmptyVisibility => HasHistory ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility HistoryListVisibility => HasHistory ? Visibility.Visible : Visibility.Collapsed;
+    public bool CanContinueOptional => true;
+    public Visibility OptionalMissingVisibility => SelectedOptionalDataIsConfigured ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility OptionalSkippedVisibility => _syntheticFixtureId == "components.optional-skipped"
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+    public Visibility InputFixVisibility => CanInspectCore ? Visibility.Collapsed : Visibility.Visible;
 
     public AppLanguageOverride LanguageOverride
     {
@@ -159,6 +270,8 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
         _conversionMode = mode;
+        _extrasInstallCompleted = false;
+        _repairGuildCardSource = null;
         if (IsRepairMode)
         {
             IsSystemEnabled = false;
@@ -176,6 +289,33 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CoreTargetHint));
         OnPropertyChanged(nameof(CoreTargetPlaceholder));
         RaiseOptionalConfigurationAvailability();
+    }
+
+    /// <summary>
+    /// Commits the optional guild-card choice into the repair transaction
+    /// scope. Draft checkbox/path edits do not silently change an authorized
+    /// core write; every effective scope change invalidates core inspection.
+    /// </summary>
+    public bool CommitRepairOptionalScope(bool skip)
+    {
+        string? next = null;
+        if (!skip && IsRepairMode && IncludeGuildCards)
+        {
+            if (!SavePathResolver.TryResolveExtDataUserDirectory(
+                ExtrasSourceDirectory, out next, out _))
+            {
+                Fail(Copy.ExtrasPathsRequired);
+                return false;
+            }
+            next = Path.GetFullPath(next);
+        }
+        if (!string.Equals(_repairGuildCardSource, next, StringComparison.OrdinalIgnoreCase))
+        {
+            _repairGuildCardSource = next;
+            InvalidateCoreAuthorization();
+            OnPropertyChanged(nameof(HasCommittedRepairGuildCards));
+        }
+        return true;
     }
 
     public string SourcePath
@@ -511,6 +651,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _isBusy, value))
             {
+                OnPropertyChanged(nameof(BusyVisibility));
                 OnPropertyChanged(nameof(CanInspectCore));
                 OnPropertyChanged(nameof(CanInspectProgress));
                 OnPropertyChanged(nameof(CanInspectEvents));
@@ -533,12 +674,30 @@ public sealed class MainViewModel : ObservableObject
             }
         }
     }
+    public Visibility BusyVisibility => IsBusy ? Visibility.Visible : Visibility.Collapsed;
 
     public WorkflowStage Stage
     {
         get => _stage;
-        private set => SetProperty(ref _stage, value);
+        private set
+        {
+            if (SetProperty(ref _stage, value))
+            {
+                OnPropertyChanged(nameof(DryRunReadyVisibility));
+                OnPropertyChanged(nameof(DryRunBlockedVisibility));
+                OnPropertyChanged(nameof(WriteAuthorizedVisibility));
+                OnPropertyChanged(nameof(ResultSuccessVisibility));
+                OnPropertyChanged(nameof(ResultFailureVisibility));
+                OnPropertyChanged(nameof(WriteFooterVisibility));
+            }
+        }
     }
+    public Visibility DryRunReadyVisibility => CanRunCoreDryRun ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility DryRunBlockedVisibility => CanRunCoreDryRun ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility WriteAuthorizedVisibility => Stage == WorkflowStage.DryRunAuthorized ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ResultSuccessVisibility => Stage is WorkflowStage.Written or WorkflowStage.RolledBack ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ResultFailureVisibility => Stage == WorkflowStage.Failed ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility WriteFooterVisibility => Stage == WorkflowStage.DryRunAuthorized ? Visibility.Visible : Visibility.Collapsed;
 
     public string StatusText
     {
@@ -584,26 +743,30 @@ public sealed class MainViewModel : ObservableObject
             ExtrasSourceDirectory, out _, out _)
         : (!IsSystemEnabled || HasSystemPaths())
             && (!SupportsSafeExtrasInstall || !HasSelectedExtraGroups() || HasExtrasInstallPaths());
-    public bool HasPendingSelectedOptionalWork => IsSystemEnabled && !_systemWriteCompleted;
+    public bool HasPendingSelectedOptionalWork => !IsRepairMode
+        && ((IsSystemEnabled && !_systemWriteCompleted)
+            || (HasSelectedExtraGroups() && !_extrasInstallCompleted));
     public string PostWriteGuidanceMessage => HasPendingSelectedOptionalWork
         ? Copy.NextAfterCoreWriteWithOptionalData
         : Copy.NextAfterWrite;
     public string PostWriteGuidanceAction => HasPendingSelectedOptionalWork
         ? Copy.ContinueOptionalData
         : Copy.ReviewTransaction;
-    public bool CanInspectCore => !IsBusy && HasValidCorePaths();
+    public bool CanInspectCore => !IsBusy && (IsSyntheticFixture ? SyntheticFixtureCanInspect() : HasValidCorePaths());
     public bool CanInspectProgress => !IsBusy && HasValidCorePaths();
     public bool CanInspectEvents => !IsBusy && HasValidCorePaths();
     public bool CanRunCoreDryRun => !IsBusy
-        && _sourceInspected
-        && _targetInspected
-        && (!IsRepairMode || _currentInspected && _inspectedCurrent?.Exists == true)
-        && SelectedOptionalDataIsConfigured
-        && HasValidCorePaths();
+        && (IsSyntheticFixture
+            ? SyntheticFixtureCanDryRun()
+            : _sourceInspected
+                && _targetInspected
+                && (!IsRepairMode || _currentInspected && _inspectedCurrent?.Exists == true)
+                && HasValidCorePaths());
     public bool CanWriteCore => !IsBusy
-        && SelectedOptionalDataIsConfigured
-        && (IsRepairMode ? _repairAuthorization is not null : _coreAuthorization is not null)
-        && HasValidCorePaths();
+        && (IsSyntheticFixture
+            ? SyntheticFixtureCanWrite()
+            : (IsRepairMode ? _repairAuthorization is not null : _coreAuthorization is not null)
+                && HasValidCorePaths());
     public Visibility WriteUnavailableVisibility => CanWriteCore ? Visibility.Collapsed : Visibility.Visible;
     public bool CanRollbackCore => !IsBusy && !string.IsNullOrWhiteSpace(RollbackManifestPath);
     public bool CanRunSystemDryRun => !IsBusy && IsSystemEnabled && HasSystemPaths();
@@ -749,11 +912,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task RunCoreDryRunAsync()
     {
-        if (!SelectedOptionalDataIsConfigured)
-        {
-            Fail(Copy.OptionalDataNeedsConfiguration);
-            return;
-        }
         if (!CanRunCoreDryRun)
         {
             Fail(Copy.WriteUnavailable);
@@ -804,13 +962,9 @@ public sealed class MainViewModel : ObservableObject
                     "--output", paths.Target,
                 };
                 string? extDataSource = null;
-                if (IncludeGuildCards)
+                if (_repairGuildCardSource is not null)
                 {
-                    if (!SavePathResolver.TryResolveExtDataUserDirectory(
-                        ExtrasSourceDirectory, out extDataSource, out _))
-                    {
-                        throw new InvalidOperationException(Copy.ExtrasPathsRequired);
-                    }
+                    extDataSource = _repairGuildCardSource;
                     arguments.Add("--source-extdata-dir");
                     arguments.Add(extDataSource);
                 }
@@ -909,11 +1063,6 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task WriteCoreAsync()
     {
-        if (!SelectedOptionalDataIsConfigured)
-        {
-            Fail(Copy.OptionalDataNeedsConfiguration);
-            return;
-        }
         var authorization = _coreAuthorization;
         var repairAuthorization = _repairAuthorization;
         if (IsRepairMode ? repairAuthorization is null : authorization is null)
@@ -1296,6 +1445,7 @@ public sealed class MainViewModel : ObservableObject
             RequireStatus(result, "written", "install ExtData");
             ExtrasRollbackManifestPath = result.TryGetString("manifest") ?? ExtrasRollbackManifestPath;
             InvalidateExtrasAuthorization();
+            _extrasInstallCompleted = true;
             Stage = WorkflowStage.Written;
             StatusText = Copy.Written;
             SetWorkflowGuidance(WorkflowGuidance.OptionalStepComplete);
@@ -1319,6 +1469,7 @@ public sealed class MainViewModel : ObservableObject
                 cancellationToken);
             RequireSuccess(result, "rollback ExtData");
             RequireStatus(result, "rolled-back", "rollback ExtData");
+            _extrasInstallCompleted = false;
             Stage = WorkflowStage.RolledBack;
             StatusText = Copy.RolledBack;
             SetWorkflowGuidance(WorkflowGuidance.RolledBack);
@@ -1512,7 +1663,15 @@ public sealed class MainViewModel : ObservableObject
             result.Status,
             result.Succeeded,
             result.Succeeded ? result.Status : LatestError));
+        RaiseHistoryAvailability();
         return result;
+    }
+
+    private void RaiseHistoryAvailability()
+    {
+        OnPropertyChanged(nameof(HasHistory));
+        OnPropertyChanged(nameof(HistoryEmptyVisibility));
+        OnPropertyChanged(nameof(HistoryListVisibility));
     }
 
     private void RequireSuccess(CliExecutionResult result, string operation)
@@ -1825,6 +1984,7 @@ public sealed class MainViewModel : ObservableObject
     {
         _extrasStageAuthorization = null;
         _extrasInstallAuthorization = null;
+        _extrasInstallCompleted = false;
         ClearOptionalGuidance();
         RaiseExtrasActionAvailability();
         RaiseOptionalConfigurationAvailability();
@@ -1865,17 +2025,20 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanRunCoreDryRun));
         OnPropertyChanged(nameof(CanWriteCore));
         OnPropertyChanged(nameof(WriteUnavailableVisibility));
+        OnPropertyChanged(nameof(DryRunReadyVisibility));
+        OnPropertyChanged(nameof(DryRunBlockedVisibility));
+        OnPropertyChanged(nameof(InputFixVisibility));
     }
 
     private void RaiseOptionalConfigurationAvailability()
     {
         OnPropertyChanged(nameof(SelectedOptionalDataIsConfigured));
+        OnPropertyChanged(nameof(CanContinueOptional));
+        OnPropertyChanged(nameof(OptionalMissingVisibility));
+        OnPropertyChanged(nameof(OptionalSkippedVisibility));
         OnPropertyChanged(nameof(HasPendingSelectedOptionalWork));
         OnPropertyChanged(nameof(PostWriteGuidanceMessage));
         OnPropertyChanged(nameof(PostWriteGuidanceAction));
-        OnPropertyChanged(nameof(CanRunCoreDryRun));
-        OnPropertyChanged(nameof(CanWriteCore));
-        OnPropertyChanged(nameof(WriteUnavailableVisibility));
     }
 
     private void SetWorkflowGuidance(WorkflowGuidance guidance)

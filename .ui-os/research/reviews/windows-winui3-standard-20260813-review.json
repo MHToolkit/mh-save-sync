@@ -1,0 +1,13 @@
+{
+  "schema_version": "uios.research-review/v0.2",
+  "manifest_path": "/Volumes/GameHub/Development/Games/mh-save-sync-windows-ui-quality-os/.ui-os/research/runs/windows-winui3-standard-20260813/manifest.json",
+  "manifest_sha256": "c33b8c80328a16b7c6c5734d5c642599f9fb3a94fcb1097eb206ca7a1835e6ee",
+  "context_sha256": "4d999977163c19026d470038147c4568a3628985c2d4669eeaa8a6437ecc1766",
+  "protected_snapshot_sha256": "bb5a74dd2747e7a3aa14944422228ccba54dc62f9828df8ddaf47bf831c93144",
+  "reviewed_at": "2026-08-13T02:01:26Z",
+  "verdict": "pass",
+  "reviewer": "isolated-uios-research-review",
+  "notes": [
+    "Grounded Standard proposal: all eight hashed artifacts match and all canonical URLs independently reopened with publisher and claimed substance intact; candidates adapt rather than copy and cover Windows native, keyboard/UIA, High Contrast, text scaling, non-color and AnimationsEnabled fallbacks. Shipped-flow evidence remains public and incomplete, so runtime usability, visual fidelity, motion, and accessibility are not verified."
+  ]
+}

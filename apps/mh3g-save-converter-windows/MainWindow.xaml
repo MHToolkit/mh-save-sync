@@ -3,488 +3,287 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
-    xmlns:converter="using:MHToolkit.MH3GSaveConverter.Windows.Controls"
-    xmlns:models="using:MHToolkit.MH3GSaveConverter.Windows.Models"
     Title="MH3G Save Converter">
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Loaded="RootGrid_Loaded">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Padding="28,15" Background="#EAFBFCFE" BorderBrush="#1418212F" BorderThickness="0,0,0,1">
-            <Grid ColumnSpacing="18">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Border Width="38" Height="38" Background="#FF18212F" CornerRadius="8">
-                    <SymbolIcon Symbol="Switch" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
-                    <TextBlock Text="{Binding Copy.AppTitle}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource ConverterInkBrush}" />
-                    <TextBlock Text="{Binding Copy.AppSubtitle}" FontSize="12" Foreground="{StaticResource ConverterSlateBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                    <Border Padding="9,5" Background="#FFF0F7F5" CornerRadius="8">
-                        <TextBlock Text="{Binding StatusText}"
-                                   FontSize="12"
-                                   Foreground="{StaticResource ConverterJadeBrush}"
-                                   AutomationProperties.LiveSetting="Polite"
-                                   AutomationProperties.Name="{Binding StatusText}" />
+    <Grid x:Name="RootGrid"
+          Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+          Loaded="RootGrid_Loaded">
+        <controls:NavigationView x:Name="AppNavigation"
+                                 PaneDisplayMode="LeftCompact"
+                                 IsBackButtonVisible="Collapsed"
+                                 IsSettingsVisible="False"
+                                 SelectionChanged="AppNavigation_SelectionChanged"
+                                 AutomationProperties.Name="MH3G Save Converter navigation">
+            <controls:NavigationView.PaneHeader>
+                <StackPanel Margin="8,8,8,16" Orientation="Horizontal" Spacing="10">
+                    <Border Width="32" Height="32" CornerRadius="7" Background="{ThemeResource AccentFillColorDefaultBrush}">
+                        <SymbolIcon Symbol="Switch" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <Button Click="About_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.AboutUpdates}">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <SymbolIcon Symbol="Help" />
-                            <TextBlock Text="{Binding Copy.AboutUpdates}" />
-                        </StackPanel>
-                    </Button>
-                    <TextBlock Text="{Binding Copy.Language}" VerticalAlignment="Center" Foreground="{StaticResource ConverterSlateBrush}" />
-                    <ComboBox x:Name="LanguagePicker" MinWidth="150" SelectionChanged="LanguagePicker_SelectionChanged">
-                        <ComboBoxItem Tag="system" Content="{Binding Copy.LanguageSystem}" />
-                        <ComboBoxItem Tag="zh-Hans" Content="{Binding Copy.LanguageChinese}" />
-                        <ComboBoxItem Tag="en" Content="{Binding Copy.LanguageEnglish}" />
-                    </ComboBox>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="MH3G" FontWeight="SemiBold" />
+                        <TextBlock Text="Save Converter" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
                 </StackPanel>
-            </Grid>
-        </Border>
+            </controls:NavigationView.PaneHeader>
+            <controls:NavigationView.MenuItems>
+                <controls:NavigationViewItem x:Name="ConvertNavigationItem" Tag="convert"
+                                             Content="{Binding Copy.NavigationConvert}"
+                                             AutomationProperties.AutomationId="mh3g.converter.windows.navigation.convert">
+                    <controls:NavigationViewItem.Icon><SymbolIcon Symbol="Switch" /></controls:NavigationViewItem.Icon>
+                </controls:NavigationViewItem>
+                <controls:NavigationViewItem x:Name="HistoryNavigationItem" Tag="history"
+                                             Content="{Binding Copy.NavigationHistory}"
+                                             AutomationProperties.AutomationId="mh3g.converter.windows.navigation.history">
+                    <controls:NavigationViewItem.Icon><SymbolIcon Symbol="Document" /></controls:NavigationViewItem.Icon>
+                </controls:NavigationViewItem>
+                <controls:NavigationViewItemSeparator />
+                <controls:NavigationViewItem x:Name="CecNavigationItem" Tag="cec"
+                                             Content="{Binding Copy.NavigationExperimentalCec}"
+                                             AutomationProperties.AutomationId="mh3g.converter.windows.navigation.experimentalCEC">
+                    <controls:NavigationViewItem.Icon><SymbolIcon Symbol="Mail" /></controls:NavigationViewItem.Icon>
+                </controls:NavigationViewItem>
+                <controls:NavigationViewItem x:Name="SettingsNavigationItem" Tag="settings"
+                                             Content="{Binding Copy.NavigationSettings}"
+                                             AutomationProperties.AutomationId="mh3g.converter.windows.navigation.settings">
+                    <controls:NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></controls:NavigationViewItem.Icon>
+                </controls:NavigationViewItem>
+            </controls:NavigationView.MenuItems>
 
-        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-            <StackPanel Padding="36,28,36,44" Spacing="24" HorizontalAlignment="Center" MaxWidth="1120">
-                <Border Padding="28,26" Background="#FFF8FAFD" CornerRadius="8">
-                    <Grid ColumnSpacing="28">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.02*" />
-                            <ColumnDefinition Width="0.98*" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="16" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Copy.HeroTitle}" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource ConverterInkBrush}" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding Copy.HeroDescription}" FontSize="15" LineHeight="22" TextWrapping="Wrap" Foreground="{StaticResource ConverterSlateBrush}" />
-                        <Border Padding="12,9" Background="#FFF0F7F5" BorderBrush="#331B8A6B" BorderThickness="1" CornerRadius="8">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <SymbolIcon Symbol="ProtectedDocument" Foreground="{StaticResource ConverterJadeBrush}" />
-                                <TextBlock Text="{Binding Copy.HeroSafety}" TextWrapping="Wrap" Foreground="{StaticResource ConverterJadeBrush}" />
-                            </StackPanel>
-                        </Border>
-                        <Grid Margin="0,8,0,0" ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="4"><TextBlock Text="01" FontWeight="SemiBold" Foreground="{StaticResource ConverterBlueBrush}" /><TextBlock Text="{Binding Copy.StageInput}" FontSize="12" TextWrapping="Wrap" /></StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="02" FontWeight="SemiBold" Foreground="{StaticResource ConverterJadeBrush}" /><TextBlock Text="{Binding Copy.StageInspect}" FontSize="12" TextWrapping="Wrap" /></StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="4"><TextBlock Text="03" FontWeight="SemiBold" Foreground="{StaticResource ConverterCoralBrush}" /><TextBlock Text="{Binding Copy.StageDryRun}" FontSize="12" TextWrapping="Wrap" /></StackPanel>
-                            <StackPanel Grid.Column="3" Spacing="4"><TextBlock Text="04" FontWeight="SemiBold" Foreground="{StaticResource ConverterSlateBrush}" /><TextBlock Text="{Binding Copy.StageWrite}" FontSize="12" TextWrapping="Wrap" /></StackPanel>
-                        </Grid>
-                        </StackPanel>
-                        <converter:StageArtwork Grid.Column="1" Stage="{Binding Stage}" />
-                    </Grid>
-                </Border>
+            <Grid Padding="24,16,24,20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                <controls:InfoBar
-                    IsOpen="{Binding HasLatestError}"
-                    IsClosable="True"
-                    Severity="Error"
-                    Title="{Binding Copy.Failed}"
-                    Message="{Binding LatestError}" />
-
-                <controls:InfoBar
-                    IsOpen="{Binding ShowPostInspectGuidance}"
-                    IsClosable="True"
-                    Severity="Informational"
-                    Title="{Binding Copy.NextStep}"
-                    Message="{Binding Copy.NextAfterInspect}">
-                    <controls:InfoBar.ActionButton>
-                        <Button Click="GoToOptionalConfiguration_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Setting" /><TextBlock Text="{Binding Copy.ConfigureOptionalData}" /></StackPanel>
-                        </Button>
-                    </controls:InfoBar.ActionButton>
-                </controls:InfoBar>
-
-                <controls:InfoBar
-                    IsOpen="{Binding ShowPostDryRunGuidance}"
-                    IsClosable="True"
-                    Severity="Success"
-                    Title="{Binding Copy.NextStep}"
-                    Message="{Binding Copy.NextAfterDryRun}">
-                    <controls:InfoBar.ActionButton>
-                        <Button Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.ConfirmAndWrite}" /></StackPanel>
-                        </Button>
-                    </controls:InfoBar.ActionButton>
-                </controls:InfoBar>
-
-                <controls:InfoBar
-                    IsOpen="{Binding ShowPostWriteGuidance}"
-                    IsClosable="True"
-                    Severity="Success"
-                    Title="{Binding Copy.NextStep}"
-                    Message="{Binding PostWriteGuidanceMessage}">
-                    <controls:InfoBar.ActionButton>
-                        <Button Click="GoToPostWriteDestination_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding PostWriteGuidanceAction}" /></StackPanel>
-                        </Button>
-                    </controls:InfoBar.ActionButton>
-                </controls:InfoBar>
-
-                <controls:InfoBar
-                    IsOpen="{Binding ShowPostOptionalGuidance}"
-                    IsClosable="True"
-                    Severity="Informational"
-                    Title="{Binding Copy.NextStep}"
-                    Message="{Binding Copy.NextAfterOptional}">
-                    <controls:InfoBar.ActionButton>
-                        <Button Click="GoToOptionalConfiguration_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding Copy.ContinueOptionalData}" /></StackPanel>
-                        </Button>
-                    </controls:InfoBar.ActionButton>
-                </controls:InfoBar>
-
-                <controls:InfoBar
-                    IsOpen="{Binding ShowPostRollbackGuidance}"
-                    IsClosable="True"
-                    Severity="Informational"
-                    Title="{Binding Copy.NextStep}"
-                    Message="{Binding Copy.NextAfterRollback}">
-                    <controls:InfoBar.ActionButton>
-                        <Button Click="GoToCoreWorkflow_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Back" /><TextBlock Text="{Binding Copy.ReturnToCoreFlow}" /></StackPanel>
-                        </Button>
-                    </controls:InfoBar.ActionButton>
-                </controls:InfoBar>
-
-                <Grid x:Name="CoreWorkflowAnchor" ColumnSpacing="24">
+                <Grid ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="1.15*" />
-                        <ColumnDefinition Width="0.85*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Spacing="16">
-                        <TextBlock Text="{Binding Copy.CoreSectionTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <TextBlock Text="{Binding Copy.CoreSectionDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding Copy.ConversionModeTitle}" FontWeight="SemiBold" />
-                            <ComboBox x:Name="ConversionModePicker"
-                                      MinWidth="280"
-                                      HorizontalAlignment="Left"
-                                      SelectionChanged="ConversionModePicker_SelectionChanged">
-                                <ComboBoxItem Tag="new" Content="{Binding Copy.ConversionModeNew}" />
-                                <ComboBoxItem Tag="repair" Content="{Binding Copy.ConversionModeRepair}" />
-                            </ComboBox>
-                            <Border Padding="12" Background="#FFF3F6FA" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                                <TextBlock Text="{Binding ConversionModeDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            </Border>
-                            <TextBlock Text="{Binding Copy.RepairVersionTitle}" FontWeight="SemiBold" />
-                            <ComboBox x:Name="RepairVersionPicker"
-                                      MinWidth="220"
-                                      HorizontalAlignment="Left"
-                                      IsEnabled="{Binding IsRepairMode}"
-                                      SelectionChanged="RepairVersionPicker_SelectionChanged">
-                                <ComboBoxItem Tag="auto" Content="{Binding Copy.RepairVersionAutomatic}" />
-                                <ComboBoxItem Tag="0.0.3" Content="0.0.3" />
-                                <ComboBoxItem Tag="0.0.4" Content="0.0.4" />
-                                <ComboBoxItem Tag="0.0.5" Content="0.0.5" />
-                                <ComboBoxItem Tag="0.0.6" Content="0.0.6" />
-                            </ComboBox>
-                            <TextBlock Text="{Binding Copy.RepairVersionHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <TextBlock Text="{Binding RepairDetectionSummary}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding Copy.SaveSlot}" FontWeight="SemiBold" />
-                            <ComboBox ItemsSource="{Binding SaveSlots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}" HorizontalAlignment="Left" MinWidth="150" />
-                            <TextBlock Text="{Binding Copy.SaveSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding Copy.SourceSlot}" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="SourcePathBox" Text="{Binding SourcePath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="user1 / user2 / user3" />
-                                <Button Grid.Column="1" Click="ChooseSourceFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
-                                </Button>
-                                <Button Grid.Column="2" Click="ChooseSourceFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
-                                </Button>
-                            </Grid>
-                            <TextBlock Text="{Binding Copy.SourceSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <TextBlock Text="{Binding SourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Spacing="7" Visibility="{Binding RepairCurrentVisibility}">
-                            <TextBlock Text="{Binding Copy.CurrentSlot}" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="CurrentPathBox" Text="{Binding CurrentPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="converted Wii U / Cemu user#" />
-                                <Button Grid.Column="1" Click="ChooseCurrentFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
-                                </Button>
-                                <Button Grid.Column="2" Click="ChooseCurrentFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
-                                </Button>
-                            </Grid>
-                            <TextBlock Text="{Binding Copy.CurrentSlotHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <TextBlock Text="{Binding CurrentPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding CoreTargetTitle}" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="TargetPathBox" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged" PlaceholderText="{Binding CoreTargetPlaceholder}" />
-                                <Button Grid.Column="1" Click="ChooseTargetFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFile}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.ChooseFile}" /></StackPanel>
-                                </Button>
-                                <Button Grid.Column="2" Click="ChooseTargetFolder_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.ChooseFolder}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Folder" /><TextBlock Text="{Binding Copy.ChooseFolder}" /></StackPanel>
-                                </Button>
-                            </Grid>
-                            <TextBlock Text="{Binding CoreTargetHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <TextBlock Text="{Binding TargetPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Spacing="7">
-                            <TextBlock Text="{Binding Copy.CliPath}" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="CliPathBox" Text="{Binding CliPath, Mode=TwoWay}" PlaceholderText="tools\\mh3g-save-convert.exe" />
-                                <Button Grid.Column="1" Click="ChooseCli_Click" Style="{StaticResource QuietButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.Browse}" /></StackPanel>
-                                </Button>
-                            </Grid>
-                            <TextBlock Text="{Binding Copy.CliPathHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,6,0,0">
-                            <Button Click="Inspect_Click" IsEnabled="{Binding CanInspectCore}">
-                                <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Find" /><TextBlock Text="{Binding Copy.Inspect}" /></StackPanel>
-                            </Button>
-                            <Button Click="InspectProgress_Click" IsEnabled="{Binding CanInspectProgress}" Style="{StaticResource QuietButtonStyle}">
-                                <TextBlock Text="{Binding Copy.InspectProgress}" />
-                            </Button>
-                            <Button Click="InspectEvents_Click" IsEnabled="{Binding CanInspectEvents}" Style="{StaticResource QuietButtonStyle}">
-                                <TextBlock Text="{Binding Copy.InspectEvents}" />
-                            </Button>
-                        </StackPanel>
-                    </StackPanel>
-
-                    <Border Grid.Column="1" Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="16">
-                            <TextBlock Text="{Binding Copy.DryRunTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                            <TextBlock Text="{Binding Copy.DryRunDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <Button Click="DryRun_Click" IsEnabled="{Binding CanRunCoreDryRun}" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Sync" /><TextBlock Text="{Binding Copy.RunDryRun}" /></StackPanel>
-                            </Button>
-                            <Border Padding="12" Background="#FFF0F7F5" BorderBrush="#331B8A6B" BorderThickness="1" CornerRadius="8">
-                                <TextBlock Text="{Binding Copy.DryRunGate}" TextWrapping="Wrap" Foreground="{StaticResource ConverterJadeBrush}" />
-                            </Border>
-                            <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
-                            <TextBlock Text="{Binding Copy.WriteTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                            <TextBlock Text="{Binding Copy.WriteDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <Button Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.WriteSelectedSave}" /></StackPanel>
-                            </Button>
-                            <TextBlock Text="{Binding Copy.WriteUnavailable}" Visibility="{Binding WriteUnavailableVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <Border Padding="12" Background="#FFF3F6FA" CornerRadius="8">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="{Binding Copy.TransactionDetails}" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding Copy.OneTarget}" Foreground="{StaticResource ConverterInkBrush}" />
-                                    <TextBlock Text="{Binding Copy.BackupAndManifest}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-
-                <Grid ColumnSpacing="24">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="1.15*" /><ColumnDefinition Width="0.85*" /></Grid.ColumnDefinitions>
-                    <Border Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="14">
-                            <TextBlock Text="{Binding Copy.RollbackTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                            <TextBlock Text="{Binding Copy.RollbackDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <TextBlock Text="{Binding Copy.ManifestPath}" FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <TextBox x:Name="RollbackManifestBox" Text="{Binding RollbackManifestPath, Mode=TwoWay}" PlaceholderText=".user#.mh3g-install.json" />
-                                <Button Grid.Column="1" Click="ChooseRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenFile" /><TextBlock Text="{Binding Copy.Browse}" /></StackPanel>
-                                </Button>
-                            </Grid>
-                            <Button Click="RollbackCore_Click" IsEnabled="{Binding CanRollbackCore}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </Border>
-                    <Border Grid.Column="1" Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="10">
-                            <TextBlock Text="{Binding Copy.OptionalSectionTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                            <TextBlock Text="{Binding Copy.OptionalSectionDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            <Border Padding="12" Background="#FFF3F6FA" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                                <TextBlock Text="{Binding Copy.ExtDataNotice}" TextWrapping="Wrap" Style="{StaticResource SectionCaptionTextStyle}" />
-                            </Border>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-
-                <Border x:Name="OptionalConfigurationAnchor" Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                    <StackPanel Spacing="16">
-                        <ToggleSwitch x:Name="SystemToggle" Header="{Binding Copy.SharedSystem}" IsOn="{Binding IsSystemEnabled, Mode=TwoWay}" Toggled="SystemToggle_Toggled" />
-                        <StackPanel x:Name="SystemControls" Visibility="Collapsed" Spacing="12">
-                            <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.SystemMergeWarning}" />
-                            <Grid ColumnSpacing="20">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <StackPanel Spacing="9">
-                                <TextBlock Text="{Binding Copy.SystemSource}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="SystemSourceBox" Text="{Binding SystemSourcePath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
-                                    <Button Grid.Column="1" Click="ChooseSystemSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                </Grid>
-                                <TextBlock Text="{Binding Copy.SystemTarget}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="SystemTargetBox" Text="{Binding SystemTargetPath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText=".../system" />
-                                    <Button Grid.Column="1" Click="ChooseSystemTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                </Grid>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Spacing="10">
-                                <Button Click="SystemDryRun_Click" IsEnabled="{Binding CanRunSystemDryRun}" HorizontalAlignment="Left" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RunSystemDryRun}" /></Button>
-                                <Button Click="WriteSystem_Click" IsEnabled="{Binding CanWriteSystem}" HorizontalAlignment="Left"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.WriteSystem}" /></StackPanel></Button>
-                                <TextBlock Text="{Binding Copy.SystemManifest}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="SystemRollbackManifestBox" Text="{Binding SystemRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".system.mh3g-install.json" />
-                                    <Button Grid.Column="1" Click="ChooseSystemRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                </Grid>
-                                <Button Click="RollbackSystem_Click" IsEnabled="{Binding CanRollbackSystem}" HorizontalAlignment="Left" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
-                                </StackPanel>
-                            </Grid>
-                        </StackPanel>
-
-                        <Rectangle Height="1" Fill="#1418212F" Margin="0,4" />
-                        <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <controls:InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExtDataInstallUnavailable}" />
-                        <StackPanel Orientation="Horizontal" Spacing="16">
-                            <CheckBox x:Name="GuildCardsCheckBox" Content="{Binding Copy.GuildCards}" IsChecked="{Binding IncludeGuildCards, Mode=TwoWay}" />
-                            <CheckBox x:Name="QuestsCheckBox" Content="{Binding Copy.Quests}" IsChecked="{Binding IncludeQuests, Mode=TwoWay}" />
-                        </StackPanel>
-                        <Grid ColumnSpacing="14">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="7">
-                                <TextBlock Text="{Binding Copy.ExtDataSource}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../extdata/.../user" /><Button Grid.Column="1" Click="ChooseExtrasSource_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                                <TextBlock Text="{Binding Copy.ExtDataSourceHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                <TextBlock Text="{Binding ExtrasSourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="7">
-                                <TextBlock Text="{Binding Copy.StagingDirectory}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasStagingBox" Text="{Binding ExtrasStagingDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="new empty directory" /><Button Grid.Column="1" Click="ChooseExtrasStaging_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="7">
-                                <TextBlock Text="{Binding Copy.ExtDataTarget}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBox x:Name="ExtrasTargetBox" Text="{Binding ExtrasTargetDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText=".../80000001" /><Button Grid.Column="1" Click="ChooseExtrasTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button></Grid>
-                            </StackPanel>
-                        </Grid>
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <Button Click="ExtrasStageDryRun_Click" IsEnabled="{Binding CanRunExtrasStageDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewStaging}" /></Button>
-                            <Button Click="StageExtras_Click" IsEnabled="{Binding CanStageExtras}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.WriteStaging}" /></Button>
-                            <Button Click="ExtrasInstallDryRun_Click" IsEnabled="{Binding CanRunExtrasInstallDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.PreviewInstall}" /></Button>
-                            <Button Click="InstallExtras_Click" IsEnabled="{Binding CanInstallExtras}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="{Binding Copy.InstallExtData}" /></StackPanel></Button>
-                        </StackPanel>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <TextBox x:Name="ExtrasRollbackManifestBox" Text="{Binding ExtrasRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".mh3g-extras-install.json" Header="{Binding Copy.ExtDataManifest}" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
-                                <Button Click="ChooseExtrasRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                <Button Click="RollbackExtras_Click" IsEnabled="{Binding CanRollbackExtras}" Style="{StaticResource QuietButtonStyle}"><StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackFromManifest}" /></StackPanel></Button>
-                            </StackPanel>
-                        </Grid>
-                        <Button Click="GoToCoreWorkflow_Click" Style="{StaticResource QuietButtonStyle}" HorizontalAlignment="Left">
-                            <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Forward" /><TextBlock Text="{Binding Copy.GoToCoreDryRun}" /></StackPanel>
+                    <TextBlock Text="{Binding Copy.AppTitle}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <Button Click="About_Click" Style="{StaticResource QuietButtonStyle}"
+                                AutomationProperties.Name="{Binding Copy.AboutUpdates}">
+                            <SymbolIcon Symbol="Help" />
                         </Button>
-                    </StackPanel>
-                </Border>
-
-                <Border Padding="22" Background="#FFF8FAFD" BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                    <StackPanel Spacing="14">
-                        <ToggleSwitch x:Name="CecToggle" Header="{Binding Copy.ExperimentalCec}" IsOn="{Binding IsCecEnabled, Mode=TwoWay}" Toggled="CecToggle_Toggled" />
-                        <TextBlock Text="{Binding Copy.ExperimentalCecHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        <Grid x:Name="CecControls" Visibility="Collapsed" ColumnSpacing="20">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="9">
-                                <TextBlock Text="{Binding Copy.CecSourceDirectory}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="CecSourceBox" Text="{Binding CecSourceDirectory, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../CEC/00048100" />
-                                    <Button Grid.Column="1" Click="ChooseCecDirectory_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="Folder" /></Button>
-                                </Grid>
-                                <TextBlock Text="{Binding Copy.CecSourceDirectoryHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                <TextBlock Text="{Binding Copy.CecTargetCache}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="CecTargetBox" Text="{Binding CecTargetPath, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText=".../cec" />
-                                    <Button Grid.Column="1" Click="ChooseCecTarget_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                </Grid>
-                                <TextBlock Text="{Binding Copy.CecTargetCacheHint}" Style="{StaticResource SectionCaptionTextStyle}" />
-                                <StackPanel Orientation="Horizontal" Spacing="10">
-                                    <Button Click="InspectCec_Click" IsEnabled="{Binding CanInspectCec}"><TextBlock Text="{Binding Copy.InspectCec}" /></Button>
-                                    <Button Click="CecDryRun_Click" IsEnabled="{Binding CanRunCecDryRun}" Style="{StaticResource QuietButtonStyle}"><TextBlock Text="{Binding Copy.RunCecDryRun}" /></Button>
-                                </StackPanel>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="10">
-                                <Border Height="116" CornerRadius="8" Background="#FF18212F">
-                                    <Image Source="ms-appx:///Assets/Artwork/cec-mailbox.png" Stretch="UniformToFill" Opacity="0.78" />
-                                </Border>
-                                <CheckBox IsChecked="{Binding IsCecAcknowledged, Mode=TwoWay}" Content="{Binding Copy.CecAcknowledge}" />
-                                <Button Click="WriteCec_Click" IsEnabled="{Binding CanWriteCec}" HorizontalAlignment="Left">
-                                    <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Mail" /><TextBlock Text="{Binding Copy.WriteCec}" /></StackPanel>
-                                </Button>
-                                <TextBlock Text="{Binding Copy.ManifestPath}" FontWeight="SemiBold" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="CecRollbackManifestBox" Text="{Binding CecRollbackManifestPath, Mode=TwoWay}" PlaceholderText=".cec.mh3g-install.json" />
-                                    <Button Grid.Column="1" Click="ChooseCecRollbackManifest_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.Name="{Binding Copy.Browse}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                </Grid>
-                                <Button Click="RollbackCec_Click" IsEnabled="{Binding CanRollbackCec}" HorizontalAlignment="Left" Style="{StaticResource QuietButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Undo" /><TextBlock Text="{Binding Copy.RollbackCec}" /></StackPanel>
-                                </Button>
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Border>
-
-                <Grid x:Name="ResultAnchor" ColumnSpacing="24">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="1.15*" /><ColumnDefinition Width="0.85*" /></Grid.ColumnDefinitions>
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="{Binding Copy.ResultTitle}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <TextBlock Text="{Binding Copy.ResultEmpty}" Visibility="{Binding LatestReportEmptyVisibility}" Style="{StaticResource SectionCaptionTextStyle}" />
-                        <TextBox Text="{Binding LatestReport}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="12" MinHeight="194" MaxHeight="280" ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Spacing="10">
-                        <TextBlock Text="{Binding Copy.OperationHistory}" Style="{StaticResource SectionTitleTextStyle}" />
-                        <Border BorderBrush="#1418212F" BorderThickness="1" CornerRadius="8">
-                            <ListView ItemsSource="{Binding History}" MaxHeight="280" SelectionMode="None">
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="models:OperationHistoryItem">
-                                        <Grid Padding="10,8" ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                            <StackPanel Spacing="2">
-                                                <TextBlock Text="{Binding Operation}" FontWeight="SemiBold" />
-                                                <TextBlock Text="{Binding Detail}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource ConverterSlateBrush}" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding Status}" FontSize="12" Foreground="{StaticResource ConverterSlateBrush}" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </Border>
+                        <ComboBox x:Name="LanguagePicker" MinWidth="150"
+                                  SelectionChanged="LanguagePicker_SelectionChanged"
+                                  AutomationProperties.Name="{Binding Copy.Language}">
+                            <ComboBoxItem Tag="system" Content="{Binding Copy.LanguageSystem}" />
+                            <ComboBoxItem Tag="zh-Hans" Content="{Binding Copy.LanguageChinese}" />
+                            <ComboBoxItem Tag="en" Content="{Binding Copy.LanguageEnglish}" />
+                        </ComboBox>
                     </StackPanel>
                 </Grid>
-            </StackPanel>
-        </ScrollViewer>
+
+                <Grid Grid.Row="1">
+                    <!-- Convert / Step 1 -->
+                    <Grid x:Name="InputPage" Visibility="Visible">
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="CoreWorkflowAnchor" MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="{Binding Copy.InputPageTitle}" Style="{StaticResource PageTitleTextStyle}"
+                                                   AutomationProperties.AutomationId="mh3g.converter.windows.page.input.title" />
+                                        <TextBlock Text="{Binding Copy.InputPageDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding Copy.StepOne}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                                <InfoBar IsOpen="{Binding IsSyntheticFixture}" IsClosable="False" Severity="Informational"
+                                         Message="{Binding Copy.SyntheticFixtureNotice}" />
+                                <Border Style="{StaticResource WorkSurfaceStyle}">
+                                    <StackPanel Spacing="14">
+                                        <Grid x:Name="InputSelectorsGrid" ColumnSpacing="16">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Text="{Binding Copy.ConversionModeTitle}" FontWeight="SemiBold" />
+                                                <ComboBox x:Name="ConversionModePicker" SelectionChanged="ConversionModePicker_SelectionChanged">
+                                                    <ComboBoxItem Tag="new" Content="{Binding Copy.ConversionModeNew}" />
+                                                    <ComboBoxItem Tag="repair" Content="{Binding Copy.ConversionModeRepair}" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel x:Name="SlotSelectorPanel" Grid.Column="1" Spacing="6">
+                                                <TextBlock Text="{Binding Copy.SaveSlot}" FontWeight="SemiBold" />
+                                                <ComboBox ItemsSource="{Binding SaveSlots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}" />
+                                            </StackPanel>
+                                            <StackPanel x:Name="RepairVersionPanel" Grid.Column="2" Spacing="6" Visibility="{Binding RepairCurrentVisibility}">
+                                                <TextBlock Text="{Binding Copy.RepairVersionTitle}" FontWeight="SemiBold" />
+                                                <ComboBox x:Name="RepairVersionPicker" MinWidth="160" SelectionChanged="RepairVersionPicker_SelectionChanged">
+                                                    <ComboBoxItem Tag="auto" Content="{Binding Copy.RepairVersionAutomatic}" />
+                                                    <ComboBoxItem Tag="0.0.3" Content="0.0.3" /><ComboBoxItem Tag="0.0.4" Content="0.0.4" />
+                                                    <ComboBoxItem Tag="0.0.5" Content="0.0.5" /><ComboBoxItem Tag="0.0.6" Content="0.0.6" />
+                                                </ComboBox>
+                                                <TextBlock Text="{Binding RepairDetectionSummary}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <TextBlock Text="{Binding Copy.SourceSlot}" FontWeight="SemiBold" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBox x:Name="SourcePathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding SourcePath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
+                                                     PlaceholderText="user1 / user2 / user3" AutomationProperties.AutomationId="mh3g.converter.windows.path.source" />
+                                            <Button Grid.Column="1" Click="ChooseSourceFile_Click" Style="{StaticResource QuietButtonStyle}"
+                                                    ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"
+                                                    AutomationProperties.AutomationId="mh3g.converter.windows.action.chooseSource"><SymbolIcon Symbol="OpenFile" /></Button>
+                                            <Button Grid.Column="2" Click="ChooseSourceFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
+                                        </Grid>
+                                        <TextBlock Text="{Binding SourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+
+                                        <StackPanel Spacing="8" Visibility="{Binding RepairCurrentVisibility}">
+                                            <TextBlock Text="{Binding Copy.CurrentSlot}" FontWeight="SemiBold" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <TextBox x:Name="CurrentPathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding CurrentPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
+                                                         PlaceholderText="converted Wii U / Cemu user#" AutomationProperties.AutomationId="mh3g.converter.windows.path.current" />
+                                                <Button Grid.Column="1" Click="ChooseCurrentFile_Click" Style="{StaticResource QuietButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.chooseCurrent" ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                                <Button Grid.Column="2" Click="ChooseCurrentFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
+                                            </Grid>
+                                            <TextBlock Text="{Binding CurrentPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                        </StackPanel>
+
+                                        <TextBlock Text="{Binding CoreTargetTitle}" FontWeight="SemiBold" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBox x:Name="TargetPathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
+                                                     PlaceholderText="{Binding CoreTargetPlaceholder}" AutomationProperties.AutomationId="mh3g.converter.windows.path.output" />
+                                            <Button Grid.Column="1" Click="ChooseTargetFile_Click" Style="{StaticResource QuietButtonStyle}"
+                                                    ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"
+                                                    AutomationProperties.AutomationId="mh3g.converter.windows.action.chooseOutput"><SymbolIcon Symbol="OpenFile" /></Button>
+                                            <Button Grid.Column="2" Click="ChooseTargetFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
+                                        </Grid>
+                                        <TextBlock Text="{Binding TargetPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
+
+                                        <Expander Header="{Binding Copy.AdvancedDetails}">
+                                            <StackPanel Spacing="10" Padding="0,10,0,0">
+                                                <TextBlock Text="{Binding Copy.CliPath}" FontWeight="SemiBold" />
+                                                <Grid ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                    <TextBox x:Name="CliPathBox" Text="{Binding CliPath, Mode=TwoWay}" />
+                                                    <Button Grid.Column="1" Click="ChooseCli_Click" Content="{Binding Copy.Browse}" />
+                                                </Grid>
+                                                <TextBlock Text="{Binding ConversionModeDescription}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                            </StackPanel>
+                                        </Expander>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <SymbolIcon Symbol="Important" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Copy.InputMissingReason}" Visibility="{Binding InputFixVisibility}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                                               AutomationProperties.AutomationId="mh3g.converter.windows.state.inputMissing" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Click="FixInput_Click" Visibility="{Binding InputFixVisibility}" Content="{Binding Copy.ChoosePaths}" AutomationProperties.AutomationId="mh3g.converter.windows.action.fixInput" /><Button Grid.Column="2" Click="Inspect_Click" IsEnabled="{Binding CanInspectCore}" Style="{StaticResource AccentButtonStyle}"
+                                        AutomationProperties.AutomationId="mh3g.converter.windows.action.inspect" Content="{Binding Copy.Inspect}" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- Convert / Step 2 -->
+                    <Grid x:Name="OptionalPage" Visibility="Collapsed">
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="OptionalConfigurationAnchor" MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="6"><TextBlock Text="{Binding Copy.OptionalPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.optionals.title" /><TextBlock Text="{Binding Copy.OptionalPageDescription}" Style="{StaticResource SectionCaptionTextStyle}" /></StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding Copy.StepTwo}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Message="{Binding Copy.OptionalCoreUnaffected}" /><InfoBar IsOpen="True" Visibility="{Binding OptionalMissingVisibility}" IsClosable="False" Severity="Warning" Message="{Binding Copy.OptionalMissingReason}" AutomationProperties.AutomationId="mh3g.converter.windows.state.optionalMissing" /><InfoBar IsOpen="True" Visibility="{Binding OptionalSkippedVisibility}" IsClosable="False" Severity="Informational" Message="{Binding Copy.SkipOptionalData}" AutomationProperties.AutomationId="mh3g.converter.windows.state.optionalSkipped" />
+                                <Border Style="{StaticResource WorkSurfaceStyle}">
+                                    <StackPanel Spacing="12">
+                                        <ToggleSwitch x:Name="SystemToggle" Header="{Binding Copy.SharedSystem}" IsOn="{Binding IsSystemEnabled, Mode=TwoWay}" Toggled="SystemToggle_Toggled" />
+                                        <StackPanel x:Name="SystemControls" Visibility="Collapsed" Spacing="9">
+                                            <TextBlock Text="{Binding Copy.SystemMergeWarning}" Style="{StaticResource SectionCaptionTextStyle}" />
+                                            <TextBox x:Name="SystemSourceBox" Text="{Binding SystemSourcePath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText="3DS system" AutomationProperties.AutomationId="mh3g.converter.windows.path.systemSource" />
+                                            <TextBox x:Name="SystemTargetBox" Text="{Binding SystemTargetPath, Mode=TwoWay}" TextChanged="SystemPath_TextChanged" PlaceholderText="Cemu system" AutomationProperties.AutomationId="mh3g.converter.windows.path.systemTarget" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseSystemSource_Click" Content="{Binding Copy.SystemSource}" /><Button Click="ChooseSystemTarget_Click" Content="{Binding Copy.SystemTarget}" /><Button Click="SystemDryRun_Click" IsEnabled="{Binding CanRunSystemDryRun}" Content="{Binding Copy.RunSystemDryRun}" /><Button Click="WriteSystem_Click" IsEnabled="{Binding CanWriteSystem}" Content="{Binding Copy.WriteSystem}" /></StackPanel>
+                                            <TextBox x:Name="SystemRollbackManifestBox" Text="{Binding SystemRollbackManifestPath, Mode=TwoWay}" PlaceholderText="{Binding Copy.SystemManifest}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseSystemRollbackManifest_Click" Content="{Binding Copy.Browse}" /><Button Click="RollbackSystem_Click" IsEnabled="{Binding CanRollbackSystem}" Content="{Binding Copy.RollbackFromManifest}" /></StackPanel>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource WorkSurfaceStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="{Binding Copy.OptionalExtData}" Style="{StaticResource SectionTitleTextStyle}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="18"><CheckBox x:Name="GuildCardsCheckBox" Content="{Binding Copy.GuildCards}" IsChecked="{Binding IncludeGuildCards, Mode=TwoWay}" /><CheckBox x:Name="QuestsCheckBox" Content="{Binding Copy.Quests}" IsChecked="{Binding IncludeQuests, Mode=TwoWay}" /></StackPanel>
+                                        <TextBox x:Name="ExtrasSourceBox" Text="{Binding ExtrasSourceDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="3DS ExtData user" AutomationProperties.AutomationId="mh3g.converter.windows.path.extdataSource" />
+                                        <TextBox x:Name="ExtrasStagingBox" Text="{Binding ExtrasStagingDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="Staging directory" />
+                                        <TextBox x:Name="ExtrasTargetBox" Text="{Binding ExtrasTargetDirectory, Mode=TwoWay}" TextChanged="ExtrasPath_TextChanged" PlaceholderText="Cemu ExtData target" AutomationProperties.AutomationId="mh3g.converter.windows.path.extdataTarget" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseExtrasSource_Click" Content="{Binding Copy.ExtDataSource}" /><Button Click="ChooseExtrasStaging_Click" Content="{Binding Copy.StagingDirectory}" /><Button Click="ChooseExtrasTarget_Click" Content="{Binding Copy.ExtDataTarget}" /></StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ExtrasStageDryRun_Click" IsEnabled="{Binding CanRunExtrasStageDryRun}" Content="{Binding Copy.PreviewStaging}" /><Button Click="StageExtras_Click" IsEnabled="{Binding CanStageExtras}" Content="{Binding Copy.WriteStaging}" /><Button Click="ExtrasInstallDryRun_Click" IsEnabled="{Binding CanRunExtrasInstallDryRun}" Content="{Binding Copy.PreviewInstall}" /><Button Click="InstallExtras_Click" IsEnabled="{Binding CanInstallExtras}" Content="{Binding Copy.InstallExtData}" /></StackPanel>
+                                        <TextBox x:Name="ExtrasRollbackManifestBox" Text="{Binding ExtrasRollbackManifestPath, Mode=TwoWay}" PlaceholderText="{Binding Copy.ExtDataManifest}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseExtrasRollbackManifest_Click" Content="{Binding Copy.Browse}" /><Button Click="RollbackExtras_Click" IsEnabled="{Binding CanRollbackExtras}" Content="{Binding Copy.RollbackFromManifest}" /></StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12">
+                            <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Copy.OptionalCoreUnaffected}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"><Button Click="FixOptional_Click" Visibility="{Binding OptionalMissingVisibility}" Content="{Binding Copy.ChoosePaths}" AutomationProperties.AutomationId="mh3g.converter.windows.action.fixOptional" /><Button Click="SkipOptional_Click" Content="{Binding Copy.SkipOptionalData}" AutomationProperties.AutomationId="mh3g.converter.windows.action.skipOptional" /></StackPanel>
+                                <Button Grid.Column="2" Click="ContinueToDryRun_Click" IsEnabled="{Binding CanContinueOptional}" Content="{Binding Copy.ContinueToDryRun}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.continueOptionals" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- Convert / Step 3 -->
+                    <Grid x:Name="DryRunPage" Visibility="Collapsed">
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <ScrollViewer><StackPanel MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="{Binding Copy.DryRunPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.dryRun.title" /><TextBlock Text="{Binding Copy.DryRunDescription}" Style="{StaticResource SectionCaptionTextStyle}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding Copy.StepThree}" /></Grid>
+                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="12"><InfoBar IsOpen="True" Visibility="{Binding DryRunReadyVisibility}" IsClosable="False" Severity="Success" Message="{Binding Copy.DryRunReadyMessage}" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunReady" /><TextBlock Text="{Binding SourcePathPreview}" /><TextBlock Text="{Binding CurrentPathPreview}" Visibility="{Binding RepairCurrentVisibility}" /><TextBlock Text="{Binding TargetPathPreview}" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" AutomationProperties.AutomationId="mh3g.converter.windows.state.running" /></StackPanel></Border>
+                            <Expander Header="{Binding Copy.AdvancedDetails}"><TextBlock Text="{Binding LatestReport}" FontFamily="Cascadia Mono" TextWrapping="Wrap" IsTextSelectionEnabled="True" /></Expander>
+                        </StackPanel></ScrollViewer>
+                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.DryRunNeedsInspect}" Visibility="{Binding DryRunBlockedVisibility}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunBlocked" /><Button Grid.Column="1" Click="DryRun_Click" IsEnabled="{Binding CanRunCoreDryRun}" Content="{Binding Copy.RunDryRun}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.runDryRun" /></Grid></Border>
+                    </Grid>
+
+                    <!-- Convert / Step 4 -->
+                    <Grid x:Name="WriteResultPage" Visibility="Collapsed">
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <ScrollViewer><StackPanel x:Name="ResultAnchor" MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="{Binding Copy.WriteResultPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.writeResult.title" /><TextBlock Text="{Binding Copy.WriteDescription}" Style="{StaticResource SectionCaptionTextStyle}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding Copy.StepFour}" /></Grid>
+                            <InfoBar IsOpen="{Binding HasLatestError}" Visibility="{Binding ResultFailureVisibility}" IsClosable="True" Severity="Error" Title="{Binding Copy.Failed}" Message="{Binding LatestError}" AutomationProperties.AutomationId="mh3g.converter.windows.state.failure" />
+                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><TextBlock Text="{Binding StatusText}" Visibility="{Binding ResultSuccessVisibility}" Style="{StaticResource SectionTitleTextStyle}" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.success" /><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" Visibility="{Binding WriteAuthorizedVisibility}" TextWrapping="Wrap" /><TextBlock Text="{Binding LatestReport}" FontFamily="Cascadia Mono" TextWrapping="Wrap" IsTextSelectionEnabled="True" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" /></StackPanel></Border>
+                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><TextBlock Text="{Binding Copy.RollbackTitle}" Style="{StaticResource SectionTitleTextStyle}" /><TextBox x:Name="RollbackManifestBox" Text="{Binding RollbackManifestPath, Mode=TwoWay}" PlaceholderText="{Binding Copy.ManifestPath}" /><StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseRollbackManifest_Click" Content="{Binding Copy.Browse}" /><Button Click="RollbackCore_Click" IsEnabled="{Binding CanRollbackCore}" Content="{Binding Copy.RollbackFromManifest}" AutomationProperties.AutomationId="mh3g.converter.windows.action.rollback" /></StackPanel></StackPanel></Border>
+                        </StackPanel></ScrollViewer>
+                        <Border Grid.Row="1" Visibility="{Binding WriteFooterVisibility}" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.AutomationId="mh3g.converter.windows.state.writeAuthorized" /><Button Grid.Column="1" Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Content="{Binding Copy.ConfirmAndWrite}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.confirmWrite" /></Grid></Border>
+                    </Grid>
+
+                    <!-- History -->
+                    <ScrollViewer x:Name="HistoryPage" Visibility="Collapsed"><StackPanel MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24"><TextBlock Text="{Binding Copy.HistoryPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.history.title" /><Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="12"><StackPanel Spacing="12" Visibility="{Binding HistoryEmptyVisibility}"><SymbolIcon Symbol="Document" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" /><TextBlock Text="{Binding Copy.HistoryEmptyTitle}" Style="{StaticResource SectionTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.state.historyEmpty" /><TextBlock Text="{Binding Copy.HistoryEmptyDescription}" Style="{StaticResource SectionCaptionTextStyle}" /><Button HorizontalAlignment="Left" Click="StartConversion_Click" Content="{Binding Copy.StartConversion}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.startConversion" /></StackPanel><ListView ItemsSource="{Binding History}" Visibility="{Binding HistoryListVisibility}"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="0,8" Spacing="3"><TextBlock Text="{Binding Operation}" FontWeight="SemiBold" /><TextBlock Text="{Binding Detail}" TextWrapping="Wrap" /><TextBlock Text="{Binding Timestamp}" FontSize="12" /></StackPanel></DataTemplate></ListView.ItemTemplate></ListView></StackPanel></Border></StackPanel></ScrollViewer>
+
+                    <!-- Experimental CEC -->
+                    <ScrollViewer x:Name="CecPage" Visibility="Collapsed"><StackPanel MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24"><TextBlock Text="{Binding Copy.ExperimentalCec}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.experimentalCEC.title" /><InfoBar IsOpen="True" IsClosable="False" Severity="Warning" Message="{Binding Copy.ExperimentalCecHint}" /><Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><ToggleSwitch x:Name="CecToggle" Header="{Binding Copy.ExperimentalCec}" IsOn="{Binding IsCecEnabled, Mode=TwoWay}" Toggled="CecToggle_Toggled" /><StackPanel x:Name="CecControls" Visibility="Collapsed" Spacing="10"><TextBox x:Name="CecSourceBox" Text="{Binding CecSourceDirectory, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText="{Binding Copy.CecSourceDirectory}" AutomationProperties.AutomationId="mh3g.converter.windows.path.cecSource" /><TextBox x:Name="CecTargetBox" Text="{Binding CecTargetPath, Mode=TwoWay}" TextChanged="CecPath_TextChanged" PlaceholderText="{Binding Copy.CecTargetCache}" AutomationProperties.AutomationId="mh3g.converter.windows.path.cecTarget" /><StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseCecDirectory_Click" Content="{Binding Copy.CecSourceDirectory}" /><Button Click="ChooseCecTarget_Click" Content="{Binding Copy.CecTargetCache}" /><Button Click="InspectCec_Click" IsEnabled="{Binding CanInspectCec}" Content="{Binding Copy.InspectCec}" /><Button Click="CecDryRun_Click" IsEnabled="{Binding CanRunCecDryRun}" Content="{Binding Copy.RunCecDryRun}" /></StackPanel><CheckBox Content="{Binding Copy.CecAcknowledge}" IsChecked="{Binding IsCecAcknowledged, Mode=TwoWay}" /><Button HorizontalAlignment="Left" Click="WriteCec_Click" IsEnabled="{Binding CanWriteCec}" Content="{Binding Copy.WriteCec}" /><TextBox x:Name="CecRollbackManifestBox" Text="{Binding CecRollbackManifestPath, Mode=TwoWay}" /><StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseCecRollbackManifest_Click" Content="{Binding Copy.Browse}" /><Button Click="RollbackCec_Click" IsEnabled="{Binding CanRollbackCec}" Content="{Binding Copy.RollbackCec}" /></StackPanel></StackPanel></StackPanel></Border></StackPanel></ScrollViewer>
+
+                    <!-- Settings -->
+                    <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed"><StackPanel MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24"><TextBlock Text="{Binding Copy.SettingsPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.settings.title" /><Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="14"><TextBlock Text="{Binding Copy.Language}" Style="{StaticResource SectionTitleTextStyle}" /><ComboBox x:Name="SettingsLanguagePicker" MinWidth="220" HorizontalAlignment="Left" SelectionChanged="SettingsLanguagePicker_SelectionChanged" AutomationProperties.Name="{Binding Copy.Language}"><ComboBoxItem Tag="system" Content="{Binding Copy.LanguageSystem}" /><ComboBoxItem Tag="zh-Hans" Content="{Binding Copy.LanguageChinese}" /><ComboBoxItem Tag="en" Content="{Binding Copy.LanguageEnglish}" /></ComboBox><TextBlock Text="{Binding Copy.UpdateNetworkNote}" Style="{StaticResource SectionCaptionTextStyle}" /><Button HorizontalAlignment="Left" Click="About_Click" Content="{Binding Copy.AboutUpdates}" /></StackPanel></Border></StackPanel></ScrollViewer>
+                </Grid>
+            </Grid>
+        </controls:NavigationView>
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="CompactWindow">
+                    <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="AppNavigation.PaneDisplayMode" Value="LeftCompact" />
+                        <Setter Target="InputSelectorsGrid.ColumnSpacing" Value="8" />
+                        <Setter Target="SlotSelectorPanel.(Grid.Column)" Value="0" />
+                        <Setter Target="SlotSelectorPanel.(Grid.Row)" Value="1" />
+                        <Setter Target="RepairVersionPanel.(Grid.Column)" Value="0" />
+                        <Setter Target="RepairVersionPanel.(Grid.Row)" Value="2" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="DefaultWindow">
+                    <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1040" /></VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
     </Grid>
 </Window>
