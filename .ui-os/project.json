@@ -18,8 +18,8 @@
     "windows"
   ],
   "status": {
-    "agent_proposed_status": "draft",
-    "verifier_status": "pending_pilot"
+    "agent_proposed_status": "candidate_ready",
+    "verifier_status": "pending"
   },
   "gates": {
     "required_lanes": [

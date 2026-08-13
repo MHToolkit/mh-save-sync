@@ -1,0 +1,44 @@
+name: MH3G Converter Windows UI Quality
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/mh3g-save-converter-windows/**"
+      - "scripts/verify-mh3g-save-converter-windows-ui-quality.py"
+      - "scripts/capture-mh3g-save-converter-windows-ui-quality.ps1"
+      - ".github/workflows/mh3g-converter-windows-ui-quality.yml"
+
+jobs:
+  source-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python3 scripts/verify-mh3g-save-converter-windows-ui-quality.py
+
+  native-build-candidate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: x86_64-pc-windows-msvc }
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - name: Build native converter sidecar
+        run: cargo build --release -p mh3g-save-convert --target x86_64-pc-windows-msvc
+      - name: Publish WinUI candidate
+        shell: pwsh
+        run: ./scripts/package-mh3g-save-converter-windows.ps1 -ValidateOnly -SkipTests -SkipTransactionSmoke
+      - name: Upload candidate for interactive evidence runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: mh3g-windows-ui-quality-candidate
+          path: artifacts/mh3g-save-convert-windows-x64/**
+          retention-days: 7
+
+# GitHub-hosted Windows runners build the native candidate but are not treated
+# as an interactive desktop or human usability environment. Runtime screenshots,
+# UI Automation, focus, high-contrast, text-scale, and motion evidence must be
+# captured by the checked-in PowerShell harness on an interactive Windows runner.

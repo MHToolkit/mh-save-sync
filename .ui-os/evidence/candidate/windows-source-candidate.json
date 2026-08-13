@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "target": "windows",
+  "profile": "winui3",
+  "route": "standard",
+  "candidate_status": "candidate_ready",
+  "runtime_status": "blocked_unverified",
+  "runtime_blocker": "No proven interactive native Windows runner or VM is available on this macOS host. Cross-compilation and source checks are not runtime evidence.",
+  "synthetic_only": true,
+  "real_save_accessed": false,
+  "emulator_started": false,
+  "default_window": "1120x760",
+  "minimum_window": "920x600",
+  "fixtures": [
+    "first-run",
+    "input.empty",
+    "components.optional-missing",
+    "components.optional-skipped",
+    "dry-run.ready",
+    "dry-run.blocked",
+    "write.authorized",
+    "write.confirmation",
+    "conversion.success",
+    "conversion.failure",
+    "history.empty",
+    "history.result"
+  ],
+  "machine_gates": {
+    "source_contract": "pending final run",
+    "windows_source_contract": "pending final run",
+    "rust_tests": "pending final run",
+    "rust_clippy": "pending final run",
+    "native_windows_build": "unverified",
+    "native_runtime_capture": "blocked"
+  },
+  "human_task_verdict": "pending"
+}
