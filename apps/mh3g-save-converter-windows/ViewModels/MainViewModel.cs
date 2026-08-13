@@ -210,8 +210,8 @@ public sealed class MainViewModel : ObservableObject
     public bool HasHistory => History.Count > 0;
     public Visibility HistoryEmptyVisibility => HasHistory ? Visibility.Collapsed : Visibility.Visible;
     public Visibility HistoryListVisibility => HasHistory ? Visibility.Visible : Visibility.Collapsed;
-    public bool CanContinueOptional => SelectedOptionalDataIsConfigured;
-    public Visibility OptionalMissingVisibility => CanContinueOptional ? Visibility.Collapsed : Visibility.Visible;
+    public bool CanContinueOptional => true;
+    public Visibility OptionalMissingVisibility => SelectedOptionalDataIsConfigured ? Visibility.Collapsed : Visibility.Visible;
     public Visibility OptionalSkippedVisibility => _syntheticFixtureId == "components.optional-skipped"
         ? Visibility.Visible
         : Visibility.Collapsed;

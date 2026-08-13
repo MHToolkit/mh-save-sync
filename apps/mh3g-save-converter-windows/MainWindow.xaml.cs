@@ -282,6 +282,7 @@ public sealed partial class MainWindow : Window
         }
 
         ViewModel.SetLanguage(item.Tag as string);
+        SelectSettingsLanguage(ViewModel.LanguageOverride);
     }
 
     private void SettingsLanguagePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -303,10 +304,28 @@ public sealed partial class MainWindow : Window
     {
         if (ViewModel.IsSystemEnabled)
         {
-            SystemSourceBox.Focus(FocusState.Programmatic);
+            if (string.IsNullOrWhiteSpace(ViewModel.SystemSourcePath))
+            {
+                SystemSourceBox.Focus(FocusState.Programmatic);
+            }
+            else
+            {
+                SystemTargetBox.Focus(FocusState.Programmatic);
+            }
             return;
         }
-        ExtrasSourceBox.Focus(FocusState.Programmatic);
+        if (string.IsNullOrWhiteSpace(ViewModel.ExtrasSourceDirectory))
+        {
+            ExtrasSourceBox.Focus(FocusState.Programmatic);
+        }
+        else if (string.IsNullOrWhiteSpace(ViewModel.ExtrasStagingDirectory))
+        {
+            ExtrasStagingBox.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            ExtrasTargetBox.Focus(FocusState.Programmatic);
+        }
     }
 
     private void SelectConversionMode(Models.ConversionMode mode)
