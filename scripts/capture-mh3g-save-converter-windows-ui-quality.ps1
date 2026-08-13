@@ -10,6 +10,14 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeWindowSizing {
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int width, int height, bool repaint);
+}
+"@
 
 $fixtures = @(
     "first-run", "input.empty", "components.optional-missing", "components.optional-skipped",
@@ -27,6 +35,12 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $width, $height = $WindowSize.Split("x") | ForEach-Object { [int]$_ }
 $results = @()
 
+if ($Motion -eq "reduced") {
+    $animationKey = "HKCU:\Control Panel\Desktop\WindowMetrics"
+    $previousMinAnimate = (Get-ItemProperty -Path $animationKey -Name MinAnimate -ErrorAction SilentlyContinue).MinAnimate
+    Set-ItemProperty -Path $animationKey -Name MinAnimate -Value "0"
+}
+
 foreach ($fixture in $fixtures) {
     $process = Start-Process -FilePath $AppPath -ArgumentList @("--ui-fixture", $fixture) -PassThru
     try {
@@ -37,11 +51,17 @@ foreach ($fixture in $fixtures) {
         } while ($process.MainWindowHandle -eq 0 -and [DateTime]::UtcNow -lt $deadline)
         if ($process.MainWindowHandle -eq 0) { throw "No interactive window for fixture $fixture" }
 
+        [NativeWindowSizing]::MoveWindow($process.MainWindowHandle, 80, 80, $width, $height, $true) | Out-Null
+        Start-Sleep -Milliseconds 350
+
         $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
         $windowPattern = $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
         $windowPattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
 
         $bounds = $root.Current.BoundingRectangle
+        if ([Math]::Abs($bounds.Width - $width) -gt 16 -or [Math]::Abs($bounds.Height - $height) -gt 16) {
+            throw "Window did not reach requested $WindowSize for $fixture: $($bounds.Width)x$($bounds.Height)"
+        }
         $bitmap = New-Object System.Drawing.Bitmap([int]$bounds.Width, [int]$bounds.Height)
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         $graphics.CopyFromScreen([int]$bounds.X, [int]$bounds.Y, 0, 0, $bitmap.Size)
@@ -76,4 +96,7 @@ foreach ($fixture in $fixtures) {
 }
 
 $results | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $OutputDirectory "capture-index.json")
+if ($Motion -eq "reduced" -and $null -ne $previousMinAnimate) {
+    Set-ItemProperty -Path $animationKey -Name MinAnimate -Value $previousMinAnimate
+}
 Write-Host "Captured $($results.Count) deterministic Windows UI fixtures."

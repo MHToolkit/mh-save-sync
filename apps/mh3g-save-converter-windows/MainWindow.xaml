@@ -95,8 +95,9 @@
                                          Message="{Binding Copy.SyntheticFixtureNotice}" />
                                 <Border Style="{StaticResource WorkSurfaceStyle}">
                                     <StackPanel Spacing="14">
-                                        <Grid ColumnSpacing="16">
+                                        <Grid x:Name="InputSelectorsGrid" ColumnSpacing="16">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                             <StackPanel Spacing="6">
                                                 <TextBlock Text="{Binding Copy.ConversionModeTitle}" FontWeight="SemiBold" />
                                                 <ComboBox x:Name="ConversionModePicker" SelectionChanged="ConversionModePicker_SelectionChanged">
@@ -104,11 +105,11 @@
                                                     <ComboBoxItem Tag="repair" Content="{Binding Copy.ConversionModeRepair}" />
                                                 </ComboBox>
                                             </StackPanel>
-                                            <StackPanel Grid.Column="1" Spacing="6">
+                                            <StackPanel x:Name="SlotSelectorPanel" Grid.Column="1" Spacing="6">
                                                 <TextBlock Text="{Binding Copy.SaveSlot}" FontWeight="SemiBold" />
                                                 <ComboBox ItemsSource="{Binding SaveSlots}" SelectedItem="{Binding SelectedSlot, Mode=TwoWay}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Column="2" Spacing="6" Visibility="{Binding RepairCurrentVisibility}">
+                                            <StackPanel x:Name="RepairVersionPanel" Grid.Column="2" Spacing="6" Visibility="{Binding RepairCurrentVisibility}">
                                                 <TextBlock Text="{Binding Copy.RepairVersionTitle}" FontWeight="SemiBold" />
                                                 <ComboBox x:Name="RepairVersionPicker" MinWidth="160" SelectionChanged="RepairVersionPicker_SelectionChanged">
                                                     <ComboBoxItem Tag="auto" Content="{Binding Copy.RepairVersionAutomatic}" />
@@ -125,8 +126,9 @@
                                             <TextBox x:Name="SourcePathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding SourcePath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
                                                      PlaceholderText="user1 / user2 / user3" AutomationProperties.AutomationId="mh3g.converter.windows.path.source" />
                                             <Button Grid.Column="1" Click="ChooseSourceFile_Click" Style="{StaticResource QuietButtonStyle}"
+                                                    ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"
                                                     AutomationProperties.AutomationId="mh3g.converter.windows.action.chooseSource"><SymbolIcon Symbol="OpenFile" /></Button>
-                                            <Button Grid.Column="2" Click="ChooseSourceFolder_Click" Style="{StaticResource QuietButtonStyle}"><SymbolIcon Symbol="Folder" /></Button>
+                                            <Button Grid.Column="2" Click="ChooseSourceFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
                                         </Grid>
                                         <TextBlock Text="{Binding SourcePathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
 
@@ -136,8 +138,8 @@
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBox x:Name="CurrentPathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding CurrentPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
                                                          PlaceholderText="converted Wii U / Cemu user#" AutomationProperties.AutomationId="mh3g.converter.windows.path.current" />
-                                                <Button Grid.Column="1" Click="ChooseCurrentFile_Click" Style="{StaticResource QuietButtonStyle}"><SymbolIcon Symbol="OpenFile" /></Button>
-                                                <Button Grid.Column="2" Click="ChooseCurrentFolder_Click" Style="{StaticResource QuietButtonStyle}"><SymbolIcon Symbol="Folder" /></Button>
+                                                <Button Grid.Column="1" Click="ChooseCurrentFile_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"><SymbolIcon Symbol="OpenFile" /></Button>
+                                                <Button Grid.Column="2" Click="ChooseCurrentFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
                                             </Grid>
                                             <TextBlock Text="{Binding CurrentPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
                                         </StackPanel>
@@ -148,8 +150,9 @@
                                             <TextBox x:Name="TargetPathBox" Style="{StaticResource PathTextBoxStyle}" Text="{Binding TargetPath, Mode=TwoWay}" TextChanged="CorePath_TextChanged"
                                                      PlaceholderText="{Binding CoreTargetPlaceholder}" AutomationProperties.AutomationId="mh3g.converter.windows.path.output" />
                                             <Button Grid.Column="1" Click="ChooseTargetFile_Click" Style="{StaticResource QuietButtonStyle}"
+                                                    ToolTipService.ToolTip="{Binding Copy.ChooseFile}" AutomationProperties.Name="{Binding Copy.ChooseFile}"
                                                     AutomationProperties.AutomationId="mh3g.converter.windows.action.chooseOutput"><SymbolIcon Symbol="OpenFile" /></Button>
-                                            <Button Grid.Column="2" Click="ChooseTargetFolder_Click" Style="{StaticResource QuietButtonStyle}"><SymbolIcon Symbol="Folder" /></Button>
+                                            <Button Grid.Column="2" Click="ChooseTargetFolder_Click" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="{Binding Copy.ChooseFolder}" AutomationProperties.Name="{Binding Copy.ChooseFolder}"><SymbolIcon Symbol="Folder" /></Button>
                                         </Grid>
                                         <TextBlock Text="{Binding TargetPathPreview}" Style="{StaticResource SectionCaptionTextStyle}" />
 
@@ -234,10 +237,10 @@
                         <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <ScrollViewer><StackPanel MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="{Binding Copy.DryRunPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.dryRun.title" /><TextBlock Text="{Binding Copy.DryRunDescription}" Style="{StaticResource SectionCaptionTextStyle}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding Copy.StepThree}" /></Grid>
-                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="12"><InfoBar IsOpen="True" IsClosable="False" Severity="Success" Message="{Binding Copy.DryRunReadyMessage}" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunReady" /><TextBlock Text="{Binding SourcePathPreview}" /><TextBlock Text="{Binding CurrentPathPreview}" Visibility="{Binding RepairCurrentVisibility}" /><TextBlock Text="{Binding TargetPathPreview}" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" /></StackPanel></Border>
+                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="12"><InfoBar IsOpen="True" Visibility="{Binding DryRunReadyVisibility}" IsClosable="False" Severity="Success" Message="{Binding Copy.DryRunReadyMessage}" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunReady" /><TextBlock Text="{Binding SourcePathPreview}" /><TextBlock Text="{Binding CurrentPathPreview}" Visibility="{Binding RepairCurrentVisibility}" /><TextBlock Text="{Binding TargetPathPreview}" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" /></StackPanel></Border>
                             <Expander Header="{Binding Copy.AdvancedDetails}"><TextBlock Text="{Binding LatestReport}" FontFamily="Cascadia Mono" TextWrapping="Wrap" IsTextSelectionEnabled="True" /></Expander>
                         </StackPanel></ScrollViewer>
-                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.DryRunNeedsInspect}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunBlocked" /><Button Grid.Column="1" Click="DryRun_Click" IsEnabled="{Binding CanRunCoreDryRun}" Content="{Binding Copy.RunDryRun}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.runDryRun" /></Grid></Border>
+                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.DryRunNeedsInspect}" Visibility="{Binding DryRunBlockedVisibility}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.dryRunBlocked" /><Button Grid.Column="1" Click="DryRun_Click" IsEnabled="{Binding CanRunCoreDryRun}" Content="{Binding Copy.RunDryRun}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.runDryRun" /></Grid></Border>
                     </Grid>
 
                     <!-- Convert / Step 4 -->
@@ -245,11 +248,11 @@
                         <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <ScrollViewer><StackPanel x:Name="ResultAnchor" MaxWidth="900" HorizontalAlignment="Center" Spacing="16" Padding="0,18,0,24">
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="{Binding Copy.WriteResultPageTitle}" Style="{StaticResource PageTitleTextStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.page.writeResult.title" /><TextBlock Text="{Binding Copy.WriteDescription}" Style="{StaticResource SectionCaptionTextStyle}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding Copy.StepFour}" /></Grid>
-                            <InfoBar IsOpen="{Binding HasLatestError}" IsClosable="True" Severity="Error" Title="{Binding Copy.Failed}" Message="{Binding LatestError}" AutomationProperties.AutomationId="mh3g.converter.windows.state.failure" />
-                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><TextBlock Text="{Binding StatusText}" Style="{StaticResource SectionTitleTextStyle}" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.success" /><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" TextWrapping="Wrap" /><TextBlock Text="{Binding LatestReport}" FontFamily="Cascadia Mono" TextWrapping="Wrap" IsTextSelectionEnabled="True" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" /></StackPanel></Border>
+                            <InfoBar IsOpen="{Binding HasLatestError}" Visibility="{Binding ResultFailureVisibility}" IsClosable="True" Severity="Error" Title="{Binding Copy.Failed}" Message="{Binding LatestError}" AutomationProperties.AutomationId="mh3g.converter.windows.state.failure" />
+                            <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><TextBlock Text="{Binding StatusText}" Visibility="{Binding ResultSuccessVisibility}" Style="{StaticResource SectionTitleTextStyle}" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="mh3g.converter.windows.state.success" /><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" Visibility="{Binding WriteAuthorizedVisibility}" TextWrapping="Wrap" /><TextBlock Text="{Binding LatestReport}" FontFamily="Cascadia Mono" TextWrapping="Wrap" IsTextSelectionEnabled="True" /><ProgressBar IsIndeterminate="True" Visibility="{Binding BusyVisibility}" /></StackPanel></Border>
                             <Border Style="{StaticResource WorkSurfaceStyle}"><StackPanel Spacing="10"><TextBlock Text="{Binding Copy.RollbackTitle}" Style="{StaticResource SectionTitleTextStyle}" /><TextBox x:Name="RollbackManifestBox" Text="{Binding RollbackManifestPath, Mode=TwoWay}" PlaceholderText="{Binding Copy.ManifestPath}" /><StackPanel Orientation="Horizontal" Spacing="8"><Button Click="ChooseRollbackManifest_Click" Content="{Binding Copy.Browse}" /><Button Click="RollbackCore_Click" IsEnabled="{Binding CanRollbackCore}" Content="{Binding Copy.RollbackFromManifest}" AutomationProperties.AutomationId="mh3g.converter.windows.action.rollback" /></StackPanel></StackPanel></Border>
                         </StackPanel></ScrollViewer>
-                        <Border Grid.Row="1" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.AutomationId="mh3g.converter.windows.state.writeAuthorized" /><Button Grid.Column="1" Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Content="{Binding Copy.ConfirmAndWrite}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.confirmWrite" /></Grid></Border>
+                        <Border Grid.Row="1" Visibility="{Binding WriteFooterVisibility}" Style="{StaticResource WorkSurfaceStyle}" Padding="16,12"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Copy.WriteAuthorizedMessage}" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.AutomationId="mh3g.converter.windows.state.writeAuthorized" /><Button Grid.Column="1" Click="WriteCore_Click" IsEnabled="{Binding CanWriteCore}" Content="{Binding Copy.ConfirmAndWrite}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="mh3g.converter.windows.action.confirmWrite" /></Grid></Border>
                     </Grid>
 
                     <!-- History -->
@@ -263,5 +266,24 @@
                 </Grid>
             </Grid>
         </controls:NavigationView>
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="CompactWindow">
+                    <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0" /></VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="AppNavigation.PaneDisplayMode" Value="LeftCompact" />
+                        <Setter Target="InputSelectorsGrid.ColumnSpacing" Value="8" />
+                        <Setter Target="SlotSelectorPanel.(Grid.Column)" Value="0" />
+                        <Setter Target="SlotSelectorPanel.(Grid.Row)" Value="1" />
+                        <Setter Target="RepairVersionPanel.(Grid.Column)" Value="0" />
+                        <Setter Target="RepairVersionPanel.(Grid.Row)" Value="2" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="DefaultWindow">
+                    <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1040" /></VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
     </Grid>
 </Window>

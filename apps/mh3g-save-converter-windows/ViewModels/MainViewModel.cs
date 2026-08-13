@@ -673,8 +673,25 @@ public sealed class MainViewModel : ObservableObject
     public WorkflowStage Stage
     {
         get => _stage;
-        private set => SetProperty(ref _stage, value);
+        private set
+        {
+            if (SetProperty(ref _stage, value))
+            {
+                OnPropertyChanged(nameof(DryRunReadyVisibility));
+                OnPropertyChanged(nameof(DryRunBlockedVisibility));
+                OnPropertyChanged(nameof(WriteAuthorizedVisibility));
+                OnPropertyChanged(nameof(ResultSuccessVisibility));
+                OnPropertyChanged(nameof(ResultFailureVisibility));
+                OnPropertyChanged(nameof(WriteFooterVisibility));
+            }
+        }
     }
+    public Visibility DryRunReadyVisibility => CanRunCoreDryRun ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility DryRunBlockedVisibility => CanRunCoreDryRun ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility WriteAuthorizedVisibility => Stage == WorkflowStage.DryRunAuthorized ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ResultSuccessVisibility => Stage is WorkflowStage.Written or WorkflowStage.RolledBack ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ResultFailureVisibility => Stage == WorkflowStage.Failed ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility WriteFooterVisibility => Stage == WorkflowStage.DryRunAuthorized ? Visibility.Visible : Visibility.Collapsed;
 
     public string StatusText
     {
@@ -2002,6 +2019,8 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanRunCoreDryRun));
         OnPropertyChanged(nameof(CanWriteCore));
         OnPropertyChanged(nameof(WriteUnavailableVisibility));
+        OnPropertyChanged(nameof(DryRunReadyVisibility));
+        OnPropertyChanged(nameof(DryRunBlockedVisibility));
     }
 
     private void RaiseOptionalConfigurationAvailability()
