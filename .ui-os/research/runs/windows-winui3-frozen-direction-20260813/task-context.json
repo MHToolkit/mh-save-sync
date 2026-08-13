@@ -1,0 +1,75 @@
+{
+  "schema_version": "uios.research-task/v0.2",
+  "task_id": "mh3g-save-converter-windows-frozen-direction-20260813",
+  "summary": "Revalidate current Windows and WinUI 3 evidence for implementing the frozen Guided Fluent workspace without changing the shared converter kernel or safety semantics.",
+  "product": {
+    "id": "mh3g-save-converter",
+    "class": "windows-desktop-save-conversion-utility",
+    "primary_users": [
+      "first-time converter user",
+      "returning repair user",
+      "advanced optional-data user"
+    ],
+    "critical_job": "complete the frozen source/current/output, inspect, optional-or-skip, dry-run, confirm-write, result-or-rollback flow safely"
+  },
+  "research_kinds": [
+    "layout",
+    "interaction-pattern",
+    "component",
+    "motion",
+    "style",
+    "iconography"
+  ],
+  "targets": [
+    {
+      "id": "windows-winui3-desktop",
+      "platform": "windows",
+      "framework": "winui3",
+      "form_factor": "desktop",
+      "input_modes": [
+        "pointer",
+        "keyboard",
+        "screen-reader"
+      ]
+    }
+  ],
+  "states": [
+    "input-empty",
+    "optional-missing",
+    "optional-skipped",
+    "dry-run-ready",
+    "dry-run-blocked",
+    "write-authorized",
+    "conversion-success",
+    "conversion-failure",
+    "history-empty"
+  ],
+  "accessibility_requirements": [
+    "keyboard-and-ui-automation",
+    "logical-focus-order",
+    "text-scaling",
+    "high-contrast",
+    "reduced-motion",
+    "non-color-cues"
+  ],
+  "constraints": {
+    "brand": [
+      "MH Toolkit restrained utility identity"
+    ],
+    "existing_system": [
+      "Frozen Guided Fluent workspace contract",
+      "WinUI 3 and Windows App SDK 1.8",
+      "existing C# workflow and Rust sidecar"
+    ],
+    "forbidden": [
+      "real save data",
+      "emulator launch",
+      "kernel or safety changes",
+      "macOS visual translation",
+      "decorative hero",
+      "global optional blocker",
+      "ornamental motion"
+    ]
+  },
+  "freshness_claim": "current"
+}
