@@ -26,12 +26,14 @@
     "history.result"
   ],
   "machine_gates": {
-    "source_contract": "pending final run",
-    "windows_source_contract": "pending final run",
-    "rust_tests": "pending final run",
-    "rust_clippy": "pending final run",
+    "source_contract": "pass",
+    "windows_source_contract": "pass",
+    "rust_tests": "220 passed",
+    "rust_clippy": "pass macOS host + Windows MSVC target",
     "native_windows_build": "unverified",
-    "native_runtime_capture": "blocked"
+    "native_runtime_capture": "blocked",
+    "negative_mutation_gates": "pass"
   },
-  "human_task_verdict": "pending"
+  "human_task_verdict": "pending",
+  "candidate_commit": "aa117ee"
 }
