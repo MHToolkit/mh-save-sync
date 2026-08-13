@@ -2,17 +2,17 @@
   "schema_version": "uios.evidence/v0.1",
   "project": {
     "id": "mh3g-save-converter",
-    "revision": "b3d58f70aa713b5e7f0ba7397d745b7166925547",
-    "dirty": true
+    "revision": "ae356bdb3a224eba219b6ba9fda6c6a0312793cb",
+    "dirty": false
   },
   "inputs": {
-    "contract_sha256": "09638a4326d67ff8d8fc1340ba11d2b8390c3a78710eb60c816de9b91a8d6567",
+    "contract_sha256": "c14ee813ff1ebf1b511ea46c2a6e1defb238f8973974075b68f77e0bcfad74cf",
     "flows_sha256": "549013ee5054b5725604503c23e71fae48196f4d552d862f3f83a59db438f2dc",
     "tokens_sha256": "37e36f1a4757ffa9b8a6861759fcce18baded0a54ef5dc6e4209182793a166c3"
   },
   "cells": [],
   "verdicts": {
-    "machine": "pending",
+    "machine": "candidate_ready",
     "independent_ai": "pending",
     "human": "pending",
     "release": "blocked"
