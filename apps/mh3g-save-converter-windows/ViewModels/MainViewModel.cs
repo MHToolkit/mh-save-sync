@@ -188,6 +188,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SourcePath));
         OnPropertyChanged(nameof(TargetPath));
         OnPropertyChanged(nameof(IsSystemEnabled));
+        RaiseHistoryAvailability();
         RaiseCoreActionAvailability();
         RaiseOptionalConfigurationAvailability();
     }
@@ -206,6 +207,9 @@ public sealed class MainViewModel : ObservableObject
     public bool IsSyntheticFixture => _syntheticFixtureId is not null;
     public string SyntheticFixtureId => _syntheticFixtureId ?? string.Empty;
     public bool HasCommittedRepairGuildCards => IsRepairMode && _repairGuildCardSource is not null;
+    public bool HasHistory => History.Count > 0;
+    public Visibility HistoryEmptyVisibility => HasHistory ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility HistoryListVisibility => HasHistory ? Visibility.Visible : Visibility.Collapsed;
 
     public AppLanguageOverride LanguageOverride
     {
@@ -1636,7 +1640,15 @@ public sealed class MainViewModel : ObservableObject
             result.Status,
             result.Succeeded,
             result.Succeeded ? result.Status : LatestError));
+        RaiseHistoryAvailability();
         return result;
+    }
+
+    private void RaiseHistoryAvailability()
+    {
+        OnPropertyChanged(nameof(HasHistory));
+        OnPropertyChanged(nameof(HistoryEmptyVisibility));
+        OnPropertyChanged(nameof(HistoryListVisibility));
     }
 
     private void RequireSuccess(CliExecutionResult result, string operation)
