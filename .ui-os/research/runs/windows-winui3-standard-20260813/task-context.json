@@ -1,0 +1,89 @@
+{
+  "schema_version": "uios.research-task/v0.2",
+  "task_id": "mh3g-save-converter-windows-ui-quality-os-20260813",
+  "summary": "Redesign the existing MH3G Save Converter WinUI 3 desktop workflow so first-time and returning users can inspect, optionally extend, dry-run, safely write, review, and roll back without duplicated navigation, remote recovery, or optional-data scope confusion.",
+  "product": {
+    "id": "mh3g-save-converter",
+    "class": "windows-desktop-save-conversion-utility",
+    "primary_users": [
+      "first-time MH3G player converting one 3DS slot",
+      "returning player repairing a previously converted Wii U or Cemu slot",
+      "advanced user adding optional system, ExtData, or experimental CEC data"
+    ],
+    "critical_job": "complete a local conversion or repair with explicit inputs, a read-only inspection, optional data that may be skipped, a fingerprint-bound dry run, guarded write, and recoverable result"
+  },
+  "research_kinds": [
+    "layout",
+    "interaction-pattern",
+    "component",
+    "motion",
+    "style",
+    "iconography",
+    "onboarding"
+  ],
+  "targets": [
+    {
+      "id": "windows-winui3-desktop",
+      "platform": "windows",
+      "framework": "winui3",
+      "form_factor": "desktop",
+      "input_modes": [
+        "pointer",
+        "keyboard",
+        "screen-reader"
+      ]
+    }
+  ],
+  "states": [
+    "first-run",
+    "input-empty",
+    "input-inspecting",
+    "optional-missing",
+    "optional-skipped",
+    "dry-run-ready",
+    "dry-run-blocked",
+    "dry-run-running",
+    "write-authorized",
+    "write-confirmation",
+    "write-running",
+    "conversion-success",
+    "conversion-failure",
+    "history-empty",
+    "history-result",
+    "recovery"
+  ],
+  "accessibility_requirements": [
+    "keyboard-and-ui-automation",
+    "logical-focus-order",
+    "text-scaling-and-locale-expansion",
+    "high-contrast",
+    "reduced-motion-and-animation-preferences",
+    "non-color-cues",
+    "stable-accessibility-identifiers"
+  ],
+  "constraints": {
+    "brand": [
+      "MH Toolkit product identity",
+      "restrained utility-first brand layer",
+      "licensed WinUI SymbolIcon or project vector assets only for controls"
+    ],
+    "existing_system": [
+      "WinUI 3 with Windows App SDK 1.8",
+      "existing C# MainViewModel and Rust CLI sidecar",
+      "shared conversion kernel: input, inspect, optional, dry run, confirm write, result or rollback",
+      "source, current reference, and output remain separate paths",
+      "hash, backup, manifest, confirmation, and fail-closed semantics remain unchanged"
+    ],
+    "forbidden": [
+      "real save data",
+      "Cemu or emulator launch",
+      "macOS visual translation",
+      "Apple material or web dashboard styling",
+      "global optional-data blockers",
+      "decorative hero, glow, texture, confetti, looping empty-state motion",
+      "navigation animation or delayed primary actions",
+      "animation as the only state signal"
+    ]
+  },
+  "freshness_claim": "current"
+}

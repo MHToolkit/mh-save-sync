@@ -1,0 +1,32 @@
+{
+  "schema_version": "uios.project/v0.1",
+  "product": {
+    "id": "mh3g-save-converter",
+    "name": "MH3G Save Converter",
+    "primary_users": [
+      "First-time MH3G players converting one local Japanese 3DS character slot to Wii U or Cemu",
+      "Returning players repairing an older converted slot while preserving later Wii U progress",
+      "Advanced users deliberately migrating optional system, ExtData, or experimental CEC data"
+    ],
+    "critical_jobs": [
+      "Choose explicit source and output paths, inspect read-only, configure or skip optional data, run Dry Run, confirm a guarded write, then review or roll back",
+      "Repair from original 3DS source plus a read-only current Wii U reference into a separate output without weakening fingerprint or transaction checks",
+      "Keep every optional domain independently configured, authorized, written, and recoverable"
+    ]
+  },
+  "targets": [
+    "windows"
+  ],
+  "status": {
+    "agent_proposed_status": "draft",
+    "verifier_status": "pending_pilot"
+  },
+  "gates": {
+    "required_lanes": [
+      "machine",
+      "independent_ai",
+      "human"
+    ],
+    "human_task_evidence": "required_for_material_flow_change"
+  }
+}
