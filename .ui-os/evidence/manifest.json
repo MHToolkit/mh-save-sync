@@ -6,7 +6,7 @@
     "dirty": false
   },
   "inputs": {
-    "contract_sha256": "c14ee813ff1ebf1b511ea46c2a6e1defb238f8973974075b68f77e0bcfad74cf",
+    "contract_sha256": "ee5adf9fa780231bf1df8c5dcd4560eef1f293029b05f2222c675054212cf76d",
     "flows_sha256": "549013ee5054b5725604503c23e71fae48196f4d552d862f3f83a59db438f2dc",
     "tokens_sha256": "37e36f1a4757ffa9b8a6861759fcce18baded0a54ef5dc6e4209182793a166c3"
   },
