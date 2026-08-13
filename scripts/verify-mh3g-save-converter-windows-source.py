@@ -398,6 +398,10 @@ def main() -> int:
     for expected in (
         "UseShellExecute = false",
         "startInfo.ArgumentList.Add(argument)",
+        "StandardOutputEncoding = StrictUtf8",
+        "StandardErrorEncoding = StrictUtf8",
+        "new UTF8Encoding(",
+        "throwOnInvalidBytes: true",
         "JsonDocument.Parse(candidate)",
         "mh3g-save-convert-core.exe",
         "Legacy compatibility wrapper",
@@ -405,6 +409,21 @@ def main() -> int:
         require(expected in bridge, f"argv/JSON bridge is missing {expected}")
     require("startInfo.Arguments" not in bridge, "CLI bridge must not build a command-string argument list")
     require("cmd.exe" not in bridge and "powershell" not in bridge.lower(), "CLI bridge must not invoke a shell")
+
+    utf8_smoke = ROOT / "tests" / "mh3g-save-converter-windows-cli-bridge-smoke" / "Program.cs"
+    require(utf8_smoke.is_file(), "UTF-8 CLI JSON bridge smoke is missing")
+    utf8_smoke_text = utf8_smoke.read_text(encoding="utf-8")
+    for expected in (
+        "存档转换·枫叶峰",
+        "WriteUtf8(Console.OpenStandardOutput()",
+        "WriteUtf8(Console.OpenStandardError()",
+        "Encoding.GetEncoding(",
+        "regressionVectorRejected",
+        "Console.OutputEncoding = cp936",
+        "new ConverterCliClient().ExecuteAsync(",
+        'result.TryGetString("source")',
+    ):
+        require(expected in utf8_smoke_text, f"UTF-8 CLI JSON bridge smoke is missing {expected}")
 
     update_service = read("Services/GitHubUpdateService.cs")
     for expected in (
