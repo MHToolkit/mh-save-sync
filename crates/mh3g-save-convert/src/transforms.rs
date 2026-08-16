@@ -25,6 +25,13 @@ const CURRENT_EQUIPMENT_START: usize = 31280;
 const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
+// The monster-list/book state is a byte-packed 28-byte array on both
+// platforms. Five paired official transfers preserve every byte verbatim.
+// Treating its tail as u16 lanes moves the final 0x00 byte from 0x577B to
+// 0x577A; in the Yoruaski sample that suppresses Deviljho from the list even
+// though both the acquired-book bit and the personal monster record are set.
+const MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
+const MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
 // The Wii U executable indexes this region as a 1536-bit item-acquisition
 // bitset: item_id >> 5 selects one of 48 u32 words and item_id & 31 selects the
 // bit inside that word. Five independently paired official transfers agree
@@ -1014,6 +1021,13 @@ fn apply_current_official_transfer_corrections(
 ) -> Result<(), ConversionError> {
     apply_current_shakalaka_companion_corrections(source, target)?;
 
+    target[MONSTER_GUIDE_PACKED_STATE_START
+        ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+        .copy_from_slice(
+            &source[MONSTER_GUIDE_PACKED_STATE_START
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
+        );
+
     for index in 0..MONSTER_IDS.len() {
         apply_current_hunter_notes_display_state(source, target, 0x81B4 + index * 10 + 8)?;
     }
@@ -1172,7 +1186,8 @@ mod tests {
     use super::{
         DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE,
         ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
-        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_IDS, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
+        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_GUIDE_PACKED_STATE_LEN,
+        MONSTER_GUIDE_PACKED_STATE_START, MONSTER_IDS, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
         PLAYER_APPEARANCE_RGBA_OFFSET, PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START,
         SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
         apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
@@ -1410,6 +1425,36 @@ mod tests {
         assert_ne!(current_word & (1 << bit_index), 0, "Deviljho book");
         assert_ne!(current_word & (1 << (bit_index - 1)), 0, "preceding book");
         assert_eq!(current_word & (1 << 15), 0, "dummy item");
+    }
+
+    #[test]
+    fn current_corrections_preserve_monster_guide_packed_state_bytes() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[MONSTER_GUIDE_PACKED_STATE_START
+            ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+            .fill(0xFF);
+        source[MONSTER_GUIDE_PACKED_STATE_START] = 0x02;
+        source[MONSTER_GUIDE_PACKED_STATE_START + 1] = 0x00;
+        source[MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN - 1] = 0x00;
+
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        let range = MONSTER_GUIDE_PACKED_STATE_START
+            ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN;
+        assert_eq!(&current[range.clone()], &source[range]);
+        assert_eq!(
+            &historical[MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN - 4
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
+            &[0xFF, 0xFF, 0x00, 0xFF]
+        );
     }
 
     #[test]

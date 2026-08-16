@@ -47,6 +47,16 @@ remapping or adjacent-field rewrite is supported by the evidence; native game
 acceptance must still confirm that the intended output file and slot were
 actually loaded.
 
+The same five pairs also expose a second, independent monster-list condition.
+Payload `0x5760..0x577B` is a 28-byte packed state array and is copied verbatim
+by the official transfer. Historical conversion treated part of its tail as
+`u16` lanes. For Yoruaski this changed source tail `FF FF FF 00` into
+`FF FF 00 FF`, clearing byte `0x577A`. The acquired Deviljho-book bit and the
+personal Deviljho record can therefore both be correct while the runtime list
+still omits Deviljho. Current conversion restores the complete byte-packed
+array; compatibility repair handles it one byte at a time so later Wii U
+progress in another byte is not reverted.
+
 ## Decision
 
 Current conversion layers the official-transfer corrections after the closed
@@ -61,7 +71,9 @@ Current conversion layers the official-transfer corrections after the closed
 5. include every corrected state byte and packed mask pair in compatibility
    repair's field list, preserving later Wii U edits outside those fields;
 6. convert all 48 item-acquisition words independently and include them in
-   compatibility repair under their actual item-bitset semantics.
+   compatibility repair under their actual item-bitset semantics;
+7. preserve the 28-byte packed monster-list state verbatim and repair its
+   historical output at byte granularity.
 
 ## Consequences
 

@@ -34,6 +34,8 @@ const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
+const USER_MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
+const USER_MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
 const USER_ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
 const USER_ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
 const USER_ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
@@ -438,6 +440,13 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
     let mut fields = Vec::new();
     match filename {
         "user1" | "user2" | "user3" => {
+            for byte in 0..USER_MONSTER_GUIDE_PACKED_STATE_LEN {
+                fields.push(FieldSpec {
+                    name: format!("monster-guide-packed-state-byte-{byte}"),
+                    offset: header + USER_MONSTER_GUIDE_PACKED_STATE_START + byte,
+                    width: 1,
+                });
+            }
             for word in 0..USER_ITEM_ACQUIRED_BITSET_WORD_COUNT {
                 fields.push(FieldSpec {
                     name: format!("item-acquired-word-{word}"),
@@ -692,6 +701,10 @@ mod tests {
     #[test]
     fn repairs_new_official_parity_fields_without_reverting_wiiu_progress() {
         let mut source = source();
+        let source_guide_state = JP_3DS_HEADER.len() + USER_MONSTER_GUIDE_PACKED_STATE_START;
+        source[source_guide_state..source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN]
+            .fill(0xFF);
+        source[source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN - 1] = 0x00;
         let source_item_word = JP_3DS_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         source[source_item_word..source_item_word + 4]
             .copy_from_slice(&0x1234_5678_u32.to_le_bytes());
@@ -705,9 +718,14 @@ mod tests {
 
         let merged =
             merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
+        let guide_state = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_PACKED_STATE_START;
         let item_word = JP_CEMU_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         let appearance = JP_CEMU_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
 
+        assert_eq!(
+            &merged.bytes[guide_state..guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN],
+            &source[source_guide_state..source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN]
+        );
         assert_eq!(
             &merged.bytes[item_word..item_word + 4],
             &0x1234_5678_u32.to_be_bytes()
@@ -717,6 +735,10 @@ mod tests {
             &[0xFA, 0xEF, 0xE6, 0xFF]
         );
         assert_eq!(merged.bytes[unrelated], current[unrelated]);
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-guide-packed-state-byte-26"
+                && field.status == MergeFieldStatus::Repaired
+        }));
         assert!(merged.fields.iter().any(|field| {
             field.name == "item-acquired-word-0" && field.status == MergeFieldStatus::Repaired
         }));
