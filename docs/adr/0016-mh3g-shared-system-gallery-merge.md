@@ -1,15 +1,18 @@
 # ADR 0016: Merge MH3G shared-system gallery flags conservatively
 
-- Status: Accepted
+- Status: Accepted; evidence boundary amended by ADR 0017
 - Date: 2026-08-10
 - Scope: Japanese MH3G 3DS `system` to MH3G HD Wii U/Cemu `system`
 
 ## Context
 
-MH3G stores the housekeeper gallery/movie unlock history in the separate
-`system` component rather than in `user1`, `user2`, or `user3`. The same
-`system` is shared by all three character slots and also contains settings and
-records unrelated to the slot currently being migrated.
+MH3G stores candidate housekeeper gallery/movie state in the separate `system`
+component rather than in the converted `user1`, `user2`, or `user3` core
+component. The physical layout exposes one `system` beside all three character
+slots, rather than separate per-slot system files, and it also contains settings
+and records unrelated to the slot currently being migrated. Current evidence
+does not prove whether individual bits internally encode slot-specific
+semantics.
 
 Converter versions through 0.0.16 exposed `convert-system` as a complete 3DS
 payload conversion followed by replacement of the Cemu target. Although that
@@ -22,12 +25,14 @@ The Japanese files have distinct validated containers:
 - 3DS `system`: `0x3000` bytes, `JpThreeDsSystem`;
 - Wii U/Cemu `system`: `0x3024` bytes, `JpCemuSystem`.
 
-Community file-level research identifies the gallery unlock booleans at Cemu
-file offsets `0x68..0x77` and reports that gallery state is shared between
-profiles. Local comparison of an independently supplied 3DS/Wii U transfer
-pair places the corresponding non-zero flag words in the same logical payload
-range. These are file-format observations, not game-runtime proof for every
-possible `system` field.
+Community file-level research identifies candidate gallery unlock booleans at
+Cemu file offsets `0x68..0x77` and reports that gallery state is shared between
+profiles. Later paired official-transfer audit confirms the title-wide
+physical `system` ownership but does not prove a one-to-one bit mapping for
+this range: the single strict source/target `system` pair does not equal a raw
+endian conversion or union. Therefore this remains a conservative,
+synthetic-tested opt-in mapping rather than complete official-transfer or
+game-runtime proof.
 
 ## Decision
 
@@ -52,7 +57,8 @@ unit tests and format analysis, but it is no longer the public
 
 ## Consequences
 
-- Existing Wii U gallery unlocks are retained while 3DS unlocks are added.
+- Existing Wii U bits in the mapped range are retained while mapped 3DS bits
+  are added.
 - Other-slot settings and unknown shared records are not overwritten.
 - A missing, malformed, or wrongly selected Cemu `system` fails closed.
 - A user must start MH3G HD once to initialize a target before migrating
@@ -75,5 +81,5 @@ Every write retains the previous Cemu bytes in the standard
 Deterministic tests prove profile recognition, endian-aware flag union,
 preservation outside `0x68..0x77`, target/hash refusal, transaction backup, and
 manifest behavior. Supplied transfer files are used only as local, uncommitted
-comparison evidence. Game UI/runtime behavior remains unverified until a user
-opens the gallery on Cemu or Wii U.
+comparison evidence. The precise flag semantics and game UI/runtime behavior
+remain unverified until controlled single-unlock before/after captures exist.

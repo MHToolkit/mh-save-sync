@@ -6,8 +6,8 @@ use crate::{
     },
     revision::ConverterRevision,
     transforms::{
-        GuildCardBodyKind, apply_japanese_wiiu_corrections,
-        apply_japanese_wiiu_corrections_for_revision,
+        GuildCardBodyKind, apply_current_japanese_wiiu_guild_card_corrections,
+        apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_corrections_for_revision,
     },
 };
@@ -75,11 +75,29 @@ pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
 ) -> Result<Vec<u8>, ConversionError> {
-    convert_external_component_to_cemu_named_for_revision(
+    let mut output = convert_external_component_to_cemu_named_for_revision(
         source,
         filename,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+
+    // Historical replay remains byte-stable for compatibility detection.
+    // Current conversion layers official-transfer corrections over that
+    // output, just as the core user# path does.
+    let kind = match filename {
+        "card1" | "card2" | "card3" => Some(GuildCardBodyKind::Card),
+        "cardbox" => Some(GuildCardBodyKind::Cardbox),
+        "quest1" | "quest2" | "quest3" | "quest4" => None,
+        _ => unreachable!("revision conversion validated the component"),
+    };
+    if let Some(kind) = kind {
+        let source_payload = &source[JP_3DS_HEADER.len()..];
+        let target_payload =
+            &mut output[build_jp_cemu_header(filename, source_payload.len())?.len()..];
+        apply_current_japanese_wiiu_guild_card_corrections(kind, source_payload, target_payload)?;
+    }
+
+    Ok(output)
 }
 
 pub(crate) fn convert_external_component_to_cemu_named_for_revision(
@@ -750,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn remaps_discovery_bits_for_every_received_card_monster_record() {
+    fn remaps_source_owned_discovery_bits_for_every_received_card_monster_record() {
         let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         let body = &mut source[JP_3DS_HEADER.len()..];
@@ -762,10 +780,9 @@ mod tests {
         let last_card_row = 97 * 0xE00 + 0x7C0 + 38 * 10;
         body[last_card_row..last_card_row + 10]
             .copy_from_slice(&[0x0E, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x00, 0x01, 0x00]);
-        // Some real received cards have a non-zero hunt count but no low
-        // discovery flag. The personal-record converter treats that count as
-        // sufficient evidence that the record is displayable; card records
-        // must use the same rule.
+        // Official transfers keep a row hidden when its source discovery flag
+        // is clear, even if the received card contains non-zero hunt counts.
+        // Inferring visibility from counters creates phantom guide pages.
         let last_card_unflagged_row = last_card_row + 10;
         body[last_card_unflagged_row..last_card_unflagged_row + 10]
             .copy_from_slice(&[0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00, 0x00]);
@@ -779,7 +796,7 @@ mod tests {
         );
         assert_eq!(
             &payload[last_card_unflagged_row..last_card_unflagged_row + 10],
-            &[0x00, 0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
+            &[0x00, 0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00]
         );
     }
 

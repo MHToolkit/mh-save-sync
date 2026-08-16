@@ -153,6 +153,7 @@ public sealed class MainViewModel : ObservableObject
                 break;
             case "dry-run.ready":
                 StatusText = Copy.Inspected;
+                LatestReport = "{\"fixture\":true,\"operation\":\"repair-converted\",\"status\":\"dry-run\"}";
                 break;
             case "dry-run.blocked":
                 _sourceInspected = false;
@@ -210,7 +211,9 @@ public sealed class MainViewModel : ObservableObject
     public bool HasHistory => History.Count > 0;
     public Visibility HistoryEmptyVisibility => HasHistory ? Visibility.Collapsed : Visibility.Visible;
     public Visibility HistoryListVisibility => HasHistory ? Visibility.Visible : Visibility.Collapsed;
-    public bool CanContinueOptional => true;
+    public bool CanContinueOptional => !IsRepairMode
+        || !IncludeGuildCards
+        || SavePathResolver.TryResolveExtDataUserDirectory(ExtrasSourceDirectory, out _, out _);
     public Visibility OptionalMissingVisibility => SelectedOptionalDataIsConfigured ? Visibility.Collapsed : Visibility.Visible;
     public Visibility OptionalSkippedVisibility => _syntheticFixtureId == "components.optional-skipped"
         ? Visibility.Visible
@@ -294,7 +297,9 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>
     /// Commits the optional guild-card choice into the repair transaction
     /// scope. Draft checkbox/path edits do not silently change an authorized
-    /// core write; every effective scope change invalidates core inspection.
+    /// core write. An effective scope change revokes only the prior Dry Run
+    /// authorization; inspected core files remain valid because their paths
+    /// did not change.
     /// </summary>
     public bool CommitRepairOptionalScope(bool skip)
     {
@@ -312,7 +317,7 @@ public sealed class MainViewModel : ObservableObject
         if (!string.Equals(_repairGuildCardSource, next, StringComparison.OrdinalIgnoreCase))
         {
             _repairGuildCardSource = next;
-            InvalidateCoreAuthorization();
+            InvalidateCoreWriteAuthorizationPreservingInspection();
             OnPropertyChanged(nameof(HasCommittedRepairGuildCards));
         }
         return true;
@@ -714,6 +719,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(HasLatestReport));
                 OnPropertyChanged(nameof(LatestReportEmptyVisibility));
+                OnPropertyChanged(nameof(LatestReportVisibility));
             }
         }
     }
@@ -732,6 +738,7 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasLatestReport => !string.IsNullOrWhiteSpace(LatestReport);
     public Visibility LatestReportEmptyVisibility => HasLatestReport ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility LatestReportVisibility => HasLatestReport ? Visibility.Visible : Visibility.Collapsed;
     public bool HasLatestError => !string.IsNullOrWhiteSpace(LatestError);
     public bool ShowPostInspectGuidance => _workflowGuidance == WorkflowGuidance.CoreInspected;
     public bool ShowPostDryRunGuidance => _workflowGuidance == WorkflowGuidance.CoreDryRunAuthorized;
@@ -1968,6 +1975,34 @@ public sealed class MainViewModel : ObservableObject
             Stage = WorkflowStage.Input;
             StatusText = Copy.Ready;
         }
+        RaiseCoreActionAvailability();
+    }
+
+    /// <summary>
+    /// Revoke a Dry Run/write authorization after the committed repair
+    /// ExtData scope changes without discarding the already inspected core
+    /// files. The next Dry Run re-hashes the full effective scope and write
+    /// remains fail-closed against those new hashes.
+    /// </summary>
+    private void InvalidateCoreWriteAuthorizationPreservingInspection()
+    {
+        _coreAuthorization = null;
+        _repairAuthorization = null;
+        IsRepairRevisionSelectionRequired = false;
+        RepairDetectionSummary = string.Empty;
+
+        var inspectionComplete = _sourceInspected
+            && _targetInspected
+            && (!IsRepairMode || _currentInspected && _inspectedCurrent?.Exists == true);
+        if (!inspectionComplete)
+        {
+            InvalidateCoreAuthorization();
+            return;
+        }
+
+        Stage = WorkflowStage.Inspected;
+        StatusText = Copy.Inspected;
+        SetWorkflowGuidance(WorkflowGuidance.CoreInspected);
         RaiseCoreActionAvailability();
     }
 

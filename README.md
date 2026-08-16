@@ -200,12 +200,17 @@ extra wrapper directory, enter it first; the expected filenames must be
 immediate children of the CLI path or the narrow GUI selection described above.
 
 If the 3DS `system` file is omitted, a core `user#` conversion cannot migrate
-the housekeeper's gallery/movie unlock history. `system` is shared across all
-three character slots and also contains settings unrelated to the selected
-slot. Therefore `convert-system` requires both the 3DS source and an existing,
-initialized Cemu target. It bitwise-unions only the verified gallery/movie
-flag range (Cemu file offsets `0x68..0x77`) and preserves every other target
-byte. It refuses a new/missing target instead of replacing all shared data.
+the housekeeper's gallery/movie unlock history. The physical save layout
+exposes one title-wide `system` rather than separate `system1`, `system2`, and
+`system3` files. Current evidence cannot attribute individual flags inside it
+to `user1`, `user2`, or `user3`, and it also contains settings unrelated to the
+selected slot. Therefore `convert-system` requires both the 3DS source and an
+existing, initialized Cemu target. It
+bitwise-unions only the currently mapped gallery/movie flag range (Cemu file
+offsets `0x68..0x77`) and preserves every other target byte. It refuses a
+new/missing target instead of replacing all shared data. This conservative
+transaction is not a claim that every `system` bit has official-transfer or
+game-runtime parity.
 
 ### Legacy Wii U save-editor caveat
 
@@ -227,6 +232,14 @@ keeps the mask screen, companion status screen, and post-quest serializer on
 the same representation. Compatibility repair can also recognize and repair
 the historical two-byte swap at relative companion offset `0xE4` without
 replacing unrelated Wii U progress.
+
+### Monster guide discovery
+
+Monster discovery is controlled by the source 3DS discovery/crown state byte,
+not inferred from slay or capture counters. Current conversion applies the
+same state-only bit mapping to the personal record, received guild cards, and
+CEC/offline-hall partners. This prevents historical conversions from turning
+hidden rows with non-zero counters into extra monster-guide pages.
 
 ### Before you write: paths, inspection, and dry-run
 

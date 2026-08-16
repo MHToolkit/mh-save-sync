@@ -358,16 +358,14 @@ fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<()
     Ok(())
 }
 
-/// Apply the single authoritative cross-platform Hunter's Notes visibility
-/// mapping.
+/// Reproduce the historical 0.0.5/0.0.6 Hunter's Notes visibility rule.
 ///
-/// The three storage locations (the player's own profile, received guild-card
-/// files, and CEC/offline-hall partner cards) have different physical offsets,
-/// but they encode the same semantics: 3DS discovery/crown state at
-/// `state_offset`, plus little-endian slay/capture counters.  Wii U consumes
-/// the converted state byte and only renders a monster name when bit `0x80` is
-/// set. Keeping this rule here prevents those three import paths drifting.
-fn apply_hunter_notes_display_state(
+/// Released converters inferred discovery from non-zero hunt counters. Keep
+/// that behavior isolated here so compatibility repair can still recognize
+/// their byte output. Current conversion must not use it: paired official
+/// transfers prove that an undiscovered row remains hidden even when its
+/// counters are non-zero.
+fn apply_historical_hunter_notes_display_state(
     source: &[u8],
     target: &mut [u8],
     slay_offset: usize,
@@ -393,6 +391,20 @@ fn apply_hunter_notes_display_state(
     }
 
     Ok(())
+}
+
+/// Apply the authoritative current Hunter's Notes state mapping.
+///
+/// Personal records, received guild cards, and CEC/offline-hall partner cards
+/// all use the same source-owned discovery/crown byte. Official transfer pairs
+/// preserve that state independently of hunt counters, so visibility must be
+/// derived only from this byte.
+fn apply_current_hunter_notes_display_state(
+    source: &[u8],
+    target: &mut [u8],
+    state_offset: usize,
+) -> Result<(), ConversionError> {
+    transform_crown(source, target, state_offset)
 }
 
 fn apply_guild_card_monster_log_corrections(
@@ -435,7 +447,7 @@ fn apply_guild_card_monster_log_slot_corrections(
         }
 
         if revision >= ConverterRevision::V0_0_5 {
-            apply_hunter_notes_display_state(
+            apply_historical_hunter_notes_display_state(
                 source,
                 target,
                 record_start,
@@ -445,6 +457,33 @@ fn apply_guild_card_monster_log_slot_corrections(
         }
     }
 
+    Ok(())
+}
+
+fn apply_current_guild_card_monster_log_slot_corrections(
+    source: &[u8],
+    target: &mut [u8],
+    slot_start: usize,
+) -> Result<(), ConversionError> {
+    for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
+        let state_offset =
+            slot_start + GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE + 8;
+        apply_current_hunter_notes_display_state(source, target, state_offset)?;
+    }
+    Ok(())
+}
+
+fn apply_current_guild_card_monster_log_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        apply_current_guild_card_monster_log_slot_corrections(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE,
+        )?;
+    }
     Ok(())
 }
 
@@ -610,7 +649,8 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         source,
         target,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+    apply_current_guild_card_monster_log_slot_corrections(source, target, 0)
 }
 
 pub(crate) fn apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
@@ -704,7 +744,30 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
         source,
         target,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+    apply_current_japanese_wiiu_guild_card_corrections(kind, source, target)
+}
+
+pub(crate) fn apply_current_japanese_wiiu_guild_card_corrections(
+    kind: GuildCardBodyKind,
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    let expected_size = match kind {
+        GuildCardBodyKind::Card => CARD_BODY_SIZE,
+        GuildCardBodyKind::Cardbox => CARDBOX_BODY_SIZE,
+    };
+    if source.len() != expected_size || target.len() != expected_size {
+        return Err(ConversionError::InvalidSave(format!(
+            "MH3G {kind:?} body must be {expected_size} bytes, got source {} and target {}",
+            source.len(),
+            target.len()
+        )));
+    }
+    if kind == GuildCardBodyKind::Card {
+        apply_current_guild_card_monster_log_corrections(source, target)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn apply_japanese_wiiu_guild_card_corrections_for_revision(
@@ -799,7 +862,7 @@ fn apply_confirmed_numeric_and_record_corrections(
 
         let discovery_offset = 0x81B4 + index * 10 + 8;
         if revision >= ConverterRevision::V0_0_5 {
-            apply_hunter_notes_display_state(
+            apply_historical_hunter_notes_display_state(
                 source,
                 target,
                 slay_offset,
@@ -943,6 +1006,10 @@ fn apply_current_official_transfer_corrections(
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
     apply_current_shakalaka_companion_corrections(source, target)?;
+
+    for index in 0..MONSTER_IDS.len() {
+        apply_current_hunter_notes_display_state(source, target, 0x81B4 + index * 10 + 8)?;
+    }
 
     for record in 0..MONSTER_GUIDE_RECORD_COUNT {
         copy_reversed(
@@ -1387,6 +1454,7 @@ mod tests {
         source[capture_offset..capture_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
         source[size_offset..size_offset + 2].copy_from_slice(&100_u16.to_le_bytes());
         source[size_offset + 2..size_offset + 4].copy_from_slice(&112_u16.to_le_bytes());
+        source[discovery_offset] = 0x01;
         let mut target = source.clone();
 
         apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
@@ -1412,6 +1480,49 @@ mod tests {
             112
         );
         assert_ne!(target[discovery_offset] & 0x80, 0);
+    }
+
+    #[test]
+    fn current_hunter_notes_do_not_infer_discovery_from_hunt_counts() {
+        const MONSTER_INDEX: usize = 2;
+        const MONSTER_ID: usize = 0x2D;
+
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let slay_offset = 0x5784 + MONSTER_ID * 2;
+        let capture_offset = 0x5884 + MONSTER_ID * 2;
+        let discovery_offset = 0x81B4 + MONSTER_INDEX * 10 + 8;
+        source[slay_offset..slay_offset + 2].copy_from_slice(&9_u16.to_le_bytes());
+        source[capture_offset..capture_offset + 2].copy_from_slice(&3_u16.to_le_bytes());
+
+        let mut target = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(target[discovery_offset], 0x00);
+        assert_eq!(MONSTER_IDS[MONSTER_INDEX], MONSTER_ID);
+    }
+
+    #[test]
+    fn historical_hunter_notes_replay_keeps_released_counter_inference() {
+        const MONSTER_INDEX: usize = 2;
+        const MONSTER_ID: usize = 0x2D;
+
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let slay_offset = 0x5784 + MONSTER_ID * 2;
+        let discovery_offset = 0x81B4 + MONSTER_INDEX * 10 + 8;
+        source[slay_offset..slay_offset + 2].copy_from_slice(&1_u16.to_le_bytes());
+
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        assert_eq!(historical[discovery_offset], 0x80);
+
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+        assert_eq!(current[discovery_offset], 0x00);
     }
 
     #[test]

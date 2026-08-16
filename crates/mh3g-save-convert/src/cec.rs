@@ -1405,9 +1405,9 @@ mod tests {
         let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
         let record_field = slot_start + 0x7C0 + 32 * 10;
-        // Row 45 is intentionally beyond the sparse MEOW crown entries.  A
-        // non-zero hunt count with no 3DS discovery bit must still become a
-        // displayable Wii U Hunter's Notes row inside a packed CEC card.
+        // Row 45 is intentionally beyond the sparse MEOW crown entries. Its
+        // non-zero hunt count must not synthesize a discovery flag that the
+        // 3DS card did not contain.
         let late_record_field = slot_start + 0x7C0 + 45 * 10;
         let mut record = vec![0_u8; CEMU_RECORD_SLOT_SIZE];
         for equipment in 0_u8..5 {
@@ -1497,7 +1497,7 @@ mod tests {
         );
         assert_eq!(
             &conversion.bytes[converted_late_offset..converted_late_offset + 10],
-            &[0x00, 0x09, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
+            &[0x00, 0x09, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00]
         );
     }
 

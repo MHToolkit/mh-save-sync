@@ -613,7 +613,7 @@ fn repair_converted_writes_guild_cards_to_the_separate_output_only() {
     );
     assert_eq!(
         fs::read(output_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 8],
-        0x80
+        0x00
     );
 
     let compatibility_manifest = written["compatibility_manifest"].as_str().unwrap();
@@ -702,7 +702,7 @@ fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change()
     let extdata = extras_fixture(&temp);
     let card1_path = extdata.join("card1");
     let mut card1_source = fs::read(&card1_path).unwrap();
-    let card_row = JP_3DS_HEADER.len() + 0x7C0;
+    let card_row = JP_3DS_HEADER.len() + 0x7C0 + 45 * 10;
     card1_source[card_row..card_row + 2].copy_from_slice(&[0x01, 0x00]);
     card1_source[card_row + 8] = 0;
     fs::write(&card1_path, &card1_source).unwrap();
@@ -714,8 +714,9 @@ fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change()
         let mut current_bytes =
             convert_external_component_to_cemu_named(&source_bytes, component).unwrap();
         if component == "card1" {
-            // Recreate the pre-0.0.5 display-state result.
-            current_bytes[JP_CEMU_HEADER.len() + 0x7C0 + 8] = 0;
+            // Recreate the released 0.0.5/0.0.6 inference bug: hunt counts
+            // forced an undiscovered source row to become visible.
+            current_bytes[JP_CEMU_HEADER.len() + 0x7C0 + 45 * 10 + 8] = 0x80;
         } else if component == "cardbox" {
             // Model a later Wii U compact-card update outside the repair map.
             current_bytes[JP_CEMU_HEADER.len() + 1976..JP_CEMU_HEADER.len() + 1978]
@@ -793,8 +794,8 @@ fn repair_converted_preserves_the_played_directory_and_rolls_back_every_change()
     ]);
     assert_eq!(written["status"], "written");
     assert_eq!(
-        fs::read(current_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 8],
-        0x80
+        fs::read(current_dir.join("card1")).unwrap()[JP_CEMU_HEADER.len() + 0x7C0 + 45 * 10 + 8],
+        0x00
     );
     for (component, before) in &preserved_before {
         assert_eq!(

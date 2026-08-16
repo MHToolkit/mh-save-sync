@@ -606,6 +606,27 @@ def main() -> int:
     require("_extrasInstallCompleted = false;" in extras_rollback, "ExtData rollback must clear completion")
     require("CommitRepairOptionalScope" in workflow and "_repairGuildCardSource" in workflow,
             "repair optional scope must be explicitly committed and authorization-bound")
+    repair_optional_commit = workflow.split("public bool CommitRepairOptionalScope(bool skip)", 1)[1].split(
+        "public string SourcePath", 1
+    )[0]
+    require(
+        "InvalidateCoreWriteAuthorizationPreservingInspection();" in repair_optional_commit
+        and "InvalidateCoreAuthorization();" not in repair_optional_commit,
+        "committing repair ExtData must revoke write authorization without discarding core inspection",
+    )
+    preserve_inspection = workflow.split(
+        "private void InvalidateCoreWriteAuthorizationPreservingInspection()", 1
+    )[1].split("private void InvalidateSystemAuthorization()", 1)[0]
+    for expected in (
+        "_coreAuthorization = null;",
+        "_repairAuthorization = null;",
+        "_sourceInspected",
+        "_currentInspected",
+        "_targetInspected",
+        "Stage = WorkflowStage.Inspected;",
+        "SetWorkflowGuidance(WorkflowGuidance.CoreInspected);",
+    ):
+        require(expected in preserve_inspection, f"repair optional transition is missing {expected}")
 
     window = read("MainWindow.xaml")
     require(
@@ -631,6 +652,15 @@ def main() -> int:
     require('x:Name="OptionalConfigurationAnchor"' in window, "optional configuration requires a stable destination")
     require('AutomationProperties.AutomationId="mh3g.converter.windows.action.confirmWrite"' in window,
             "write surface must expose a stable primary action id")
+    for expected in (
+        'AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun"',
+        'AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.empty"',
+        'AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.report"',
+        'Text="{Binding Copy.ResultEmpty}"',
+        'Text="{Binding LatestReport, Mode=OneWay}"',
+        'Visibility="{Binding LatestReportVisibility}"',
+    ):
+        require(expected in window, f"Dry Run technical details must have a deterministic non-blank state: {expected}")
     code_behind = read("MainWindow.xaml.cs")
     require(
         "RootGrid.DataContext = ViewModel;" in code_behind
@@ -654,6 +684,15 @@ def main() -> int:
         "ViewModel.CurrentPath = CurrentPathBox.Text;",
     ):
         require(expected in code_behind, f"independent Wii U reference picker is missing {expected}")
+    optional_transition = code_behind.split("private void ContinueFromOptional(bool skip)", 1)[1].split(
+        "private void StartConversion_Click", 1
+    )[0]
+    require(
+        "ViewModel.CanRunCoreDryRun" in optional_transition
+        and "ShowConvertStep(ConvertStep.DryRun);" in optional_transition
+        and "ShowConvertStep(ConvertStep.Input);" in optional_transition,
+        "optional navigation must gate Dry Run and recover to the actionable input step",
+    )
     write_core = public_method_body(workflow, "WriteCoreAsync")
     require(
         "var repairArguments = new List<string>" in write_core

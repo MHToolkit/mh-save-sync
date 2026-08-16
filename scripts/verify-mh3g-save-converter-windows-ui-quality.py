@@ -52,6 +52,9 @@ required_ids = {
     "mh3g.converter.windows.path.source",
     "mh3g.converter.windows.path.current",
     "mh3g.converter.windows.path.output",
+    "mh3g.converter.windows.details.dryRun",
+    "mh3g.converter.windows.details.dryRun.empty",
+    "mh3g.converter.windows.details.dryRun.report",
 }
 ids = re.findall(r'AutomationProperties\.AutomationId="([^"]+)"', xaml)
 require(required_ids.issubset(set(ids)), f"missing IDs: {sorted(required_ids - set(ids))}")
@@ -87,6 +90,16 @@ require("SelectedOptionalDataIsConfigured" not in write, "optional config still 
 require("SelectedOptionalDataIsConfigured" not in can_write, "optional config still gates core CTA")
 require("CommitRepairOptionalScope" in vm and "_repairGuildCardSource" in vm,
         "repair guild-card scope is not explicit/authorization-bound")
+repair_commit = vm.split("public bool CommitRepairOptionalScope(bool skip)", 1)[1].split(
+    "public string SourcePath", 1
+)[0]
+require("InvalidateCoreWriteAuthorizationPreservingInspection();" in repair_commit,
+        "repair optional transition must preserve completed core inspection")
+require("InvalidateCoreAuthorization();" not in repair_commit,
+        "repair optional transition still clears completed core inspection")
+require('Text="{Binding Copy.ResultEmpty}"' in xaml
+        and 'Text="{Binding LatestReport, Mode=OneWay}"' in xaml,
+        "Dry Run technical details need both an empty state and a read-only report")
 require("_extrasInstallCompleted = true;" in vm and "_extrasInstallCompleted = false;" in vm,
         "ExtData independent completion lifecycle is incomplete")
 
