@@ -242,7 +242,7 @@
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="{Binding Copy.ResultEmpty}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{Binding LatestReportEmptyVisibility}" AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.empty" />
                                     <InfoBar IsOpen="{Binding HasLatestError}" Visibility="{Binding ResultFailureVisibility}" IsClosable="False" Severity="Error" Title="{Binding Copy.Failed}" Message="{Binding LatestError}" AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.error" />
-                                    <TextBox Text="{Binding LatestReport, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Cascadia Mono" MaxHeight="320" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Visibility="{Binding LatestReportVisibility}" AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.report" />
+                                    <TextBox Text="{Binding LatestReport, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Cascadia Mono" MaxHeight="320" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto" Visibility="{Binding LatestReportVisibility}" AutomationProperties.AutomationId="mh3g.converter.windows.details.dryRun.report" />
                                 </StackPanel>
                             </Expander>
                         </StackPanel></ScrollViewer>
