@@ -34,9 +34,9 @@ const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
-const USER_MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
-const USER_MONSTER_GUIDE_RECORD_COUNT: usize = 48;
-const USER_MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+const USER_ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
+const USER_ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
+const USER_ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
 const USER_APPEARANCE_SCALAR_OFFSETS: [usize; 3] = [0x73B8, 0x73BC, 0x73C8];
 const USER_APPEARANCE_PACKED_STYLE_OFFSET: usize = 0x73D0;
 const USER_APPEARANCE_RGBA_OFFSET: usize = 0x73D8;
@@ -438,13 +438,13 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
     let mut fields = Vec::new();
     match filename {
         "user1" | "user2" | "user3" => {
-            for record in 0..USER_MONSTER_GUIDE_RECORD_COUNT {
+            for word in 0..USER_ITEM_ACQUIRED_BITSET_WORD_COUNT {
                 fields.push(FieldSpec {
-                    name: format!("monster-guide-record-{record}"),
+                    name: format!("item-acquired-word-{word}"),
                     offset: header
-                        + USER_MONSTER_GUIDE_RECORD_START
-                        + record * USER_MONSTER_GUIDE_RECORD_STRIDE,
-                    width: USER_MONSTER_GUIDE_RECORD_STRIDE,
+                        + USER_ITEM_ACQUIRED_BITSET_START
+                        + word * USER_ITEM_ACQUIRED_BITSET_WORD_SIZE,
+                    width: USER_ITEM_ACQUIRED_BITSET_WORD_SIZE,
                 });
             }
             for (index, offset) in USER_APPEARANCE_SCALAR_OFFSETS.into_iter().enumerate() {
@@ -692,8 +692,9 @@ mod tests {
     #[test]
     fn repairs_new_official_parity_fields_without_reverting_wiiu_progress() {
         let mut source = source();
-        let source_guide = JP_3DS_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
-        source[source_guide..source_guide + 4].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+        let source_item_word = JP_3DS_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
+        source[source_item_word..source_item_word + 4]
+            .copy_from_slice(&0x1234_5678_u32.to_le_bytes());
         let source_appearance = JP_3DS_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
         source[source_appearance..source_appearance + 4].copy_from_slice(&[0xFF, 0xE6, 0xEF, 0xFA]);
         let mut current =
@@ -704,11 +705,11 @@ mod tests {
 
         let merged =
             merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
-        let guide = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
+        let item_word = JP_CEMU_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         let appearance = JP_CEMU_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
 
         assert_eq!(
-            &merged.bytes[guide..guide + 4],
+            &merged.bytes[item_word..item_word + 4],
             &0x1234_5678_u32.to_be_bytes()
         );
         assert_eq!(
@@ -717,7 +718,7 @@ mod tests {
         );
         assert_eq!(merged.bytes[unrelated], current[unrelated]);
         assert!(merged.fields.iter().any(|field| {
-            field.name == "monster-guide-record-0" && field.status == MergeFieldStatus::Repaired
+            field.name == "item-acquired-word-0" && field.status == MergeFieldStatus::Repaired
         }));
         assert!(merged.fields.iter().any(|field| {
             field.name == "player-appearance-rgba" && field.status == MergeFieldStatus::Repaired

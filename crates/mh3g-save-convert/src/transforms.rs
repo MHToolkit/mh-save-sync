@@ -25,13 +25,20 @@ const CURRENT_EQUIPMENT_START: usize = 31280;
 const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
-// Five independently paired 3DS -> Wii U official-transfer saves agree that
-// this is a contiguous table of 48 endian-sensitive monster-guide records.
-// Leaving the little-endian words untouched makes unlocked guide details look
-// incomplete on Wii U even though the source slot contains them.
-const MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
-const MONSTER_GUIDE_RECORD_COUNT: usize = 48;
-const MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+// The Wii U executable indexes this region as a 1536-bit item-acquisition
+// bitset: item_id >> 5 selects one of 48 u32 words and item_id & 31 selects the
+// bit inside that word. Five independently paired official transfers agree
+// that every word changes from 3DS little endian to Wii U big endian.
+//
+// This is not a table of 48 monster records. One user-visible consequence of
+// getting the word order wrong is losing item 0x4F8 (the Deviljho book), which
+// removes the ninth page from Hunter's Notes even though the 3DS source owns
+// the book.
+const ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
+const ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
+const ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
+#[cfg(test)]
+const DEVILJHO_BOOK_ITEM_ID: usize = 0x4F8;
 // These appearance scalars and the adjacent RGBA value are serialized as
 // little-endian four-byte values on 3DS and big-endian values on Wii U. The
 // older static table covered only the scalar at 0x73C4 and the later RGBA
@@ -1011,12 +1018,12 @@ fn apply_current_official_transfer_corrections(
         apply_current_hunter_notes_display_state(source, target, 0x81B4 + index * 10 + 8)?;
     }
 
-    for record in 0..MONSTER_GUIDE_RECORD_COUNT {
+    for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
         copy_reversed(
             source,
             target,
-            MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE,
-            MONSTER_GUIDE_RECORD_STRIDE,
+            ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE,
+            ITEM_ACQUIRED_BITSET_WORD_SIZE,
         )?;
     }
 
@@ -1163,12 +1170,12 @@ mod tests {
     };
 
     use super::{
-        EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE, MONSTER_GUIDE_RECORD_COUNT,
-        MONSTER_GUIDE_RECORD_START, MONSTER_GUIDE_RECORD_STRIDE, MONSTER_IDS,
-        PLAYER_APPEARANCE_PACKED_STYLE_OFFSET, PLAYER_APPEARANCE_RGBA_OFFSET,
-        PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START, SECOND_RGBA_OFFSET,
-        apply_arena_records, apply_endian_swaps, apply_japanese_wiiu_corrections,
-        apply_japanese_wiiu_corrections_for_revision,
+        DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE,
+        ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
+        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_IDS, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
+        PLAYER_APPEARANCE_RGBA_OFFSET, PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START,
+        SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
+        apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_slot_corrections, apply_monster_discovery,
     };
     use crate::revision::ConverterRevision;
@@ -1331,16 +1338,16 @@ mod tests {
     }
 
     #[test]
-    fn current_corrections_swap_every_official_monster_guide_record() {
+    fn current_corrections_swap_every_item_acquisition_word() {
         let mut source = vec![0_u8; PAYLOAD_SIZE];
-        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
-            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
-            let value = 0x1020_3000_u32 + record as u32;
+        for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
+            let offset = ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE;
+            let value = 0x1020_3000_u32 + word as u32;
             source[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        source[MONSTER_GUIDE_RECORD_START - 1] = 0x5A;
-        source[MONSTER_GUIDE_RECORD_START
-            + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE] = 0xA5;
+        source[ITEM_ACQUIRED_BITSET_START - 1] = 0x5A;
+        source[ITEM_ACQUIRED_BITSET_START
+            + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE] = 0xA5;
 
         let mut historical = source.clone();
         apply_japanese_wiiu_corrections_for_revision(
@@ -1352,8 +1359,8 @@ mod tests {
         let mut current = source.clone();
         apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
 
-        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
-            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
+        for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
+            let offset = ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE;
             assert_eq!(
                 &current[offset..offset + 4],
                 &source[offset..offset + 4]
@@ -1361,7 +1368,7 @@ mod tests {
                     .rev()
                     .copied()
                     .collect::<Vec<_>>(),
-                "monster-guide record {record}"
+                "item-acquisition word {word}"
             );
             assert_eq!(
                 &historical[offset..offset + 4],
@@ -1370,15 +1377,39 @@ mod tests {
             );
         }
         assert_eq!(
-            current[MONSTER_GUIDE_RECORD_START - 1],
-            historical[MONSTER_GUIDE_RECORD_START - 1]
+            current[ITEM_ACQUIRED_BITSET_START - 1],
+            historical[ITEM_ACQUIRED_BITSET_START - 1]
         );
         assert_eq!(
-            current[MONSTER_GUIDE_RECORD_START
-                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE],
-            historical[MONSTER_GUIDE_RECORD_START
-                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE]
+            current[ITEM_ACQUIRED_BITSET_START
+                + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE],
+            historical[ITEM_ACQUIRED_BITSET_START
+                + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE]
         );
+    }
+
+    #[test]
+    fn current_corrections_preserve_deviljho_book_unlock_bit() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let word_index = DEVILJHO_BOOK_ITEM_ID >> 5;
+        let bit_index = DEVILJHO_BOOK_ITEM_ID & 31;
+        let offset = ITEM_ACQUIRED_BITSET_START + word_index * ITEM_ACQUIRED_BITSET_WORD_SIZE;
+
+        // Observed in the Yoruaski 3DS source: this word owns the Deviljho
+        // book (bit 24) and the preceding book (bit 23), while the dummy item
+        // at bit 15 remains absent.
+        let source_word = 0xFFFF_7FFE_u32;
+        source[offset..offset + 4].copy_from_slice(&source_word.to_le_bytes());
+
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+        let current_word = u32::from_be_bytes(current[offset..offset + 4].try_into().unwrap());
+
+        assert_eq!(&current[offset..offset + 4], &[0xFF, 0xFF, 0x7F, 0xFE]);
+        assert_eq!(current_word, source_word);
+        assert_ne!(current_word & (1 << bit_index), 0, "Deviljho book");
+        assert_ne!(current_word & (1 << (bit_index - 1)), 0, "preceding book");
+        assert_eq!(current_word & (1 << 15), 0, "dummy item");
     }
 
     #[test]

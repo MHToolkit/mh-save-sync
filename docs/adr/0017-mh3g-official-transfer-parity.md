@@ -30,6 +30,23 @@ The paired files agree on these boundaries:
 - discovery/crown state is a source-owned bit permutation. Non-zero slay or
   capture counts do not synthesize discovery.
 
+Static inspection of the Wii U executable and its Japanese item-name resource
+also corrects an earlier schema label. Payload `0x65C4..0x6683` is not 48
+monster records; it is 48 endian-sensitive `u32` words forming a 1536-bit
+item-acquisition bitset. The Wii U accessor selects `item_id >> 5` and then
+tests `item_id & 31`. The Deviljho book is item `0x4F8`, so it is word 39,
+bit 24. In the Yoruaski source, that word is `0xFFFF7FFE`: bytes
+`FE 7F FF FF` on 3DS must become `FF FF 7F FE` on Wii U.
+
+All five official-transfer pairs agree byte-for-byte on the complete 192-byte
+bitset after this LE-to-BE word conversion. Releases through 0.0.16 left these
+words untouched, which made Wii U read the Yoruaski sample as `0xFE7FFFFF` and
+cleared the Deviljho-book bit. Current conversion (introduced in 0.0.17)
+preserves the bit required by the ninth Hunter's Notes page. No item-ID
+remapping or adjacent-field rewrite is supported by the evidence; native game
+acceptance must still confirm that the intended output file and slot were
+actually loaded.
+
 ## Decision
 
 Current conversion layers the official-transfer corrections after the closed
@@ -42,13 +59,17 @@ Current conversion layers the official-transfer corrections after the closed
 4. retain the former hunt-counter inference only inside historical replay so
    compatibility detection remains byte-reproducible;
 5. include every corrected state byte and packed mask pair in compatibility
-   repair's field list, preserving later Wii U edits outside those fields.
+   repair's field list, preserving later Wii U edits outside those fields;
+6. convert all 48 item-acquisition words independently and include them in
+   compatibility repair under their actual item-bitset semantics.
 
 ## Consequences
 
 - Lamp Mask mastery no longer becomes zero merely because its two packed bytes
   were reversed.
 - Hidden source monsters no longer create extra guide pages after conversion.
+- The Deviljho book and other acquired-item unlocks no longer disappear merely
+  because their 32-bit word was interpreted in the wrong byte order.
 - Received cards and offline-hall partners cannot drift from the personal
   Hunter's Notes mapping.
 - Existing 0.0.5/0.0.6 saves remain detectable and can be repaired without
