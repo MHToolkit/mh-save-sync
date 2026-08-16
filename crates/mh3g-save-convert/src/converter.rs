@@ -6,8 +6,8 @@ use crate::{
     },
     revision::ConverterRevision,
     transforms::{
-        GuildCardBodyKind, apply_japanese_wiiu_corrections,
-        apply_japanese_wiiu_corrections_for_revision,
+        GuildCardBodyKind, apply_current_japanese_wiiu_guild_card_corrections,
+        apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_corrections_for_revision,
     },
 };
@@ -75,11 +75,29 @@ pub fn convert_external_component_to_cemu_named(
     source: &[u8],
     filename: &str,
 ) -> Result<Vec<u8>, ConversionError> {
-    convert_external_component_to_cemu_named_for_revision(
+    let mut output = convert_external_component_to_cemu_named_for_revision(
         source,
         filename,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+
+    // Historical replay remains byte-stable for compatibility detection.
+    // Current conversion layers official-transfer corrections over that
+    // output, just as the core user# path does.
+    let kind = match filename {
+        "card1" | "card2" | "card3" => Some(GuildCardBodyKind::Card),
+        "cardbox" => Some(GuildCardBodyKind::Cardbox),
+        "quest1" | "quest2" | "quest3" | "quest4" => None,
+        _ => unreachable!("revision conversion validated the component"),
+    };
+    if let Some(kind) = kind {
+        let source_payload = &source[JP_3DS_HEADER.len()..];
+        let target_payload =
+            &mut output[build_jp_cemu_header(filename, source_payload.len())?.len()..];
+        apply_current_japanese_wiiu_guild_card_corrections(kind, source_payload, target_payload)?;
+    }
+
+    Ok(output)
 }
 
 pub(crate) fn convert_external_component_to_cemu_named_for_revision(
@@ -488,31 +506,32 @@ mod tests {
     }
 
     #[test]
-    fn remaps_shakalaka_scalars_without_swapping_mask_state_bytes() {
+    fn matches_official_shakalaka_field_boundaries_for_both_companions() {
         let mut source = vec![0_u8; THREE_DS_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
 
-        // Each Shakalaka record starts with endian-sensitive numeric fields.
-        // Its six-byte mask state at relative 0xDE and tail beginning at 0xE6
-        // are byte-packed, while the intervening 0xE4 Lamp Mask mastery is a
-        // u16. Treating either packed region as u16 changes Cha-Cha's observed
-        // `01 09` state to `09 01` and makes the Wii U dialogue path consume
-        // invalid state; preserving the 0xE4 scalar leaves Lamp mastery at 0.
+        // Five paired official transfers establish one u32 prefix, u16 fields
+        // from relative 0x04 through 0xDE, and an entirely byte-packed
+        // mask/mastery block through relative 0x140. In particular, 0xE4 is
+        // not an isolated u16: swapping [0x18, 0x00] makes the companion status
+        // screen read zero and lets a quest completion write that zero back.
+        let cha_cha_prefix = 0x6F44;
+        let kayamba_prefix = 0x708C;
+        source[JP_3DS_HEADER.len() + cha_cha_prefix..JP_3DS_HEADER.len() + cha_cha_prefix + 12]
+            .copy_from_slice(&[
+                0x19, 0xC2, 0x0A, 0x00, 0x2F, 0x13, 0x2F, 0x01, 0x2C, 0x01, 0x3E, 0x01,
+            ]);
+        source[JP_3DS_HEADER.len() + kayamba_prefix..JP_3DS_HEADER.len() + kayamba_prefix + 12]
+            .copy_from_slice(&[
+                0x4C, 0xC6, 0x01, 0x00, 0x56, 0x02, 0x12, 0x00, 0xAA, 0x01, 0x00, 0x00,
+            ]);
+
         let cha_cha_scalar = 0x6F74;
         let kayamba_scalar = 0x70C8;
         let cha_cha_last_scalar = 0x7020;
         let kayamba_last_scalar = 0x7168;
         let cha_cha_mask_state = 0x7022;
         let kayamba_mask_state = 0x716A;
-        // The six bytes at relative 0xDE are packed mask state, but the
-        // following relative 0xE4 field is the Lamp Mask mastery scalar. It
-        // remains little-endian on 3DS and must be written big-endian for the
-        // Wii U title. Keeping the whole tail byte-preserved loses this one
-        // scalar and makes the equipped Lamp Mask display mastery 0.
-        let cha_cha_lamp_mask_mastery = 0x7028;
-        let kayamba_lamp_mask_mastery = 0x7170;
-        let cha_cha_tail_state = 0x702A;
-        let kayamba_tail_state = 0x7172;
         source[JP_3DS_HEADER.len() + cha_cha_scalar..JP_3DS_HEADER.len() + cha_cha_scalar + 2]
             .copy_from_slice(&[0x12, 0x34]);
         source[JP_3DS_HEADER.len() + kayamba_scalar..JP_3DS_HEADER.len() + kayamba_scalar + 2]
@@ -523,27 +542,37 @@ mod tests {
         source[JP_3DS_HEADER.len() + kayamba_last_scalar
             ..JP_3DS_HEADER.len() + kayamba_last_scalar + 2]
             .copy_from_slice(&[0xEF, 0x01]);
+        let mut cha_cha_packed = (0..0x62)
+            .map(|index| (index as u8).wrapping_mul(13).wrapping_add(5))
+            .collect::<Vec<_>>();
+        let mut kayamba_packed = (0..0x62)
+            .map(|index| (index as u8).wrapping_mul(17).wrapping_add(9))
+            .collect::<Vec<_>>();
+        // Exact non-palindromic bytes observed at relative 0xE4 in the paired
+        // Longwei sample. The official Wii U result keeps them unchanged.
+        cha_cha_packed[0xE4 - 0xDE..0xE6 - 0xDE].copy_from_slice(&[0x18, 0x00]);
+        kayamba_packed[0xE4 - 0xDE..0xE6 - 0xDE].copy_from_slice(&[0x08, 0x00]);
         source[JP_3DS_HEADER.len() + cha_cha_mask_state
-            ..JP_3DS_HEADER.len() + cha_cha_mask_state + 6]
-            .copy_from_slice(&[0x01, 0x09, 0x02, 0x05, 0x03, 0x07]);
+            ..JP_3DS_HEADER.len() + cha_cha_mask_state + cha_cha_packed.len()]
+            .copy_from_slice(&cha_cha_packed);
         source[JP_3DS_HEADER.len() + kayamba_mask_state
-            ..JP_3DS_HEADER.len() + kayamba_mask_state + 6]
-            .copy_from_slice(&[0x02, 0x05, 0x03, 0x07, 0x04, 0x09]);
-        source[JP_3DS_HEADER.len() + cha_cha_lamp_mask_mastery
-            ..JP_3DS_HEADER.len() + cha_cha_lamp_mask_mastery + 2]
-            .copy_from_slice(&[0x1E, 0x00]);
-        source[JP_3DS_HEADER.len() + kayamba_lamp_mask_mastery
-            ..JP_3DS_HEADER.len() + kayamba_lamp_mask_mastery + 2]
-            .copy_from_slice(&[0x08, 0x00]);
-        source[JP_3DS_HEADER.len() + cha_cha_tail_state
-            ..JP_3DS_HEADER.len() + cha_cha_tail_state + 2]
-            .copy_from_slice(&[0x0B, 0x00]);
-        source[JP_3DS_HEADER.len() + kayamba_tail_state
-            ..JP_3DS_HEADER.len() + kayamba_tail_state + 2]
-            .copy_from_slice(&[0x09, 0x0B]);
+            ..JP_3DS_HEADER.len() + kayamba_mask_state + kayamba_packed.len()]
+            .copy_from_slice(&kayamba_packed);
 
         let output = convert_3ds_to_cemu(&source).unwrap();
         let payload = &output[JP_CEMU_HEADER.len()..];
+        assert_eq!(
+            &payload[cha_cha_prefix..cha_cha_prefix + 12],
+            &[
+                0x00, 0x0A, 0xC2, 0x19, 0x13, 0x2F, 0x01, 0x2F, 0x01, 0x2C, 0x01, 0x3E
+            ]
+        );
+        assert_eq!(
+            &payload[kayamba_prefix..kayamba_prefix + 12],
+            &[
+                0x00, 0x01, 0xC6, 0x4C, 0x02, 0x56, 0x00, 0x12, 0x01, 0xAA, 0x00, 0x00
+            ]
+        );
         assert_eq!(&payload[cha_cha_scalar..cha_cha_scalar + 2], &[0x34, 0x12]);
         assert_eq!(&payload[kayamba_scalar..kayamba_scalar + 2], &[0xCD, 0xAB]);
         assert_eq!(
@@ -555,28 +584,12 @@ mod tests {
             &[0x01, 0xEF]
         );
         assert_eq!(
-            &payload[cha_cha_mask_state..cha_cha_mask_state + 6],
-            &[0x01, 0x09, 0x02, 0x05, 0x03, 0x07]
+            &payload[cha_cha_mask_state..cha_cha_mask_state + cha_cha_packed.len()],
+            cha_cha_packed
         );
         assert_eq!(
-            &payload[kayamba_mask_state..kayamba_mask_state + 6],
-            &[0x02, 0x05, 0x03, 0x07, 0x04, 0x09]
-        );
-        assert_eq!(
-            &payload[cha_cha_lamp_mask_mastery..cha_cha_lamp_mask_mastery + 2],
-            &[0x00, 0x1E]
-        );
-        assert_eq!(
-            &payload[kayamba_lamp_mask_mastery..kayamba_lamp_mask_mastery + 2],
-            &[0x00, 0x08]
-        );
-        assert_eq!(
-            &payload[cha_cha_tail_state..cha_cha_tail_state + 2],
-            &[0x0B, 0x00]
-        );
-        assert_eq!(
-            &payload[kayamba_tail_state..kayamba_tail_state + 2],
-            &[0x09, 0x0B]
+            &payload[kayamba_mask_state..kayamba_mask_state + kayamba_packed.len()],
+            kayamba_packed
         );
     }
 
@@ -755,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn remaps_discovery_bits_for_every_received_card_monster_record() {
+    fn remaps_source_owned_discovery_bits_for_every_received_card_monster_record() {
         let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
         source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
         let body = &mut source[JP_3DS_HEADER.len()..];
@@ -767,10 +780,9 @@ mod tests {
         let last_card_row = 97 * 0xE00 + 0x7C0 + 38 * 10;
         body[last_card_row..last_card_row + 10]
             .copy_from_slice(&[0x0E, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64, 0x00, 0x01, 0x00]);
-        // Some real received cards have a non-zero hunt count but no low
-        // discovery flag. The personal-record converter treats that count as
-        // sufficient evidence that the record is displayable; card records
-        // must use the same rule.
+        // Official transfers keep a row hidden when its source discovery flag
+        // is clear, even if the received card contains non-zero hunt counts.
+        // Inferring visibility from counters creates phantom guide pages.
         let last_card_unflagged_row = last_card_row + 10;
         body[last_card_unflagged_row..last_card_unflagged_row + 10]
             .copy_from_slice(&[0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00, 0x00]);
@@ -784,7 +796,7 @@ mod tests {
         );
         assert_eq!(
             &payload[last_card_unflagged_row..last_card_unflagged_row + 10],
-            &[0x00, 0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x80, 0x00]
+            &[0x00, 0x09, 0x00, 0x03, 0x00, 0x64, 0x00, 0x64, 0x00, 0x00]
         );
     }
 

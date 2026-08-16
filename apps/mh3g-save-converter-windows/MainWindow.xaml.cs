@@ -499,18 +499,31 @@ public sealed partial class MainWindow : Window
 
     private void SkipOptional_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.CommitRepairOptionalScope(skip: true))
-        {
-            ShowConvertStep(ConvertStep.DryRun);
-        }
+        ContinueFromOptional(skip: true);
     }
 
     private void ContinueToDryRun_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.CommitRepairOptionalScope(skip: false))
+        ContinueFromOptional(skip: false);
+    }
+
+    private void ContinueFromOptional(bool skip)
+    {
+        if (!ViewModel.CommitRepairOptionalScope(skip))
+        {
+            return;
+        }
+
+        if (ViewModel.CanRunCoreDryRun)
         {
             ShowConvertStep(ConvertStep.DryRun);
+            return;
         }
+
+        // Defensive recovery: never expose the Dry Run page with a disabled
+        // action after an unexpected state mismatch. The input page carries
+        // the actionable inspection gate.
+        ShowConvertStep(ConvertStep.Input);
     }
 
     private void StartConversion_Click(object sender, RoutedEventArgs e)

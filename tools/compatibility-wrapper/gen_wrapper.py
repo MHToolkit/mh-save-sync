@@ -6,7 +6,7 @@ native_transforms = (ROOT / 'crates/mh3g-save-convert/src/transforms.rs').read_t
 native_markers = (
     'const SHAKALAKA_MASK_STATE_START: usize = 0xDE;',
     'const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;',
-    'fn apply_shakalaka_companion_corrections(',
+    'fn apply_current_shakalaka_companion_corrections(',
     'fn apply_guild_card_arena_corrections(',
 )
 if all(marker in native_transforms for marker in native_markers):

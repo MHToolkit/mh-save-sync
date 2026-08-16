@@ -68,8 +68,7 @@ USER_MONSTER_LOG_STRIDE = 10
 SHAKALAKA_RECORD_START = 0x6F44
 SHAKALAKA_RECORD_COUNT = 2
 SHAKALAKA_RECORD_STRIDE = 0x148
-SHAKALAKA_MASK_STATE_START = 0xDE
-SHAKALAKA_LAMP_MASK_MASTERY_END = 0xE6
+SHAKALAKA_CONFIRMED_SCHEMA_END = 0x140
 CARD_MONSTER_LOG_START = 0x7C0
 CARD_MONSTER_LOG_COUNT = 50
 CARD_MONSTER_LOG_STRIDE = 10
@@ -125,7 +124,7 @@ def compatibility_repair_offsets(name: str) -> set[int]:
                 + SHAKALAKA_RECORD_START
                 + companion * SHAKALAKA_RECORD_STRIDE
             )
-            offsets.update(range(start, start + SHAKALAKA_LAMP_MASK_MASTERY_END))
+            offsets.update(range(start, start + SHAKALAKA_CONFIRMED_SCHEMA_END))
     elif name in {"card1", "card2", "card3"}:
         for slot in range(CARD_SLOT_COUNT):
             start = CEMU_HEADER_SIZE + slot * CARD_SLOT_SIZE

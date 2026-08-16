@@ -27,4 +27,12 @@ for size in ("1120x760", "920x600"):
             uia = args.evidence_dir / f"{fixture}-{size}-{motion}-uia.json"
             if not png.is_file() or png.stat().st_size < 1000: raise SystemExit(f"missing screenshot {png.name}")
             if not uia.is_file(): raise SystemExit(f"missing UIA tree {uia.name}")
+            if fixture == "dry-run.ready":
+                nodes = json.loads(uia.read_text(encoding="utf-8-sig"))
+                report = next(
+                    (node for node in nodes if node.get("id") == "mh3g.converter.windows.details.dryRun.report"),
+                    None,
+                )
+                if report is None or '"status":"dry-run"' not in (report.get("value") or ""):
+                    raise SystemExit(f"expanded Dry Run technical report is missing from {uia.name}")
 print("Native Windows UI evidence is complete and artifact/commit bound.")

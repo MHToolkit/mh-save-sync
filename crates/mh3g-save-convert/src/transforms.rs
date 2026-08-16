@@ -25,13 +25,27 @@ const CURRENT_EQUIPMENT_START: usize = 31280;
 const CURRENT_EQUIPMENT_COUNT: usize = 7;
 const EQUIPMENT_STRIDE: usize = 16;
 const SECOND_RGBA_OFFSET: usize = 0x73E4;
-// Five independently paired 3DS -> Wii U official-transfer saves agree that
-// this is a contiguous table of 48 endian-sensitive monster-guide records.
-// Leaving the little-endian words untouched makes unlocked guide details look
-// incomplete on Wii U even though the source slot contains them.
-const MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
-const MONSTER_GUIDE_RECORD_COUNT: usize = 48;
-const MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+// The monster-list/book state is a byte-packed 28-byte array on both
+// platforms. Five paired official transfers preserve every byte verbatim.
+// Treating its tail as u16 lanes moves the final 0x00 byte from 0x577B to
+// 0x577A; in the Yoruaski sample that suppresses Deviljho from the list even
+// though both the acquired-book bit and the personal monster record are set.
+const MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
+const MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
+// The Wii U executable indexes this region as a 1536-bit item-acquisition
+// bitset: item_id >> 5 selects one of 48 u32 words and item_id & 31 selects the
+// bit inside that word. Five independently paired official transfers agree
+// that every word changes from 3DS little endian to Wii U big endian.
+//
+// This is not a table of 48 monster records. One user-visible consequence of
+// getting the word order wrong is losing item 0x4F8 (the Deviljho book), which
+// removes the ninth page from Hunter's Notes even though the 3DS source owns
+// the book.
+const ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
+const ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
+const ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
+#[cfg(test)]
+const DEVILJHO_BOOK_ITEM_ID: usize = 0x4F8;
 // These appearance scalars and the adjacent RGBA value are serialized as
 // little-endian four-byte values on 3DS and big-endian values on Wii U. The
 // older static table covered only the scalar at 0x73C4 and the later RGBA
@@ -58,17 +72,25 @@ const FARM_FELYNE_SLOTS_START: usize = 0x6144;
 const HUNTING_FLEET_SHIP_COUNT_START: usize = 0x5BC6;
 const HUNTING_FLEET_SHIP_COUNT_END: usize = HUNTING_FLEET_SHIP_COUNT_START + 2;
 const HUNTING_FLEET_DISPATCH_RECORD_START: usize = 0x5D18;
-// Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Each
-// starts with three u32 header fields and endian-sensitive u16 scalars. The
-// six bytes at relative 0xDE are packed mask state and must retain their byte
-// order. The immediately following relative 0xE4 Lamp Mask mastery is still a
-// u16 scalar, then the byte-packed tail resumes at 0xE6.
+// Cha-Cha and Kayamba have two adjacent, fixed-width companion records. Five
+// independently paired 3DS -> Wii U transfers agree on the field boundaries
+// through relative 0x140: one u32 prefix, u16 scalars through 0xDE, then a
+// byte-packed mask/mastery block which must retain its exact byte order.
+//
+// Releases through 0.0.18 inherited two narrower schema assumptions from the
+// recovered transfer table: offsets 0x04..0x0B were treated as two u32 values,
+// and relative 0xE4 was treated as an isolated u16. Both assumptions disagree
+// with every paired transfer. In particular, swapping the packed bytes at
+// 0xE4 puts zero in the field read by the companion status screen; a quest
+// completion can then serialize that zero back over the mask record.
 const SHAKALAKA_RECORD_START: usize = 0x6F44;
 const SHAKALAKA_RECORD_COUNT: usize = 2;
 const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
-const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const HISTORICAL_SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const SHAKALAKA_U32_PREFIX_SIZE: usize = 0x04;
 const SHAKALAKA_MASK_STATE_START: usize = 0xDE;
-const SHAKALAKA_LAMP_MASK_MASTERY_START: usize = 0xE4;
+const HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET: usize = 0xE4;
+const SHAKALAKA_MASK_STATE_END: usize = 0x140;
 const OFFLINE_HUNTER_EQUIPMENT_CACHE_START: usize = 0x75B0;
 const OFFLINE_HUNTER_HEADER_START: usize = 0x75E0;
 const OFFLINE_HUNTER_COUNT: usize = 6;
@@ -350,16 +372,14 @@ fn transform_crown(source: &[u8], target: &mut [u8], offset: usize) -> Result<()
     Ok(())
 }
 
-/// Apply the single authoritative cross-platform Hunter's Notes visibility
-/// mapping.
+/// Reproduce the historical 0.0.5/0.0.6 Hunter's Notes visibility rule.
 ///
-/// The three storage locations (the player's own profile, received guild-card
-/// files, and CEC/offline-hall partner cards) have different physical offsets,
-/// but they encode the same semantics: 3DS discovery/crown state at
-/// `state_offset`, plus little-endian slay/capture counters.  Wii U consumes
-/// the converted state byte and only renders a monster name when bit `0x80` is
-/// set. Keeping this rule here prevents those three import paths drifting.
-fn apply_hunter_notes_display_state(
+/// Released converters inferred discovery from non-zero hunt counters. Keep
+/// that behavior isolated here so compatibility repair can still recognize
+/// their byte output. Current conversion must not use it: paired official
+/// transfers prove that an undiscovered row remains hidden even when its
+/// counters are non-zero.
+fn apply_historical_hunter_notes_display_state(
     source: &[u8],
     target: &mut [u8],
     slay_offset: usize,
@@ -385,6 +405,20 @@ fn apply_hunter_notes_display_state(
     }
 
     Ok(())
+}
+
+/// Apply the authoritative current Hunter's Notes state mapping.
+///
+/// Personal records, received guild cards, and CEC/offline-hall partner cards
+/// all use the same source-owned discovery/crown byte. Official transfer pairs
+/// preserve that state independently of hunt counters, so visibility must be
+/// derived only from this byte.
+fn apply_current_hunter_notes_display_state(
+    source: &[u8],
+    target: &mut [u8],
+    state_offset: usize,
+) -> Result<(), ConversionError> {
+    transform_crown(source, target, state_offset)
 }
 
 fn apply_guild_card_monster_log_corrections(
@@ -427,7 +461,7 @@ fn apply_guild_card_monster_log_slot_corrections(
         }
 
         if revision >= ConverterRevision::V0_0_5 {
-            apply_hunter_notes_display_state(
+            apply_historical_hunter_notes_display_state(
                 source,
                 target,
                 record_start,
@@ -437,6 +471,33 @@ fn apply_guild_card_monster_log_slot_corrections(
         }
     }
 
+    Ok(())
+}
+
+fn apply_current_guild_card_monster_log_slot_corrections(
+    source: &[u8],
+    target: &mut [u8],
+    slot_start: usize,
+) -> Result<(), ConversionError> {
+    for row in 0..GUILD_CARD_MONSTER_LOG_COUNT {
+        let state_offset =
+            slot_start + GUILD_CARD_MONSTER_LOG_START + row * GUILD_CARD_MONSTER_LOG_STRIDE + 8;
+        apply_current_hunter_notes_display_state(source, target, state_offset)?;
+    }
+    Ok(())
+}
+
+fn apply_current_guild_card_monster_log_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        apply_current_guild_card_monster_log_slot_corrections(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE,
+        )?;
+    }
     Ok(())
 }
 
@@ -602,7 +663,8 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         source,
         target,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+    apply_current_guild_card_monster_log_slot_corrections(source, target, 0)
 }
 
 pub(crate) fn apply_japanese_wiiu_guild_card_slot_corrections_for_revision(
@@ -696,7 +758,30 @@ pub fn apply_japanese_wiiu_guild_card_corrections(
         source,
         target,
         ConverterRevision::LAST_HISTORICAL,
-    )
+    )?;
+    apply_current_japanese_wiiu_guild_card_corrections(kind, source, target)
+}
+
+pub(crate) fn apply_current_japanese_wiiu_guild_card_corrections(
+    kind: GuildCardBodyKind,
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    let expected_size = match kind {
+        GuildCardBodyKind::Card => CARD_BODY_SIZE,
+        GuildCardBodyKind::Cardbox => CARDBOX_BODY_SIZE,
+    };
+    if source.len() != expected_size || target.len() != expected_size {
+        return Err(ConversionError::InvalidSave(format!(
+            "MH3G {kind:?} body must be {expected_size} bytes, got source {} and target {}",
+            source.len(),
+            target.len()
+        )));
+    }
+    if kind == GuildCardBodyKind::Card {
+        apply_current_guild_card_monster_log_corrections(source, target)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn apply_japanese_wiiu_guild_card_corrections_for_revision(
@@ -791,7 +876,7 @@ fn apply_confirmed_numeric_and_record_corrections(
 
         let discovery_offset = 0x81B4 + index * 10 + 8;
         if revision >= ConverterRevision::V0_0_5 {
-            apply_hunter_notes_display_state(
+            apply_historical_hunter_notes_display_state(
                 source,
                 target,
                 slay_offset,
@@ -865,7 +950,7 @@ fn apply_confirmed_numeric_and_record_corrections(
     Ok(())
 }
 
-fn apply_shakalaka_companion_corrections(
+fn apply_historical_shakalaka_companion_corrections(
     source: &[u8],
     target: &mut [u8],
     revision: ConverterRevision,
@@ -873,25 +958,52 @@ fn apply_shakalaka_companion_corrections(
     for companion in 0..SHAKALAKA_RECORD_COUNT {
         let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
 
-        for relative in (0..SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
+        for relative in (0..HISTORICAL_SHAKALAKA_U32_HEADER_SIZE).step_by(4) {
             copy_reversed(source, target, record_start + relative, 4)?;
         }
         let scalar_end = if revision == ConverterRevision::V0_0_4 {
-            SHAKALAKA_LAMP_MASK_MASTERY_START + 2
+            HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET + 2
         } else {
             SHAKALAKA_MASK_STATE_START
         };
-        for relative in (SHAKALAKA_U32_HEADER_SIZE..scalar_end).step_by(2) {
+        for relative in (HISTORICAL_SHAKALAKA_U32_HEADER_SIZE..scalar_end).step_by(2) {
             copy_reversed(source, target, record_start + relative, 2)?;
         }
         if revision >= ConverterRevision::V0_0_6 {
             copy_reversed(
                 source,
                 target,
-                record_start + SHAKALAKA_LAMP_MASK_MASTERY_START,
+                record_start + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET,
                 2,
             )?;
         }
+    }
+
+    Ok(())
+}
+
+/// Reassert the companion schema proven by paired official transfers.
+///
+/// This is intentionally layered after the historical converter replay. The
+/// historical function above must stay byte-reproducible so compatibility
+/// repair can still recognize 0.0.3-0.0.6 output, while current conversion
+/// must use the corrected field boundaries.
+fn apply_current_shakalaka_companion_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for companion in 0..SHAKALAKA_RECORD_COUNT {
+        let record_start = SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
+
+        copy_reversed(source, target, record_start, SHAKALAKA_U32_PREFIX_SIZE)?;
+        for relative in (SHAKALAKA_U32_PREFIX_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
+            copy_reversed(source, target, record_start + relative, 2)?;
+        }
+        target[record_start + SHAKALAKA_MASK_STATE_START..record_start + SHAKALAKA_MASK_STATE_END]
+            .copy_from_slice(
+                &source[record_start + SHAKALAKA_MASK_STATE_START
+                    ..record_start + SHAKALAKA_MASK_STATE_END],
+            );
     }
 
     Ok(())
@@ -907,12 +1019,25 @@ fn apply_current_official_transfer_corrections(
     source: &[u8],
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
-    for record in 0..MONSTER_GUIDE_RECORD_COUNT {
+    apply_current_shakalaka_companion_corrections(source, target)?;
+
+    target[MONSTER_GUIDE_PACKED_STATE_START
+        ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+        .copy_from_slice(
+            &source[MONSTER_GUIDE_PACKED_STATE_START
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
+        );
+
+    for index in 0..MONSTER_IDS.len() {
+        apply_current_hunter_notes_display_state(source, target, 0x81B4 + index * 10 + 8)?;
+    }
+
+    for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
         copy_reversed(
             source,
             target,
-            MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE,
-            MONSTER_GUIDE_RECORD_STRIDE,
+            ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE,
+            ITEM_ACQUIRED_BITSET_WORD_SIZE,
         )?;
     }
 
@@ -1031,11 +1156,12 @@ pub(crate) fn apply_japanese_wiiu_corrections_for_revision(
         target[offset] = source[offset];
     }
 
-    // The compatibility operation list covers only a subset of the numeric
-    // Cha-Cha/Kayamba fields. Reassert the bounded numeric prefix and the
-    // isolated Lamp Mask mastery scalar while preserving the packed state.
+    // Replay the exact historical Cha-Cha/Kayamba behavior here. Current
+    // conversion corrects its field boundaries only in
+    // `apply_current_official_transfer_corrections`, after the historical
+    // result has been kept available for compatibility detection.
     if revision >= ConverterRevision::V0_0_4 {
-        apply_shakalaka_companion_corrections(source, target, revision)?;
+        apply_historical_shakalaka_companion_corrections(source, target, revision)?;
     }
 
     // These fields are read as big-endian values by the Wii U title. MEOW v5
@@ -1058,12 +1184,13 @@ mod tests {
     };
 
     use super::{
-        EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE, MONSTER_GUIDE_RECORD_COUNT,
-        MONSTER_GUIDE_RECORD_START, MONSTER_GUIDE_RECORD_STRIDE, MONSTER_IDS,
-        PLAYER_APPEARANCE_PACKED_STYLE_OFFSET, PLAYER_APPEARANCE_RGBA_OFFSET,
-        PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START, SECOND_RGBA_OFFSET,
-        apply_arena_records, apply_endian_swaps, apply_japanese_wiiu_corrections,
-        apply_japanese_wiiu_corrections_for_revision,
+        DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE,
+        ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
+        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_GUIDE_PACKED_STATE_LEN,
+        MONSTER_GUIDE_PACKED_STATE_START, MONSTER_IDS, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
+        PLAYER_APPEARANCE_RGBA_OFFSET, PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START,
+        SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
+        apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_slot_corrections, apply_monster_discovery,
     };
     use crate::revision::ConverterRevision;
@@ -1226,16 +1353,16 @@ mod tests {
     }
 
     #[test]
-    fn current_corrections_swap_every_official_monster_guide_record() {
+    fn current_corrections_swap_every_item_acquisition_word() {
         let mut source = vec![0_u8; PAYLOAD_SIZE];
-        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
-            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
-            let value = 0x1020_3000_u32 + record as u32;
+        for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
+            let offset = ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE;
+            let value = 0x1020_3000_u32 + word as u32;
             source[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        source[MONSTER_GUIDE_RECORD_START - 1] = 0x5A;
-        source[MONSTER_GUIDE_RECORD_START
-            + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE] = 0xA5;
+        source[ITEM_ACQUIRED_BITSET_START - 1] = 0x5A;
+        source[ITEM_ACQUIRED_BITSET_START
+            + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE] = 0xA5;
 
         let mut historical = source.clone();
         apply_japanese_wiiu_corrections_for_revision(
@@ -1247,8 +1374,8 @@ mod tests {
         let mut current = source.clone();
         apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
 
-        for record in 0..MONSTER_GUIDE_RECORD_COUNT {
-            let offset = MONSTER_GUIDE_RECORD_START + record * MONSTER_GUIDE_RECORD_STRIDE;
+        for word in 0..ITEM_ACQUIRED_BITSET_WORD_COUNT {
+            let offset = ITEM_ACQUIRED_BITSET_START + word * ITEM_ACQUIRED_BITSET_WORD_SIZE;
             assert_eq!(
                 &current[offset..offset + 4],
                 &source[offset..offset + 4]
@@ -1256,7 +1383,7 @@ mod tests {
                     .rev()
                     .copied()
                     .collect::<Vec<_>>(),
-                "monster-guide record {record}"
+                "item-acquisition word {word}"
             );
             assert_eq!(
                 &historical[offset..offset + 4],
@@ -1265,14 +1392,68 @@ mod tests {
             );
         }
         assert_eq!(
-            current[MONSTER_GUIDE_RECORD_START - 1],
-            historical[MONSTER_GUIDE_RECORD_START - 1]
+            current[ITEM_ACQUIRED_BITSET_START - 1],
+            historical[ITEM_ACQUIRED_BITSET_START - 1]
         );
         assert_eq!(
-            current[MONSTER_GUIDE_RECORD_START
-                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE],
-            historical[MONSTER_GUIDE_RECORD_START
-                + MONSTER_GUIDE_RECORD_COUNT * MONSTER_GUIDE_RECORD_STRIDE]
+            current[ITEM_ACQUIRED_BITSET_START
+                + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE],
+            historical[ITEM_ACQUIRED_BITSET_START
+                + ITEM_ACQUIRED_BITSET_WORD_COUNT * ITEM_ACQUIRED_BITSET_WORD_SIZE]
+        );
+    }
+
+    #[test]
+    fn current_corrections_preserve_deviljho_book_unlock_bit() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let word_index = DEVILJHO_BOOK_ITEM_ID >> 5;
+        let bit_index = DEVILJHO_BOOK_ITEM_ID & 31;
+        let offset = ITEM_ACQUIRED_BITSET_START + word_index * ITEM_ACQUIRED_BITSET_WORD_SIZE;
+
+        // Observed in the Yoruaski 3DS source: this word owns the Deviljho
+        // book (bit 24) and the preceding book (bit 23), while the dummy item
+        // at bit 15 remains absent.
+        let source_word = 0xFFFF_7FFE_u32;
+        source[offset..offset + 4].copy_from_slice(&source_word.to_le_bytes());
+
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+        let current_word = u32::from_be_bytes(current[offset..offset + 4].try_into().unwrap());
+
+        assert_eq!(&current[offset..offset + 4], &[0xFF, 0xFF, 0x7F, 0xFE]);
+        assert_eq!(current_word, source_word);
+        assert_ne!(current_word & (1 << bit_index), 0, "Deviljho book");
+        assert_ne!(current_word & (1 << (bit_index - 1)), 0, "preceding book");
+        assert_eq!(current_word & (1 << 15), 0, "dummy item");
+    }
+
+    #[test]
+    fn current_corrections_preserve_monster_guide_packed_state_bytes() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[MONSTER_GUIDE_PACKED_STATE_START
+            ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+            .fill(0xFF);
+        source[MONSTER_GUIDE_PACKED_STATE_START] = 0x02;
+        source[MONSTER_GUIDE_PACKED_STATE_START + 1] = 0x00;
+        source[MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN - 1] = 0x00;
+
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        let range = MONSTER_GUIDE_PACKED_STATE_START
+            ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN;
+        assert_eq!(&current[range.clone()], &source[range]);
+        assert_eq!(
+            &historical[MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN - 4
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
+            &[0xFF, 0xFF, 0x00, 0xFF]
         );
     }
 
@@ -1349,6 +1530,7 @@ mod tests {
         source[capture_offset..capture_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
         source[size_offset..size_offset + 2].copy_from_slice(&100_u16.to_le_bytes());
         source[size_offset + 2..size_offset + 4].copy_from_slice(&112_u16.to_le_bytes());
+        source[discovery_offset] = 0x01;
         let mut target = source.clone();
 
         apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
@@ -1374,6 +1556,49 @@ mod tests {
             112
         );
         assert_ne!(target[discovery_offset] & 0x80, 0);
+    }
+
+    #[test]
+    fn current_hunter_notes_do_not_infer_discovery_from_hunt_counts() {
+        const MONSTER_INDEX: usize = 2;
+        const MONSTER_ID: usize = 0x2D;
+
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let slay_offset = 0x5784 + MONSTER_ID * 2;
+        let capture_offset = 0x5884 + MONSTER_ID * 2;
+        let discovery_offset = 0x81B4 + MONSTER_INDEX * 10 + 8;
+        source[slay_offset..slay_offset + 2].copy_from_slice(&9_u16.to_le_bytes());
+        source[capture_offset..capture_offset + 2].copy_from_slice(&3_u16.to_le_bytes());
+
+        let mut target = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        assert_eq!(target[discovery_offset], 0x00);
+        assert_eq!(MONSTER_IDS[MONSTER_INDEX], MONSTER_ID);
+    }
+
+    #[test]
+    fn historical_hunter_notes_replay_keeps_released_counter_inference() {
+        const MONSTER_INDEX: usize = 2;
+        const MONSTER_ID: usize = 0x2D;
+
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let slay_offset = 0x5784 + MONSTER_ID * 2;
+        let discovery_offset = 0x81B4 + MONSTER_INDEX * 10 + 8;
+        source[slay_offset..slay_offset + 2].copy_from_slice(&1_u16.to_le_bytes());
+
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        assert_eq!(historical[discovery_offset], 0x80);
+
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+        assert_eq!(current[discovery_offset], 0x00);
     }
 
     #[test]

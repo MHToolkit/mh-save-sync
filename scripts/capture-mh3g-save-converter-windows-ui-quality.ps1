@@ -58,6 +58,18 @@ foreach ($fixture in $fixtures) {
         $windowPattern = $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
         $windowPattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
 
+        if ($fixture -eq "dry-run.ready") {
+            $detailsCondition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+                "mh3g.converter.windows.details.dryRun"
+            )
+            $details = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $detailsCondition)
+            if ($null -eq $details) { throw "Missing Dry Run technical-details expander" }
+            $expandPattern = $details.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+            $expandPattern.Expand()
+            Start-Sleep -Milliseconds 200
+        }
+
         $bounds = $root.Current.BoundingRectangle
         if ([Math]::Abs($bounds.Width - $width) -gt 16 -or [Math]::Abs($bounds.Height - $height) -gt 16) {
             throw "Window did not reach requested $WindowSize for $fixture: $($bounds.Width)x$($bounds.Height)"
@@ -73,9 +85,16 @@ foreach ($fixture in $fixtures) {
             [System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.Condition]::TrueCondition
         ) | ForEach-Object {
+            $value = $null
+            try {
+                $valuePattern = $_.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                $value = $valuePattern.Current.Value
+            }
+            catch { }
             [ordered]@{
                 id = $_.Current.AutomationId
                 name = $_.Current.Name
+                value = $value
                 type = $_.Current.ControlType.ProgrammaticName
                 enabled = $_.Current.IsEnabled
                 focusable = $_.Current.IsKeyboardFocusable
@@ -85,6 +104,12 @@ foreach ($fixture in $fixtures) {
         $ids = @($nodes | ForEach-Object { $_.id } | Where-Object { $_ })
         if (($ids | Select-Object -Unique).Count -ne $ids.Count) { throw "Duplicate AutomationId in $fixture" }
         foreach ($id in $requiredIds) { if ($ids -notcontains $id) { throw "Missing $id in $fixture" } }
+        if ($fixture -eq "dry-run.ready") {
+            $report = $nodes | Where-Object { $_.id -eq "mh3g.converter.windows.details.dryRun.report" }
+            if ($null -eq $report -or $report.value -notmatch '"status":"dry-run"') {
+                throw "Expanded Dry Run technical details did not expose the synthetic report"
+            }
+        }
 
         $uiaPath = Join-Path $OutputDirectory "$fixture-$WindowSize-$Motion-uia.json"
         $nodes | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 $uiaPath

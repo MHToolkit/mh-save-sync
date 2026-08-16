@@ -141,14 +141,18 @@ second.
 | `system` | `0x3000` | `system` | `0x3024` | `convert-system` |
 
 Provide it only when the migration explicitly includes the housekeeper
-gallery/movie history. `system` is shared across all three character slots and
-also holds settings that are not owned by the selected slot. The command must
-therefore receive both a 3DS source and an existing initialized Cemu target. It
-recognizes the `0x3000` 3DS and `0x3024` Cemu profiles, bitwise-unions only the
-verified gallery/movie flag range (Cemu file offsets `0x68..0x77`), and
-preserves the Cemu header and every other target byte. A missing or malformed
-Cemu baseline is rejected. Omitting this transaction leaves Cemu `system`
-untouched, so a core-slot conversion alone cannot fill missing gallery entries.
+gallery/movie history. Each title/account exposes one physical `system` rather
+than separate per-slot system files. Current evidence cannot attribute every
+flag inside it to `user1`, `user2`, or `user3`, and it also holds settings that
+are not owned by the selected slot. The command must therefore receive both a
+3DS source and an existing initialized Cemu target. It recognizes the `0x3000`
+3DS and `0x3024` Cemu profiles, bitwise-unions only the currently mapped
+gallery/movie flag range (Cemu file offsets `0x68..0x77`), and preserves the
+Cemu header and every other target byte. A missing or malformed Cemu baseline
+is rejected. Omitting this transaction leaves Cemu `system` untouched, so a
+core-slot conversion alone cannot fill missing gallery entries. This narrow,
+synthetic-tested merge is not evidence that every `system` bit is officially
+transferred or runtime-verified.
 
 ### Optional Shared Extdata
 
@@ -247,6 +251,11 @@ the eight-byte anchors preserved in `user#` match anchors in converted card
 slots.  Therefore a migration intended to retain already received cards and
 their offline-hall partners must retain both sides: the chosen `user#` and all
 four card components.
+
+Personal, received-card, and CEC partner monster discovery uses one shared
+state-only mapping. Slay/capture counters are converted as numeric fields but
+never synthesize the Wii U visibility bit; paired official transfers prove
+that counter-bearing rows can remain undiscovered.
 
 There is no evidence-backed safe rule for selecting only one `card#` file for
 that result.  Treat all four as one installation group.  Conversely, CEC is

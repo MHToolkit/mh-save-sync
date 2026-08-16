@@ -19,8 +19,27 @@ with tempfile.TemporaryDirectory(prefix="mh3g-ui-negative-") as raw:
     result = run([sys.executable, "scripts/verify-mh3g-save-converter-windows-ui-quality.py"], temp)
     if result.returncode == 0: raise SystemExit("missing primary action ID mutation was not rejected")
 
+    xaml.write_text(original.replace('Text="{Binding Copy.ResultEmpty}"', "", 1), encoding="utf-8")
+    result = run([sys.executable, "scripts/verify-mh3g-save-converter-windows-source.py"], temp)
+    if result.returncode == 0: raise SystemExit("blank technical-details mutation was not rejected")
+    xaml.write_text(original, encoding="utf-8")
+
+    view_model = temp / "apps/mh3g-save-converter-windows/ViewModels/MainViewModel.cs"
+    original_view_model = view_model.read_text(encoding="utf-8")
+    view_model.write_text(
+        original_view_model.replace(
+            "InvalidateCoreWriteAuthorizationPreservingInspection();",
+            "InvalidateCoreAuthorization();",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    result = run([sys.executable, "scripts/verify-mh3g-save-converter-windows-source.py"], temp)
+    if result.returncode == 0: raise SystemExit("repair optional-state reset mutation was not rejected")
+    view_model.write_text(original_view_model, encoding="utf-8")
+
     contract = temp / ".ui-os/design/FROZEN_CONTRACT.md"
-    contract.write_text(contract.read_text(encoding="utf-8").replace("920×600", "", 1), encoding="utf-8")
+    contract.write_text(contract.read_text(encoding="utf-8").replace("920×600", ""), encoding="utf-8")
     result = run([sys.executable, "scripts/verify-mh3g-save-converter-windows-ui-quality.py"], temp)
     if result.returncode == 0: raise SystemExit("minimum-window contract mutation was not rejected")
 

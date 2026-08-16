@@ -19,9 +19,11 @@ const ARENA_RECORD_STRIDE: usize = 4;
 const SHAKALAKA_RECORD_START: usize = 0x6F44;
 const SHAKALAKA_RECORD_COUNT: usize = 2;
 const SHAKALAKA_RECORD_STRIDE: usize = 0x148;
-const SHAKALAKA_U32_HEADER_SIZE: usize = 0x0C;
+const SHAKALAKA_U32_PREFIX_SIZE: usize = 0x04;
 const SHAKALAKA_MASK_STATE_START: usize = 0xDE;
-const SHAKALAKA_LAMP_MASK_MASTERY_START: usize = 0xE4;
+const SHAKALAKA_MASK_STATE_END: usize = 0x140;
+#[cfg(test)]
+const HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET: usize = 0xE4;
 const USER_MONSTER_LOG_START: usize = 0x81B4;
 const USER_MONSTER_LOG_COUNT: usize = 50;
 const USER_MONSTER_LOG_STRIDE: usize = 10;
@@ -32,9 +34,11 @@ const GUILD_CARD_ARENA_RECORD_COUNT: usize = 110;
 const GUILD_CARD_MONSTER_LOG_START: usize = 0x7C0;
 const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
-const USER_MONSTER_GUIDE_RECORD_START: usize = 0x65C4;
-const USER_MONSTER_GUIDE_RECORD_COUNT: usize = 48;
-const USER_MONSTER_GUIDE_RECORD_STRIDE: usize = 4;
+const USER_MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
+const USER_MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
+const USER_ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
+const USER_ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
+const USER_ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
 const USER_APPEARANCE_SCALAR_OFFSETS: [usize; 3] = [0x73B8, 0x73BC, 0x73C8];
 const USER_APPEARANCE_PACKED_STYLE_OFFSET: usize = 0x73D0;
 const USER_APPEARANCE_RGBA_OFFSET: usize = 0x73D8;
@@ -436,13 +440,20 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
     let mut fields = Vec::new();
     match filename {
         "user1" | "user2" | "user3" => {
-            for record in 0..USER_MONSTER_GUIDE_RECORD_COUNT {
+            for byte in 0..USER_MONSTER_GUIDE_PACKED_STATE_LEN {
                 fields.push(FieldSpec {
-                    name: format!("monster-guide-record-{record}"),
+                    name: format!("monster-guide-packed-state-byte-{byte}"),
+                    offset: header + USER_MONSTER_GUIDE_PACKED_STATE_START + byte,
+                    width: 1,
+                });
+            }
+            for word in 0..USER_ITEM_ACQUIRED_BITSET_WORD_COUNT {
+                fields.push(FieldSpec {
+                    name: format!("item-acquired-word-{word}"),
                     offset: header
-                        + USER_MONSTER_GUIDE_RECORD_START
-                        + record * USER_MONSTER_GUIDE_RECORD_STRIDE,
-                    width: USER_MONSTER_GUIDE_RECORD_STRIDE,
+                        + USER_ITEM_ACQUIRED_BITSET_START
+                        + word * USER_ITEM_ACQUIRED_BITSET_WORD_SIZE,
+                    width: USER_ITEM_ACQUIRED_BITSET_WORD_SIZE,
                 });
             }
             for (index, offset) in USER_APPEARANCE_SCALAR_OFFSETS.into_iter().enumerate() {
@@ -478,30 +489,25 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
             }
             for companion in 0..SHAKALAKA_RECORD_COUNT {
                 let start = header + SHAKALAKA_RECORD_START + companion * SHAKALAKA_RECORD_STRIDE;
-                for field in 0..3 {
-                    fields.push(FieldSpec {
-                        name: format!("shakalaka-{companion}-header-{field}"),
-                        offset: start + field * 4,
-                        width: 4,
-                    });
-                }
-                for relative in (SHAKALAKA_U32_HEADER_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
+                fields.push(FieldSpec {
+                    name: format!("shakalaka-{companion}-u32-prefix"),
+                    offset: start,
+                    width: SHAKALAKA_U32_PREFIX_SIZE,
+                });
+                for relative in (SHAKALAKA_U32_PREFIX_SIZE..SHAKALAKA_MASK_STATE_START).step_by(2) {
                     fields.push(FieldSpec {
                         name: format!("shakalaka-{companion}-scalar-{relative:03x}"),
                         offset: start + relative,
                         width: 2,
                     });
                 }
-                fields.push(FieldSpec {
-                    name: format!("shakalaka-{companion}-mask-state"),
-                    offset: start + SHAKALAKA_MASK_STATE_START,
-                    width: SHAKALAKA_LAMP_MASK_MASTERY_START - SHAKALAKA_MASK_STATE_START,
-                });
-                fields.push(FieldSpec {
-                    name: format!("shakalaka-{companion}-lamp-mask-mastery"),
-                    offset: start + SHAKALAKA_LAMP_MASK_MASTERY_START,
-                    width: 2,
-                });
+                for relative in (SHAKALAKA_MASK_STATE_START..SHAKALAKA_MASK_STATE_END).step_by(2) {
+                    fields.push(FieldSpec {
+                        name: format!("shakalaka-{companion}-packed-mask-pair-{relative:03x}"),
+                        offset: start + relative,
+                        width: 2,
+                    });
+                }
             }
         }
         "card1" | "card2" | "card3" => {
@@ -619,23 +625,37 @@ mod tests {
     }
 
     #[test]
-    fn repairs_an_old_lamp_field_without_reverting_unrelated_wiiu_progress() {
+    fn repairs_the_historical_packed_mask_byte_swap_without_reverting_wiiu_progress() {
         let mut source = source();
+        let source_record = JP_3DS_HEADER.len() + SHAKALAKA_RECORD_START;
+        source[source_record..source_record + 12].copy_from_slice(&[
+            0x19, 0xC2, 0x0A, 0x00, 0x2F, 0x13, 0x2F, 0x01, 0x2C, 0x01, 0x3E, 0x01,
+        ]);
         let payload_offset =
-            JP_3DS_HEADER.len() + SHAKALAKA_RECORD_START + SHAKALAKA_LAMP_MASK_MASTERY_START;
+            JP_3DS_HEADER.len() + SHAKALAKA_RECORD_START + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET;
         source[payload_offset..payload_offset + 2].copy_from_slice(&[0x1E, 0x00]);
         let mut current =
-            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_5)
+            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_6)
                 .unwrap();
         let unrelated = JP_CEMU_HEADER.len() + 0x240;
         current[unrelated] ^= 0x5A;
 
         let merged =
-            merge_component(&source, &current, "user2", ConverterRevision::V0_0_5).unwrap();
+            merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
         let lamp =
-            JP_CEMU_HEADER.len() + SHAKALAKA_RECORD_START + SHAKALAKA_LAMP_MASK_MASTERY_START;
+            JP_CEMU_HEADER.len() + SHAKALAKA_RECORD_START + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET;
+        let record = JP_CEMU_HEADER.len() + SHAKALAKA_RECORD_START;
 
-        assert_eq!(&merged.bytes[lamp..lamp + 2], &[0x00, 0x1E]);
+        assert_eq!(
+            &current[record + 4..record + 12],
+            &[0x01, 0x2F, 0x13, 0x2F, 0x01, 0x3E, 0x01, 0x2C]
+        );
+        assert_eq!(
+            &merged.bytes[record + 4..record + 12],
+            &[0x13, 0x2F, 0x01, 0x2F, 0x01, 0x2C, 0x01, 0x3E]
+        );
+        assert_eq!(&current[lamp..lamp + 2], &[0x00, 0x1E]);
+        assert_eq!(&merged.bytes[lamp..lamp + 2], &[0x1E, 0x00]);
         assert_eq!(merged.bytes[unrelated], current[unrelated]);
         assert!(merged.repaired_fields >= 1);
     }
@@ -644,22 +664,22 @@ mod tests {
     fn preserves_a_whole_multibyte_field_when_wiiu_changed_only_one_byte() {
         let mut source = source();
         let source_lamp =
-            JP_3DS_HEADER.len() + SHAKALAKA_RECORD_START + SHAKALAKA_LAMP_MASK_MASTERY_START;
+            JP_3DS_HEADER.len() + SHAKALAKA_RECORD_START + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET;
         source[source_lamp..source_lamp + 2].copy_from_slice(&[0x1E, 0x00]);
         let mut current =
-            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_5)
+            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_6)
                 .unwrap();
         let lamp =
-            JP_CEMU_HEADER.len() + SHAKALAKA_RECORD_START + SHAKALAKA_LAMP_MASK_MASTERY_START;
+            JP_CEMU_HEADER.len() + SHAKALAKA_RECORD_START + HISTORICAL_SHAKALAKA_LAMP_SWAP_OFFSET;
         current[lamp] = 0xAA;
         let observed = current[lamp..lamp + 2].to_vec();
 
         let merged =
-            merge_component(&source, &current, "user2", ConverterRevision::V0_0_5).unwrap();
+            merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
 
         assert_eq!(&merged.bytes[lamp..lamp + 2], observed.as_slice());
         assert!(merged.fields.iter().any(|field| {
-            field.name == "shakalaka-0-lamp-mask-mastery"
+            field.name == "shakalaka-0-packed-mask-pair-0e4"
                 && field.status == MergeFieldStatus::PreservedConflict
         }));
     }
@@ -681,8 +701,13 @@ mod tests {
     #[test]
     fn repairs_new_official_parity_fields_without_reverting_wiiu_progress() {
         let mut source = source();
-        let source_guide = JP_3DS_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
-        source[source_guide..source_guide + 4].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+        let source_guide_state = JP_3DS_HEADER.len() + USER_MONSTER_GUIDE_PACKED_STATE_START;
+        source[source_guide_state..source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN]
+            .fill(0xFF);
+        source[source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN - 1] = 0x00;
+        let source_item_word = JP_3DS_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
+        source[source_item_word..source_item_word + 4]
+            .copy_from_slice(&0x1234_5678_u32.to_le_bytes());
         let source_appearance = JP_3DS_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
         source[source_appearance..source_appearance + 4].copy_from_slice(&[0xFF, 0xE6, 0xEF, 0xFA]);
         let mut current =
@@ -693,11 +718,16 @@ mod tests {
 
         let merged =
             merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
-        let guide = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_RECORD_START;
+        let guide_state = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_PACKED_STATE_START;
+        let item_word = JP_CEMU_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         let appearance = JP_CEMU_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
 
         assert_eq!(
-            &merged.bytes[guide..guide + 4],
+            &merged.bytes[guide_state..guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN],
+            &source[source_guide_state..source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN]
+        );
+        assert_eq!(
+            &merged.bytes[item_word..item_word + 4],
             &0x1234_5678_u32.to_be_bytes()
         );
         assert_eq!(
@@ -706,7 +736,11 @@ mod tests {
         );
         assert_eq!(merged.bytes[unrelated], current[unrelated]);
         assert!(merged.fields.iter().any(|field| {
-            field.name == "monster-guide-record-0" && field.status == MergeFieldStatus::Repaired
+            field.name == "monster-guide-packed-state-byte-26"
+                && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "item-acquired-word-0" && field.status == MergeFieldStatus::Repaired
         }));
         assert!(merged.fields.iter().any(|field| {
             field.name == "player-appearance-rgba" && field.status == MergeFieldStatus::Repaired
