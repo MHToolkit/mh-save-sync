@@ -241,6 +241,15 @@ same state-only bit mapping to the personal record, received guild cards, and
 CEC/offline-hall partners. This prevents historical conversions from turning
 hidden rows with non-zero counters into extra monster-guide pages.
 
+Slay and capture totals use a separate schema: 86 valid monster IDs
+(`0x00..0x55`), each stored as a `u16` that changes from 3DS little-endian to
+Wii U big-endian. Earlier releases omitted the three slay counters for Giggi,
+Aptonoth, and Popo, causing Wii U to misread ordinary values as tens of
+thousands and clamp the UI to `9999`. Current conversion reasserts all 86
+entries in both count tables. Compatibility repair only updates count fields
+that still match historical converter output, preserving later Wii U/Cemu
+progress.
+
 ### Before you write: paths, inspection, and dry-run
 
 The examples below run from this repository after Rust is installed. Define a

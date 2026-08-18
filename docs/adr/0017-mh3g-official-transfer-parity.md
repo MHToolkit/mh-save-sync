@@ -57,6 +57,26 @@ still omits Deviljho. Current conversion restores the complete byte-packed
 array; compatibility repair handles it one byte at a time so later Wii U
 progress in another byte is not reverted.
 
+The displayed hunt totals are a third, separate schema. There are 86 valid
+monster IDs (`0x00..0x55`), with one `u16` slay counter per ID at payload
+`0x5784 + id * 2` and one `u16` capture counter per ID at
+`0x5884 + id * 2`. All five official-transfer pairs preserve each numeric
+value while changing its encoding from 3DS little-endian to Wii U big-endian.
+Static inspection of both executables independently confirms the `0x56` loop
+limit and the `0x270F` (9999) saturation used by the counter update paths.
+Historical conversion missed the slay lanes for IDs `0x1A`, `0x1B`, and
+`0x1C` (Giggi, Aptonoth, and Popo). Wii U consequently interpreted ordinary
+values such as `0x0584` as `0x8405` and clamped the displayed total to 9999.
+This count schema does not overlap the packed monster-list state.
+
+Deterministic replay shows that the historical and current algorithms differ
+at slay IDs `26, 27, 28, 84` and capture IDs
+`21..23, 26..33, 76..84`. Only the first three slay lanes are non-zero in all
+five paired samples and directly reproduce the reported symptom. Compatibility
+repair nevertheless covers the exact 24 differing lanes so future non-zero
+values are corrected, while excluding already-identical lanes from revision
+detection scores.
+
 ## Decision
 
 Current conversion layers the official-transfer corrections after the closed
@@ -73,7 +93,12 @@ Current conversion layers the official-transfer corrections after the closed
 6. convert all 48 item-acquisition words independently and include them in
    compatibility repair under their actual item-bitset semantics;
 7. preserve the 28-byte packed monster-list state verbatim and repair its
-   historical output at byte granularity.
+   historical output at byte granularity;
+8. reassert all 86 valid slay and capture counters from the original source as
+   independent LE-to-BE `u16` fields. Historical replay remains unchanged;
+   compatibility repair includes only lanes whose historical output differs
+   from the current rule and preserves any later Wii U value at whole-field
+   granularity.
 
 ## Consequences
 
@@ -82,6 +107,8 @@ Current conversion layers the official-transfer corrections after the closed
 - Hidden source monsters no longer create extra guide pages after conversion.
 - The Deviljho book and other acquired-item unlocks no longer disappear merely
   because their 32-bit word was interpreted in the wrong byte order.
+- Giggi, Aptonoth, and Popo hunt totals no longer become saturated 9999 values
+  because their two bytes were left in 3DS order.
 - Received cards and offline-hall partners cannot drift from the personal
   Hunter's Notes mapping.
 - Existing 0.0.5/0.0.6 saves remain detectable and can be repaired without
