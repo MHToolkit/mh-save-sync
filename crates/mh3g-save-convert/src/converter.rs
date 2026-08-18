@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn transforms_card_payload_with_the_recovered_meow_mapping() {
+    fn transforms_card_payload_with_the_complete_current_mapping() {
         let source = synthetic_external_component(CARD_PAYLOAD_SIZE);
         let source_before = source.clone();
 
@@ -640,7 +640,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(Sha256::digest(&output[JP_CEMU_HEADER.len()..])),
-            "0cb299de141dfe9c47e15c7329536c534222ae4d719d947f3f7405c4cf368363"
+            "0e652288ce1becc9c8141db230bdff49c41062d53520379b3e22d4ef03bb6d7f"
         );
     }
 
@@ -742,6 +742,46 @@ mod tests {
             &payload[0x7C0..0x7CA],
             &[0x00, 0x16, 0x00, 0x02, 0x00, 0x78, 0x00, 0x5C, 0xA0, 0x00]
         );
+    }
+
+    #[test]
+    fn remaps_every_hunter_life_diary_field_in_the_last_received_card_slot() {
+        let mut source = vec![0_u8; JP_3DS_HEADER.len() + CARD_PAYLOAD_SIZE];
+        source[..JP_3DS_HEADER.len()].copy_from_slice(&JP_3DS_HEADER);
+        let body = &mut source[JP_3DS_HEADER.len()..];
+        let record = 97 * 0xE00 + 0x178 + 9 * 0xA0;
+        body[record..record + 0x2C].copy_from_slice(&[
+            0x1F, 0x07, // day/month: packed bytes
+            0xEA, 0x07, // year: u16 LE
+            0x34, 0x12, // event kind: u16 LE
+            0x78, 0x56, // event/entity id: u16 LE
+            0x91, 0x82, 0x73, 0x64, // packed descriptor
+            0x56, 0x00, 0x00, 0x00, // HR parameter: 86
+            0x01, 0x00, 0x00, 0x00, // faint count: 1
+            0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00,
+            0x00, // hunt count: 40
+            0x05, 0x00, 0x00, 0x00, b'Y', b'o', b'r', b'u', b'a', b's', b'k', b'i',
+        ]);
+        let source_before = source.clone();
+
+        let output = convert_external_component_to_cemu_named(&source, "card1").unwrap();
+        let payload = &output[JP_CEMU_HEADER.len()..];
+
+        assert_eq!(source, source_before);
+        assert_eq!(&payload[record..record + 2], &[0x1F, 0x07]);
+        assert_eq!(
+            &payload[record + 2..record + 8],
+            &[0x07, 0xEA, 0x12, 0x34, 0x56, 0x78]
+        );
+        assert_eq!(&payload[record + 8..record + 12], &[0x91, 0x82, 0x73, 0x64]);
+        assert_eq!(
+            &payload[record + 12..record + 36],
+            &[
+                0x00, 0x00, 0x00, 0x56, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+                0x00, 0x03, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x05,
+            ]
+        );
+        assert_eq!(&payload[record + 36..record + 44], b"Yoruaski");
     }
 
     #[test]

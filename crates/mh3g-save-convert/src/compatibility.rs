@@ -11,6 +11,11 @@ use crate::{
     profile::{JP_CEMU_HEADER, SaveProfile, inspect_bytes, validate_slot_path},
     revision::ConverterRevision,
     transaction::sha256_hex,
+    transforms::{
+        GUILD_CARD_HUNTER_LIFE_DIARY_COUNT, GUILD_CARD_HUNTER_LIFE_DIARY_START,
+        HUNTER_LIFE_DIARY_RECORD_STRIDE, HUNTER_LIFE_DIARY_U16_OFFSETS,
+        HUNTER_LIFE_DIARY_U32_OFFSETS, USER_HUNTER_LIFE_DIARY_COUNT, USER_HUNTER_LIFE_DIARY_START,
+    },
 };
 
 const USER_ARENA_RECORD_START: usize = 0x83A8;
@@ -451,6 +456,25 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
     let mut fields = Vec::new();
     match filename {
         "user1" | "user2" | "user3" => {
+            for record in 0..USER_HUNTER_LIFE_DIARY_COUNT {
+                let start = header
+                    + USER_HUNTER_LIFE_DIARY_START
+                    + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+                for relative in HUNTER_LIFE_DIARY_U16_OFFSETS {
+                    fields.push(FieldSpec {
+                        name: format!("personal-hunter-life-diary-{record}-u16-{relative:02x}"),
+                        offset: start + relative,
+                        width: 2,
+                    });
+                }
+                for relative in HUNTER_LIFE_DIARY_U32_OFFSETS {
+                    fields.push(FieldSpec {
+                        name: format!("personal-hunter-life-diary-{record}-u32-{relative:02x}"),
+                        offset: start + relative,
+                        width: 4,
+                    });
+                }
+            }
             for byte in 0..USER_MONSTER_GUIDE_PACKED_STATE_LEN {
                 fields.push(FieldSpec {
                     name: format!("monster-guide-packed-state-byte-{byte}"),
@@ -542,6 +566,29 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
         "card1" | "card2" | "card3" => {
             for slot in 0..GUILD_CARD_SLOT_COUNT {
                 let start = header + slot * GUILD_CARD_SLOT_SIZE;
+                for record in 0..GUILD_CARD_HUNTER_LIFE_DIARY_COUNT {
+                    let diary_start = start
+                        + GUILD_CARD_HUNTER_LIFE_DIARY_START
+                        + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+                    for relative in HUNTER_LIFE_DIARY_U16_OFFSETS {
+                        fields.push(FieldSpec {
+                            name: format!(
+                                "received-card-{slot}-hunter-life-diary-{record}-u16-{relative:02x}"
+                            ),
+                            offset: diary_start + relative,
+                            width: 2,
+                        });
+                    }
+                    for relative in HUNTER_LIFE_DIARY_U32_OFFSETS {
+                        fields.push(FieldSpec {
+                            name: format!(
+                                "received-card-{slot}-hunter-life-diary-{record}-u32-{relative:02x}"
+                            ),
+                            offset: diary_start + relative,
+                            width: 4,
+                        });
+                    }
+                }
                 for record in 0..GUILD_CARD_ARENA_RECORD_COUNT {
                     fields.push(FieldSpec {
                         name: format!("received-card-{slot}-arena-{record}"),
@@ -879,6 +926,143 @@ mod tests {
             count_fields,
             USER_HISTORICAL_DIFFERENT_SLAY_COUNT_IDS.len()
                 + USER_HISTORICAL_DIFFERENT_CAPTURE_COUNT_IDS.len()
+        );
+    }
+
+    #[test]
+    fn repairs_personal_hunter_life_diary_without_reverting_new_wiiu_events() {
+        let mut source = source();
+        let source_record0 = JP_3DS_HEADER.len() + USER_HUNTER_LIFE_DIARY_START;
+        let source_record3 = source_record0 + 3 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+        source[source_record0 + 0x0C..source_record0 + 0x10].copy_from_slice(&86_u32.to_le_bytes());
+        source[source_record3 + 0x1C..source_record3 + 0x20].copy_from_slice(&40_u32.to_le_bytes());
+        let mut current =
+            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_6)
+                .unwrap();
+        let record0 = JP_CEMU_HEADER.len() + USER_HUNTER_LIFE_DIARY_START;
+        let record3 = record0 + 3 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+        assert_eq!(
+            u32::from_be_bytes(current[record0 + 0x0C..record0 + 0x10].try_into().unwrap()),
+            1_442_840_576
+        );
+        current[record3 + 0x1C..record3 + 0x20].copy_from_slice(&41_u32.to_be_bytes());
+
+        let merged =
+            merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
+
+        assert_eq!(
+            &merged.bytes[record0 + 0x0C..record0 + 0x10],
+            &86_u32.to_be_bytes()
+        );
+        assert_eq!(
+            &merged.bytes[record3 + 0x1C..record3 + 0x20],
+            &41_u32.to_be_bytes()
+        );
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "personal-hunter-life-diary-0-u32-0c"
+                && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "personal-hunter-life-diary-3-u32-1c"
+                && field.status == MergeFieldStatus::PreservedConflict
+        }));
+
+        let second =
+            merge_component(&source, &merged.bytes, "user2", ConverterRevision::V0_0_6).unwrap();
+        assert_eq!(second.bytes, merged.bytes);
+        assert_eq!(second.repaired_fields, 0);
+    }
+
+    #[test]
+    fn repairs_received_card_hunter_life_diary_for_all_card_components() {
+        let mut source = card_source();
+        let source_record = JP_3DS_HEADER.len()
+            + 97 * GUILD_CARD_SLOT_SIZE
+            + GUILD_CARD_HUNTER_LIFE_DIARY_START
+            + 9 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+        source[source_record + 0x0C..source_record + 0x10].copy_from_slice(&40_u32.to_le_bytes());
+        source[source_record + 0x10..source_record + 0x14].copy_from_slice(&1_u32.to_le_bytes());
+        let target_record = JP_CEMU_HEADER.len()
+            + 97 * GUILD_CARD_SLOT_SIZE
+            + GUILD_CARD_HUNTER_LIFE_DIARY_START
+            + 9 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+
+        for filename in ["card1", "card2", "card3"] {
+            let mut current = convert_external_component_to_cemu_named_for_revision(
+                &source,
+                filename,
+                ConverterRevision::V0_0_6,
+            )
+            .unwrap();
+            assert_eq!(
+                u32::from_be_bytes(
+                    current[target_record + 0x0C..target_record + 0x10]
+                        .try_into()
+                        .unwrap()
+                ),
+                671_088_640,
+                "{filename} historical diary value"
+            );
+            current[target_record + 0x10..target_record + 0x14]
+                .copy_from_slice(&2_u32.to_be_bytes());
+
+            let merged =
+                merge_component(&source, &current, filename, ConverterRevision::V0_0_6).unwrap();
+            assert_eq!(
+                &merged.bytes[target_record + 0x0C..target_record + 0x10],
+                &40_u32.to_be_bytes(),
+                "{filename} repaired diary value"
+            );
+            assert_eq!(
+                &merged.bytes[target_record + 0x10..target_record + 0x14],
+                &2_u32.to_be_bytes(),
+                "{filename} later Wii U diary event"
+            );
+            assert!(merged.fields.iter().any(|field| {
+                field.name == "received-card-97-hunter-life-diary-9-u32-0c"
+                    && field.status == MergeFieldStatus::Repaired
+            }));
+            assert!(merged.fields.iter().any(|field| {
+                field.name == "received-card-97-hunter-life-diary-9-u32-10"
+                    && field.status == MergeFieldStatus::PreservedConflict
+            }));
+        }
+    }
+
+    #[test]
+    fn compatibility_diary_fields_follow_the_shared_schema_only() {
+        let user_fields = repair_fields("user1").unwrap();
+        let personal = user_fields
+            .iter()
+            .filter(|field| field.name.starts_with("personal-hunter-life-diary-"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            personal.len(),
+            USER_HUNTER_LIFE_DIARY_COUNT
+                * (HUNTER_LIFE_DIARY_U16_OFFSETS.len() + HUNTER_LIFE_DIARY_U32_OFFSETS.len())
+        );
+        assert!(
+            personal
+                .iter()
+                .all(|field| field.width == 2 || field.width == 4)
+        );
+
+        let card_fields = repair_fields("card1").unwrap();
+        let received = card_fields
+            .iter()
+            .filter(|field| field.name.contains("-hunter-life-diary-"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            received.len(),
+            GUILD_CARD_SLOT_COUNT
+                * GUILD_CARD_HUNTER_LIFE_DIARY_COUNT
+                * (HUNTER_LIFE_DIARY_U16_OFFSETS.len() + HUNTER_LIFE_DIARY_U32_OFFSETS.len())
+        );
+        assert!(
+            repair_fields("cardbox")
+                .unwrap()
+                .iter()
+                .all(|field| !field.name.contains("hunter-life-diary"))
         );
     }
 
