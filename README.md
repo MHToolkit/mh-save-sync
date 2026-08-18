@@ -250,6 +250,18 @@ entries in both count tables. Compatibility repair only updates count fields
 that still match historical converter output, preserving later Wii U/Cemu
 progress.
 
+### Hunter Life Diary
+
+The personal guild card, received guild cards, and CEC/offline-hall partner
+cards share one fixed Hunter Life Diary record schema. Each table contains ten
+records; its three `u16` and six `u32` event fields change from 3DS
+little-endian to Wii U big-endian, while dates, packed descriptors, names, and
+text retain their byte order. Earlier sparse conversion tables could leave a
+later event parameter unchanged, making values such as `1` appear as
+`16777216`. Current conversion applies one shared mapping to every record and
+slot. Compatibility repair updates only fields that still match historical
+converter output and preserves later Wii U events at whole-field granularity.
+
 ### Before you write: paths, inspection, and dry-run
 
 The examples below run from this repository after Rust is installed. Define a

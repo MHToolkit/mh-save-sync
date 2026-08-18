@@ -1400,10 +1400,14 @@ mod tests {
         fs::create_dir_all(&inbox).unwrap();
         fs::write(inbox.join("BoxInfo_____"), [0_u8; BOX_INFO_SIZE]).unwrap();
 
-        let slot_start = 0xE00;
+        // Use the third embedded card slot and its final diary record so the
+        // CEC path cannot accidentally pass by converting only the first
+        // sparse MEOW slot captured by the historical table.
+        let slot_start = 2 * 0xE00;
         let rank_field = slot_start + 0x14;
         let weapon_usage_field = slot_start + 0x12C;
         let date_field = slot_start + 0x17A;
+        let diary_field = slot_start + 0x178 + 9 * 0xA0;
         let record_field = slot_start + 0x7C0 + 32 * 10;
         // Row 45 is intentionally beyond the sparse MEOW crown entries. Its
         // non-zero hunt count must not synthesize a discovery flag that the
@@ -1430,6 +1434,11 @@ mod tests {
         record[weapon_usage_field..weapon_usage_field + 8]
             .copy_from_slice(&[0x2B, 0x00, 0x1E, 0x00, 0x11, 0x00, 0x37, 0x00]);
         record[date_field..date_field + 2].copy_from_slice(&[0xEA, 0x07]);
+        record[diary_field..diary_field + 0x24].copy_from_slice(&[
+            0x1F, 0x07, 0xEA, 0x07, 0x34, 0x12, 0x78, 0x56, 0x91, 0x82, 0x73, 0x64, 0x56, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+            0x28, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+        ]);
         record[record_field..record_field + 10]
             .copy_from_slice(&[0x0F, 0x00, 0x10, 0x00, 0x64, 0x00, 0x65, 0x00, 0x03, 0x00]);
         record[late_record_field..late_record_field + 10]
@@ -1453,6 +1462,7 @@ mod tests {
         let converted_weapon_usage =
             CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + weapon_usage_field;
         let converted_date = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + date_field;
+        let converted_diary = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + diary_field;
         let converted_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + record_field;
         let converted_late_offset = CEMU_HEADER_SIZE + CEMU_RECORD_AREA_OFFSET + late_record_field;
 
@@ -1490,6 +1500,14 @@ mod tests {
         assert_eq!(
             &conversion.bytes[converted_date..converted_date + 2],
             &[0x07, 0xEA]
+        );
+        assert_eq!(
+            &conversion.bytes[converted_diary..converted_diary + 0x24],
+            &[
+                0x1F, 0x07, 0x07, 0xEA, 0x12, 0x34, 0x56, 0x78, 0x91, 0x82, 0x73, 0x64, 0x00, 0x00,
+                0x00, 0x56, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03,
+                0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x05,
+            ]
         );
         assert_eq!(
             &conversion.bytes[converted_offset..converted_offset + 10],

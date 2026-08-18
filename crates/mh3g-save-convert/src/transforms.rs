@@ -113,12 +113,27 @@ const OFFLINE_HUNTER_EQUIPMENT_STRIDE: usize = 8;
 const OFFLINE_HUNTER_TAIL_COLOR_OFFSETS: [usize; 2] = [0x28, 0x2C];
 const OFFLINE_HUNTER_CANDIDATE_IDS_START: usize = 0x7848;
 const OFFLINE_HUNTER_CANDIDATE_ID_COUNT: usize = 3;
+// The personal guild card and every received-card slot use the same ten-entry
+// Hunter Life Diary record schema. Official 3DS -> Wii U transfer pairs agree
+// on the field boundaries: day/month and the four packed bytes at +0x08 are
+// byte-preserving, while the three u16 and six u32 values change only endian.
+// Keeping this schema shared prevents the personal card, card list, and
+// CEC/offline-partner views from drifting apart again.
+pub(crate) const HUNTER_LIFE_DIARY_RECORD_STRIDE: usize = 0xA0;
+pub(crate) const HUNTER_LIFE_DIARY_U16_OFFSETS: [usize; 3] = [0x02, 0x04, 0x06];
+pub(crate) const HUNTER_LIFE_DIARY_PACKED_OFFSET: usize = 0x08;
+pub(crate) const HUNTER_LIFE_DIARY_PACKED_SIZE: usize = 4;
+pub(crate) const HUNTER_LIFE_DIARY_U32_OFFSETS: [usize; 6] = [0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20];
+pub(crate) const USER_HUNTER_LIFE_DIARY_START: usize = 0x7B6C;
+pub(crate) const USER_HUNTER_LIFE_DIARY_COUNT: usize = 10;
 const CARD_BODY_SIZE: usize = 0x57_FFC;
 const CARDBOX_BODY_SIZE: usize = 0x2F_FFC;
 pub const GUILD_CARD_SLOT_SIZE: usize = 0xE00;
 // The native Wii U lookup scans exactly 0x62 card slots. Logical slot 98 and
 // the trailing body are summary/index metadata with a different record shape.
 const GUILD_CARD_SLOT_COUNT: usize = 0x62;
+pub(crate) const GUILD_CARD_HUNTER_LIFE_DIARY_START: usize = 0x178;
+pub(crate) const GUILD_CARD_HUNTER_LIFE_DIARY_COUNT: usize = 10;
 const GUILD_CARD_HR_OFFSET: usize = 0x14;
 const GUILD_CARD_EQUIPMENT_START: usize = 0x4C;
 const GUILD_CARD_EQUIPMENT_COUNT: usize = 5;
@@ -431,6 +446,91 @@ fn apply_current_hunter_notes_display_state(
     transform_crown(source, target, state_offset)
 }
 
+/// Reapply one Hunter Life Diary record with the official field boundaries.
+///
+/// Historical MEOW tables only listed fields that happened to be non-zero in
+/// one captured save. That left other u32 counters in 3DS little-endian order;
+/// Wii U then rendered values such as one faint as 16,777,216. Every numeric
+/// field is sourced from the immutable 3DS record here, so this correction is
+/// safe after historical replay and cannot double-swap an already touched
+/// field.
+fn apply_hunter_life_diary_record_corrections(
+    source: &[u8],
+    target: &mut [u8],
+    record_start: usize,
+) -> Result<(), ConversionError> {
+    validate_range(
+        source,
+        record_start,
+        HUNTER_LIFE_DIARY_RECORD_STRIDE,
+        "Hunter Life Diary source",
+    )?;
+    validate_range(
+        target,
+        record_start,
+        HUNTER_LIFE_DIARY_RECORD_STRIDE,
+        "Hunter Life Diary target",
+    )?;
+
+    target[record_start..record_start + 2].copy_from_slice(&source[record_start..record_start + 2]);
+    for relative in HUNTER_LIFE_DIARY_U16_OFFSETS {
+        copy_reversed(source, target, record_start + relative, 2)?;
+    }
+    let packed_start = record_start + HUNTER_LIFE_DIARY_PACKED_OFFSET;
+    target[packed_start..packed_start + HUNTER_LIFE_DIARY_PACKED_SIZE]
+        .copy_from_slice(&source[packed_start..packed_start + HUNTER_LIFE_DIARY_PACKED_SIZE]);
+    for relative in HUNTER_LIFE_DIARY_U32_OFFSETS {
+        copy_reversed(source, target, record_start + relative, 4)?;
+    }
+
+    Ok(())
+}
+
+fn apply_current_personal_hunter_life_diary_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for record in 0..USER_HUNTER_LIFE_DIARY_COUNT {
+        apply_hunter_life_diary_record_corrections(
+            source,
+            target,
+            USER_HUNTER_LIFE_DIARY_START + record * HUNTER_LIFE_DIARY_RECORD_STRIDE,
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_current_guild_card_hunter_life_diary_slot_corrections(
+    source: &[u8],
+    target: &mut [u8],
+    slot_start: usize,
+) -> Result<(), ConversionError> {
+    for record in 0..GUILD_CARD_HUNTER_LIFE_DIARY_COUNT {
+        apply_hunter_life_diary_record_corrections(
+            source,
+            target,
+            slot_start
+                + GUILD_CARD_HUNTER_LIFE_DIARY_START
+                + record * HUNTER_LIFE_DIARY_RECORD_STRIDE,
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_current_guild_card_hunter_life_diary_corrections(
+    source: &[u8],
+    target: &mut [u8],
+) -> Result<(), ConversionError> {
+    for slot in 0..GUILD_CARD_SLOT_COUNT {
+        apply_current_guild_card_hunter_life_diary_slot_corrections(
+            source,
+            target,
+            slot * GUILD_CARD_SLOT_SIZE,
+        )?;
+    }
+    Ok(())
+}
+
 fn apply_guild_card_monster_log_corrections(
     source: &[u8],
     target: &mut [u8],
@@ -674,6 +774,7 @@ pub fn apply_japanese_wiiu_guild_card_slot_corrections(
         target,
         ConverterRevision::LAST_HISTORICAL,
     )?;
+    apply_current_guild_card_hunter_life_diary_slot_corrections(source, target, 0)?;
     apply_current_guild_card_monster_log_slot_corrections(source, target, 0)
 }
 
@@ -789,6 +890,7 @@ pub(crate) fn apply_current_japanese_wiiu_guild_card_corrections(
         )));
     }
     if kind == GuildCardBodyKind::Card {
+        apply_current_guild_card_hunter_life_diary_corrections(source, target)?;
         apply_current_guild_card_monster_log_corrections(source, target)?;
     }
     Ok(())
@@ -1030,6 +1132,7 @@ fn apply_current_official_transfer_corrections(
     target: &mut [u8],
 ) -> Result<(), ConversionError> {
     apply_current_shakalaka_companion_corrections(source, target)?;
+    apply_current_personal_hunter_life_diary_corrections(source, target)?;
 
     target[MONSTER_GUIDE_PACKED_STATE_START
         ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
@@ -1210,14 +1313,18 @@ mod tests {
     };
 
     use super::{
-        DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE,
-        ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
+        DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START,
+        GUILD_CARD_HUNTER_LIFE_DIARY_COUNT, GUILD_CARD_HUNTER_LIFE_DIARY_START,
+        GUILD_CARD_SLOT_SIZE, HUNTER_LIFE_DIARY_PACKED_OFFSET, HUNTER_LIFE_DIARY_PACKED_SIZE,
+        HUNTER_LIFE_DIARY_RECORD_STRIDE, HUNTER_LIFE_DIARY_U16_OFFSETS,
+        HUNTER_LIFE_DIARY_U32_OFFSETS, ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
         ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_CAPTURE_COUNT_START, MONSTER_COUNT_ENTRY_COUNT,
         MONSTER_COUNT_STRIDE, MONSTER_GUIDE_PACKED_STATE_LEN, MONSTER_GUIDE_PACKED_STATE_START,
         MONSTER_IDS, MONSTER_SLAY_COUNT_START, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
         PLAYER_APPEARANCE_RGBA_OFFSET, PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START,
-        SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
-        apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
+        SECOND_RGBA_OFFSET, USER_HUNTER_LIFE_DIARY_COUNT, USER_HUNTER_LIFE_DIARY_START,
+        apply_arena_records, apply_endian_swaps, apply_japanese_wiiu_corrections,
+        apply_japanese_wiiu_corrections_for_revision,
         apply_japanese_wiiu_guild_card_slot_corrections, apply_monster_discovery,
     };
     use crate::revision::ConverterRevision;
@@ -1747,6 +1854,207 @@ mod tests {
         // Keep the test's selected personal monster tied to the record order
         // rather than silently relying on an unrelated cache row.
         assert_eq!(MONSTER_IDS[MONSTER_INDEX], MONSTER_ID);
+    }
+
+    #[test]
+    fn hunter_life_diary_mapping_is_shared_by_personal_and_received_cards() {
+        let mut personal_source = vec![0_u8; PAYLOAD_SIZE];
+        for record in 0..USER_HUNTER_LIFE_DIARY_COUNT {
+            let start = USER_HUNTER_LIFE_DIARY_START + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+            personal_source[start..start + 2]
+                .copy_from_slice(&[0x11 + record as u8, 0x21 + record as u8]);
+            for (field, relative) in HUNTER_LIFE_DIARY_U16_OFFSETS.into_iter().enumerate() {
+                let value = 0x3100_u16 + (record * 0x10 + field) as u16;
+                personal_source[start + relative..start + relative + 2]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+            personal_source[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE]
+                .copy_from_slice(&[0x91, 0x82, 0x73, 0x64]);
+            for (field, relative) in HUNTER_LIFE_DIARY_U32_OFFSETS.into_iter().enumerate() {
+                let value = 0x1020_3000_u32 + (record * 0x10 + field) as u32;
+                personal_source[start + relative..start + relative + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+            personal_source[start + 0x24..start + 0x2C].copy_from_slice(b"PERSONAL");
+        }
+        let personal_before = personal_source.clone();
+        let mut personal_target = personal_source.clone();
+        apply_japanese_wiiu_corrections(&personal_source, &mut personal_target).unwrap();
+        assert_eq!(personal_source, personal_before);
+
+        let mut received_source = vec![0_u8; GUILD_CARD_SLOT_SIZE];
+        for record in 0..GUILD_CARD_HUNTER_LIFE_DIARY_COUNT {
+            let start =
+                GUILD_CARD_HUNTER_LIFE_DIARY_START + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+            received_source[start..start + 2]
+                .copy_from_slice(&[0x41 + record as u8, 0x51 + record as u8]);
+            for (field, relative) in HUNTER_LIFE_DIARY_U16_OFFSETS.into_iter().enumerate() {
+                let value = 0x6100_u16 + (record * 0x10 + field) as u16;
+                received_source[start + relative..start + relative + 2]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+            received_source[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE]
+                .copy_from_slice(&[0xA1, 0xB2, 0xC3, 0xD4]);
+            for (field, relative) in HUNTER_LIFE_DIARY_U32_OFFSETS.into_iter().enumerate() {
+                let value = 0x7080_9000_u32 + (record * 0x10 + field) as u32;
+                received_source[start + relative..start + relative + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+            received_source[start + 0x24..start + 0x2C].copy_from_slice(b"RECEIVED");
+        }
+        let received_before = received_source.clone();
+        let mut received_target = received_source.clone();
+        apply_japanese_wiiu_guild_card_slot_corrections(&received_source, &mut received_target)
+            .unwrap();
+        assert_eq!(received_source, received_before);
+
+        for record in 0..USER_HUNTER_LIFE_DIARY_COUNT {
+            let start = USER_HUNTER_LIFE_DIARY_START + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+            assert_eq!(
+                &personal_target[start..start + 2],
+                &personal_source[start..start + 2]
+            );
+            for relative in HUNTER_LIFE_DIARY_U16_OFFSETS {
+                let value = u16::from_le_bytes(
+                    personal_source[start + relative..start + relative + 2]
+                        .try_into()
+                        .unwrap(),
+                );
+                assert_eq!(
+                    &personal_target[start + relative..start + relative + 2],
+                    &value.to_be_bytes()
+                );
+            }
+            assert_eq!(
+                &personal_target[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                    ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE],
+                &personal_source[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                    ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE]
+            );
+            for relative in HUNTER_LIFE_DIARY_U32_OFFSETS {
+                let value = u32::from_le_bytes(
+                    personal_source[start + relative..start + relative + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                assert_eq!(
+                    &personal_target[start + relative..start + relative + 4],
+                    &value.to_be_bytes()
+                );
+            }
+            assert_eq!(
+                &personal_target[start + 0x24..start + 0x2C],
+                &personal_source[start + 0x24..start + 0x2C]
+            );
+        }
+
+        for record in 0..GUILD_CARD_HUNTER_LIFE_DIARY_COUNT {
+            let start =
+                GUILD_CARD_HUNTER_LIFE_DIARY_START + record * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+            assert_eq!(
+                &received_target[start..start + 2],
+                &received_source[start..start + 2]
+            );
+            for relative in HUNTER_LIFE_DIARY_U16_OFFSETS {
+                let value = u16::from_le_bytes(
+                    received_source[start + relative..start + relative + 2]
+                        .try_into()
+                        .unwrap(),
+                );
+                assert_eq!(
+                    &received_target[start + relative..start + relative + 2],
+                    &value.to_be_bytes()
+                );
+            }
+            assert_eq!(
+                &received_target[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                    ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE],
+                &received_source[start + HUNTER_LIFE_DIARY_PACKED_OFFSET
+                    ..start + HUNTER_LIFE_DIARY_PACKED_OFFSET + HUNTER_LIFE_DIARY_PACKED_SIZE]
+            );
+            for relative in HUNTER_LIFE_DIARY_U32_OFFSETS {
+                let value = u32::from_le_bytes(
+                    received_source[start + relative..start + relative + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                assert_eq!(
+                    &received_target[start + relative..start + relative + 4],
+                    &value.to_be_bytes()
+                );
+            }
+            assert_eq!(
+                &received_target[start + 0x24..start + 0x2C],
+                &received_source[start + 0x24..start + 0x2C]
+            );
+        }
+    }
+
+    #[test]
+    fn current_hunter_life_diary_corrections_fix_reported_large_values() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        let record0 = USER_HUNTER_LIFE_DIARY_START;
+        let record2 = USER_HUNTER_LIFE_DIARY_START + 2 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+        let record3 = USER_HUNTER_LIFE_DIARY_START + 3 * HUNTER_LIFE_DIARY_RECORD_STRIDE;
+        source[record0 + 0x0C..record0 + 0x10].copy_from_slice(&86_u32.to_le_bytes());
+        source[record2 + 0x10..record2 + 0x14].copy_from_slice(&1_u32.to_le_bytes());
+        source[record3 + 0x0C..record3 + 0x10].copy_from_slice(&85_u32.to_le_bytes());
+        source[record3 + 0x1C..record3 + 0x20].copy_from_slice(&40_u32.to_le_bytes());
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        assert_eq!(
+            u32::from_be_bytes(
+                historical[record0 + 0x0C..record0 + 0x10]
+                    .try_into()
+                    .unwrap()
+            ),
+            1_442_840_576
+        );
+        assert_eq!(
+            u32::from_be_bytes(
+                historical[record2 + 0x10..record2 + 0x14]
+                    .try_into()
+                    .unwrap()
+            ),
+            16_777_216
+        );
+        assert_eq!(
+            u32::from_be_bytes(
+                historical[record3 + 0x0C..record3 + 0x10]
+                    .try_into()
+                    .unwrap()
+            ),
+            1_426_063_360
+        );
+        assert_eq!(
+            u32::from_be_bytes(
+                historical[record3 + 0x1C..record3 + 0x20]
+                    .try_into()
+                    .unwrap()
+            ),
+            671_088_640
+        );
+        for (offset, expected) in [
+            (record0 + 0x0C, 86),
+            (record2 + 0x10, 1),
+            (record3 + 0x0C, 85),
+            (record3 + 0x1C, 40),
+        ] {
+            assert_eq!(
+                u32::from_be_bytes(current[offset..offset + 4].try_into().unwrap()),
+                expected
+            );
+        }
     }
 
     #[test]

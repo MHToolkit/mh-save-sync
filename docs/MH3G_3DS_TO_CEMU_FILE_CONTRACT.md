@@ -257,6 +257,13 @@ state-only mapping. Slay/capture counters are converted as numeric fields but
 never synthesize the Wii U visibility bit; paired official transfers prove
 that counter-bearing rows can remain undiscovered.
 
+The same three views also share one Hunter Life Diary schema: ten records per
+table, three endian-converted `u16` fields and six endian-converted `u32`
+fields per record. Packed descriptors, names, and text remain byte-preserving.
+Compatibility repair treats each numeric value as one complete field, so a
+later Wii U edit is preserved rather than partially overwritten. `cardbox`
+does not contain the full diary table.
+
 There is no evidence-backed safe rule for selecting only one `card#` file for
 that result.  Treat all four as one installation group.  Conversely, CEC is
 not a prerequisite for these existing card/partner records; its raw received
