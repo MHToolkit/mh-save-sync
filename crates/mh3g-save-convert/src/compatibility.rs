@@ -36,6 +36,17 @@ const GUILD_CARD_MONSTER_LOG_COUNT: usize = 50;
 const GUILD_CARD_MONSTER_LOG_STRIDE: usize = 10;
 const USER_MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
 const USER_MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
+const USER_MONSTER_SLAY_COUNT_START: usize = 0x5784;
+const USER_MONSTER_CAPTURE_COUNT_START: usize = 0x5884;
+const USER_MONSTER_COUNT_STRIDE: usize = 2;
+// Only lanes whose historical 0.0.3-0.0.6 output differs from the current
+// official-transfer correction belong in revision detection/repair. Adding the
+// already-identical lanes would dilute revision scores without changing any
+// bytes. Fresh conversion still normalizes all 0x56 valid monster IDs.
+const USER_HISTORICAL_DIFFERENT_SLAY_COUNT_IDS: [usize; 4] = [26, 27, 28, 84];
+const USER_HISTORICAL_DIFFERENT_CAPTURE_COUNT_IDS: [usize; 20] = [
+    21, 22, 23, 26, 27, 28, 29, 30, 31, 32, 33, 76, 77, 78, 79, 80, 81, 82, 83, 84,
+];
 const USER_ITEM_ACQUIRED_BITSET_START: usize = 0x65C4;
 const USER_ITEM_ACQUIRED_BITSET_WORD_COUNT: usize = 48;
 const USER_ITEM_ACQUIRED_BITSET_WORD_SIZE: usize = 4;
@@ -447,6 +458,24 @@ fn repair_fields(filename: &str) -> Result<Vec<FieldSpec>, ConversionError> {
                     width: 1,
                 });
             }
+            for monster_id in USER_HISTORICAL_DIFFERENT_SLAY_COUNT_IDS {
+                fields.push(FieldSpec {
+                    name: format!("monster-slay-count-{monster_id}"),
+                    offset: header
+                        + USER_MONSTER_SLAY_COUNT_START
+                        + monster_id * USER_MONSTER_COUNT_STRIDE,
+                    width: USER_MONSTER_COUNT_STRIDE,
+                });
+            }
+            for monster_id in USER_HISTORICAL_DIFFERENT_CAPTURE_COUNT_IDS {
+                fields.push(FieldSpec {
+                    name: format!("monster-capture-count-{monster_id}"),
+                    offset: header
+                        + USER_MONSTER_CAPTURE_COUNT_START
+                        + monster_id * USER_MONSTER_COUNT_STRIDE,
+                    width: USER_MONSTER_COUNT_STRIDE,
+                });
+            }
             for word in 0..USER_ITEM_ACQUIRED_BITSET_WORD_COUNT {
                 fields.push(FieldSpec {
                     name: format!("item-acquired-word-{word}"),
@@ -705,6 +734,16 @@ mod tests {
         source[source_guide_state..source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN]
             .fill(0xFF);
         source[source_guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN - 1] = 0x00;
+        let source_giggi = JP_3DS_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1A * 2;
+        let source_aptonoth = JP_3DS_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1B * 2;
+        let source_popo = JP_3DS_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1C * 2;
+        source[source_giggi..source_giggi + 2].copy_from_slice(&0x0584_u16.to_le_bytes());
+        source[source_aptonoth..source_aptonoth + 2].copy_from_slice(&0x00EC_u16.to_le_bytes());
+        source[source_popo..source_popo + 2].copy_from_slice(&0x015C_u16.to_le_bytes());
+        let source_capture_21 = JP_3DS_HEADER.len() + USER_MONSTER_CAPTURE_COUNT_START + 21 * 2;
+        let source_capture_22 = JP_3DS_HEADER.len() + USER_MONSTER_CAPTURE_COUNT_START + 22 * 2;
+        source[source_capture_21..source_capture_21 + 2].copy_from_slice(&0x1234_u16.to_le_bytes());
+        source[source_capture_22..source_capture_22 + 2].copy_from_slice(&0x2345_u16.to_le_bytes());
         let source_item_word = JP_3DS_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         source[source_item_word..source_item_word + 4]
             .copy_from_slice(&0x1234_5678_u32.to_le_bytes());
@@ -715,12 +754,19 @@ mod tests {
                 .unwrap();
         let unrelated = JP_CEMU_HEADER.len() + 0x240;
         current[unrelated] ^= 0x5A;
+        let popo = JP_CEMU_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1C * 2;
+        current[popo..popo + 2].copy_from_slice(&0x015D_u16.to_be_bytes());
+        let capture_22 = JP_CEMU_HEADER.len() + USER_MONSTER_CAPTURE_COUNT_START + 22 * 2;
+        current[capture_22..capture_22 + 2].copy_from_slice(&0x2346_u16.to_be_bytes());
 
         let merged =
             merge_component(&source, &current, "user2", ConverterRevision::V0_0_6).unwrap();
         let guide_state = JP_CEMU_HEADER.len() + USER_MONSTER_GUIDE_PACKED_STATE_START;
         let item_word = JP_CEMU_HEADER.len() + USER_ITEM_ACQUIRED_BITSET_START;
         let appearance = JP_CEMU_HEADER.len() + USER_APPEARANCE_RGBA_OFFSET;
+        let giggi = JP_CEMU_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1A * 2;
+        let aptonoth = JP_CEMU_HEADER.len() + USER_MONSTER_SLAY_COUNT_START + 0x1B * 2;
+        let capture_21 = JP_CEMU_HEADER.len() + USER_MONSTER_CAPTURE_COUNT_START + 21 * 2;
 
         assert_eq!(
             &merged.bytes[guide_state..guide_state + USER_MONSTER_GUIDE_PACKED_STATE_LEN],
@@ -734,6 +780,25 @@ mod tests {
             &merged.bytes[appearance..appearance + 4],
             &[0xFA, 0xEF, 0xE6, 0xFF]
         );
+        assert_eq!(&merged.bytes[giggi..giggi + 2], &0x0584_u16.to_be_bytes());
+        assert_eq!(
+            &merged.bytes[aptonoth..aptonoth + 2],
+            &0x00EC_u16.to_be_bytes()
+        );
+        assert_eq!(
+            &merged.bytes[popo..popo + 2],
+            &0x015D_u16.to_be_bytes(),
+            "later Wii U progress must win at the whole-field boundary"
+        );
+        assert_eq!(
+            &merged.bytes[capture_21..capture_21 + 2],
+            &0x1234_u16.to_be_bytes()
+        );
+        assert_eq!(
+            &merged.bytes[capture_22..capture_22 + 2],
+            &0x2346_u16.to_be_bytes(),
+            "later Wii U capture progress must win at the whole-field boundary"
+        );
         assert_eq!(merged.bytes[unrelated], current[unrelated]);
         assert!(merged.fields.iter().any(|field| {
             field.name == "monster-guide-packed-state-byte-26"
@@ -745,6 +810,76 @@ mod tests {
         assert!(merged.fields.iter().any(|field| {
             field.name == "player-appearance-rgba" && field.status == MergeFieldStatus::Repaired
         }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-slay-count-26" && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-slay-count-27" && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-slay-count-28"
+                && field.status == MergeFieldStatus::PreservedConflict
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-capture-count-21" && field.status == MergeFieldStatus::Repaired
+        }));
+        assert!(merged.fields.iter().any(|field| {
+            field.name == "monster-capture-count-22"
+                && field.status == MergeFieldStatus::PreservedConflict
+        }));
+    }
+
+    #[test]
+    fn compatibility_count_fields_cover_exact_historical_delta_lanes() {
+        let mut source = source();
+        for monster_id in 0..0x56 {
+            let slay = JP_3DS_HEADER.len()
+                + USER_MONSTER_SLAY_COUNT_START
+                + monster_id * USER_MONSTER_COUNT_STRIDE;
+            let capture = JP_3DS_HEADER.len()
+                + USER_MONSTER_CAPTURE_COUNT_START
+                + monster_id * USER_MONSTER_COUNT_STRIDE;
+            source[slay..slay + 2].copy_from_slice(&(0xA500_u16 | monster_id as u16).to_le_bytes());
+            source[capture..capture + 2]
+                .copy_from_slice(&(0x5A00_u16 | monster_id as u16).to_le_bytes());
+        }
+
+        let historical =
+            convert_3ds_to_cemu_named_for_revision(&source, "user2", ConverterRevision::V0_0_6)
+                .unwrap();
+        let current = convert_3ds_to_cemu_named(&source, "user2").unwrap();
+        let differing_ids = |table_start: usize| {
+            (0..0x56)
+                .filter(|monster_id| {
+                    let offset =
+                        JP_CEMU_HEADER.len() + table_start + monster_id * USER_MONSTER_COUNT_STRIDE;
+                    historical[offset..offset + 2] != current[offset..offset + 2]
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            differing_ids(USER_MONSTER_SLAY_COUNT_START),
+            USER_HISTORICAL_DIFFERENT_SLAY_COUNT_IDS
+        );
+        assert_eq!(
+            differing_ids(USER_MONSTER_CAPTURE_COUNT_START),
+            USER_HISTORICAL_DIFFERENT_CAPTURE_COUNT_IDS
+        );
+
+        let fields = repair_fields("user2").unwrap();
+        let count_fields = fields
+            .iter()
+            .filter(|field| {
+                field.name.starts_with("monster-slay-count-")
+                    || field.name.starts_with("monster-capture-count-")
+            })
+            .count();
+        assert_eq!(
+            count_fields,
+            USER_HISTORICAL_DIFFERENT_SLAY_COUNT_IDS.len()
+                + USER_HISTORICAL_DIFFERENT_CAPTURE_COUNT_IDS.len()
+        );
     }
 
     #[test]

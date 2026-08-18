@@ -32,6 +32,16 @@ const SECOND_RGBA_OFFSET: usize = 0x73E4;
 // though both the acquired-book bit and the personal monster record are set.
 const MONSTER_GUIDE_PACKED_STATE_START: usize = 0x5760;
 const MONSTER_GUIDE_PACKED_STATE_LEN: usize = 0x1C;
+// Both games expose one u16 slay counter and one u16 capture counter for each
+// known monster ID 0x00..=0x55. The tables keep the same numeric values, but
+// 3DS stores each lane little-endian and Wii U stores it big-endian. The
+// historical MEOW table omitted the slay lanes for IDs 0x1A..=0x1C; Wii U then
+// interpreted ordinary counts as values above 9999 and the UI saturated them
+// to 9999.
+const MONSTER_SLAY_COUNT_START: usize = 0x5784;
+const MONSTER_CAPTURE_COUNT_START: usize = 0x5884;
+const MONSTER_COUNT_ENTRY_COUNT: usize = 0x56;
+const MONSTER_COUNT_STRIDE: usize = 2;
 // The Wii U executable indexes this region as a 1536-bit item-acquisition
 // bitset: item_id >> 5 selects one of 48 u32 words and item_id & 31 selects the
 // bit inside that word. Five independently paired official transfers agree
@@ -867,8 +877,8 @@ fn apply_confirmed_numeric_and_record_corrections(
     }
 
     for (index, monster_id) in MONSTER_IDS.into_iter().enumerate() {
-        let slay_offset = 0x5784 + monster_id * 2;
-        let capture_offset = 0x5884 + monster_id * 2;
+        let slay_offset = MONSTER_SLAY_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+        let capture_offset = MONSTER_CAPTURE_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
         let size_offset = 0x5984 + monster_id * 4;
         for offset in [slay_offset, capture_offset, size_offset, size_offset + 2] {
             copy_reversed(source, target, offset, 2)?;
@@ -1028,6 +1038,22 @@ fn apply_current_official_transfer_corrections(
                 ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
         );
 
+    // Reassert the complete counter schema from the original source rather
+    // than extending the historical MEOW table. This keeps 0.0.3-0.0.6 replay
+    // byte-reproducible for compatibility detection while fixing every current
+    // slay/capture lane, including the three historically omitted small
+    // monsters (Giggi, Aptonoth, and Popo).
+    for monster_id in 0..MONSTER_COUNT_ENTRY_COUNT {
+        for table_start in [MONSTER_SLAY_COUNT_START, MONSTER_CAPTURE_COUNT_START] {
+            copy_reversed(
+                source,
+                target,
+                table_start + monster_id * MONSTER_COUNT_STRIDE,
+                MONSTER_COUNT_STRIDE,
+            )?;
+        }
+    }
+
     for index in 0..MONSTER_IDS.len() {
         apply_current_hunter_notes_display_state(source, target, 0x81B4 + index * 10 + 8)?;
     }
@@ -1186,8 +1212,9 @@ mod tests {
     use super::{
         DEVILJHO_BOOK_ITEM_ID, EQUIPMENT_BOX_START, EVENT_FLAG_START, GUILD_CARD_SLOT_SIZE,
         ITEM_ACQUIRED_BITSET_START, ITEM_ACQUIRED_BITSET_WORD_COUNT,
-        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_GUIDE_PACKED_STATE_LEN,
-        MONSTER_GUIDE_PACKED_STATE_START, MONSTER_IDS, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
+        ITEM_ACQUIRED_BITSET_WORD_SIZE, MONSTER_CAPTURE_COUNT_START, MONSTER_COUNT_ENTRY_COUNT,
+        MONSTER_COUNT_STRIDE, MONSTER_GUIDE_PACKED_STATE_LEN, MONSTER_GUIDE_PACKED_STATE_START,
+        MONSTER_IDS, MONSTER_SLAY_COUNT_START, PLAYER_APPEARANCE_PACKED_STYLE_OFFSET,
         PLAYER_APPEARANCE_RGBA_OFFSET, PLAYER_APPEARANCE_SCALAR_OFFSETS, QUEST_COMPLETION_START,
         SECOND_RGBA_OFFSET, apply_arena_records, apply_endian_swaps,
         apply_japanese_wiiu_corrections, apply_japanese_wiiu_corrections_for_revision,
@@ -1455,6 +1482,90 @@ mod tests {
                 ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
             &[0xFF, 0xFF, 0x00, 0xFF]
         );
+    }
+
+    #[test]
+    fn current_corrections_convert_every_monster_count_lane_to_big_endian() {
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        source[MONSTER_GUIDE_PACKED_STATE_START
+            ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+            .copy_from_slice(&[
+                0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE, 0x5A, 0xA5, 0x11, 0x22, 0x33, 0x44,
+                0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xF0, 0x0F, 0xC3, 0x3C,
+            ]);
+        for monster_id in 0..MONSTER_COUNT_ENTRY_COUNT {
+            let slays = 0x1100_u16 + monster_id as u16;
+            let captures = 0x2200_u16 + monster_id as u16;
+            let slay_offset = MONSTER_SLAY_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            let capture_offset = MONSTER_CAPTURE_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            source[slay_offset..slay_offset + 2].copy_from_slice(&slays.to_le_bytes());
+            source[capture_offset..capture_offset + 2].copy_from_slice(&captures.to_le_bytes());
+        }
+        let mut target = source.clone();
+
+        apply_japanese_wiiu_corrections(&source, &mut target).unwrap();
+
+        for monster_id in 0..MONSTER_COUNT_ENTRY_COUNT {
+            let slay_offset = MONSTER_SLAY_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            let capture_offset = MONSTER_CAPTURE_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            assert_eq!(
+                u16::from_be_bytes(target[slay_offset..slay_offset + 2].try_into().unwrap()),
+                0x1100_u16 + monster_id as u16,
+                "slay count for monster ID {monster_id:#04x}"
+            );
+            assert_eq!(
+                u16::from_be_bytes(
+                    target[capture_offset..capture_offset + 2]
+                        .try_into()
+                        .unwrap()
+                ),
+                0x2200_u16 + monster_id as u16,
+                "capture count for monster ID {monster_id:#04x}"
+            );
+        }
+        assert_eq!(
+            &target[MONSTER_GUIDE_PACKED_STATE_START
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN],
+            &source[MONSTER_GUIDE_PACKED_STATE_START
+                ..MONSTER_GUIDE_PACKED_STATE_START + MONSTER_GUIDE_PACKED_STATE_LEN]
+        );
+    }
+
+    #[test]
+    fn current_corrections_fix_small_monster_counts_that_historically_saturated_to_9999() {
+        const CASES: [(usize, u16); 3] = [(0x1A, 0x0584), (0x1B, 0x00EC), (0x1C, 0x015C)];
+        let mut source = vec![0_u8; PAYLOAD_SIZE];
+        for (monster_id, value) in CASES {
+            let offset = MONSTER_SLAY_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            source[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut historical = source.clone();
+        apply_japanese_wiiu_corrections_for_revision(
+            &source,
+            &mut historical,
+            ConverterRevision::V0_0_6,
+        )
+        .unwrap();
+        let mut current = source.clone();
+        apply_japanese_wiiu_corrections(&source, &mut current).unwrap();
+
+        for (monster_id, value) in CASES {
+            let offset = MONSTER_SLAY_COUNT_START + monster_id * MONSTER_COUNT_STRIDE;
+            assert_eq!(
+                &historical[offset..offset + 2],
+                &value.to_le_bytes(),
+                "historical replay for monster ID {monster_id:#04x}"
+            );
+            assert!(
+                u16::from_be_bytes(historical[offset..offset + 2].try_into().unwrap()) > 9999,
+                "historical Wii U interpretation should reproduce the saturated UI value"
+            );
+            assert_eq!(
+                &current[offset..offset + 2],
+                &value.to_be_bytes(),
+                "current conversion for monster ID {monster_id:#04x}"
+            );
+        }
     }
 
     #[test]
